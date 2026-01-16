@@ -27,7 +27,7 @@ capsule/
 
 | Package | Description | Location |
 |---------|-------------|----------|
-| `capsule-client` | Browser client-side decryption library | [packages/capsule-client](./packages/capsule-client) |
+| `@sesamy/capsule` | Browser client-side decryption library | [packages/capsule-client](./packages/capsule-client) |
 
 ### Apps
 
@@ -133,15 +133,15 @@ pnpm clean            # Clean all node_modules and build outputs
 ### Installation
 
 ```bash
-npm install capsule-client
+npm install @sesamy/capsule
 # or
-pnpm add capsule-client
+pnpm add @sesamy/capsule
 ```
 
 ### Basic Usage
 
 ```typescript
-import { CapsuleClient } from 'capsule-client';
+import { CapsuleClient } from '@sesamy/capsule';
 
 const client = new CapsuleClient();
 

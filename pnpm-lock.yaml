@@ -10,7 +10,7 @@ importers:
 
   apps/demo:
     dependencies:
-      capsule-client:
+      '@sesamy/capsule':
         specifier: workspace:*
         version: link:../../packages/capsule-client
       next:

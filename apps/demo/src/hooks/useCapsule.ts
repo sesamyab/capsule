@@ -39,7 +39,7 @@ export function useCapsule() {
 
       try {
         // Dynamically import the client library
-        const { CapsuleClient } = await import("capsule-client");
+        const { CapsuleClient } = await import("@sesamy/capsule");
 
         const capsuleClient = new CapsuleClient({
           keyId: "demo-key",

@@ -1,5 +1,5 @@
 {
-  "name": "capsule-client",
+  "name": "@sesamy/capsule",
   "version": "0.1.0",
   "description": "Client-side decryption library for Capsule - Secure article unlocking using Web Crypto API",
   "main": "dist/index.js",
@@ -35,7 +35,7 @@
     "indexeddb",
     "browser"
   ],
-  "author": "Crypvelope Team",
+  "author": "Sesamy",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.10.0",

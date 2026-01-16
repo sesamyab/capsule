@@ -13,7 +13,7 @@ Browser-side decryption library for the Capsule secure article-locking system.
 ## Installation
 
 ```bash
-npm install capsule-client
+npm install @sesamy/capsule
 ```
 
 ## Usage

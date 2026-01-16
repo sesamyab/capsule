@@ -10,10 +10,10 @@ export default function ClientPage() {
       </p>
 
       <h2>Installation</h2>
-      <CodeBlock language="bash">{`npm install capsule-client`}</CodeBlock>
+      <CodeBlock language="bash">{`npm install @sesamy/capsule`}</CodeBlock>
 
       <h2>Basic Usage</h2>
-      <CodeBlock>{`import { CapsuleClient } from 'capsule-client';
+      <CodeBlock>{`import { CapsuleClient } from '@sesamy/capsule';
 
 // Initialize client
 const client = new CapsuleClient({
@@ -84,7 +84,7 @@ const decrypted = await client.decryptArticle({
 
       <h2>React Integration</h2>
       <CodeBlock>{`import { useState, useEffect } from 'react';
-import { CapsuleClient } from 'capsule-client';
+import { CapsuleClient } from '@sesamy/capsule';
 
 export function useCapsule() {
   const [client, setClient] = useState(null);
