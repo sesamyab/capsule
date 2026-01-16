@@ -8,6 +8,7 @@ Browser-side decryption library for the Capsule secure article-locking system.
 - **Non-extractable Private Keys**: Private keys stored with `extractable: false` in IndexedDB
 - **Web Crypto API**: Uses native browser cryptography for maximum security
 - **Promise-based IndexedDB**: Uses the `idb` library for easy key persistence
+- **Multi-key Support**: Manage multiple keys with different identifiers (tier-based, article-specific, etc.)
 
 ## Installation
 
@@ -22,7 +23,12 @@ npm install capsule-client
 ```typescript
 import { CapsuleClient } from 'capsule-client';
 
+// Default client (single key)
 const client = new CapsuleClient();
+
+// Multi-key scenario (e.g., tier-based or article-specific keys)
+const premiumClient = new CapsuleClient({ keyId: 'premium-tier' });
+const articleClient = new CapsuleClient({ keyId: 'article-123' });
 ```
 
 ### Generate and Store Keys (First Time Setup)
@@ -130,6 +136,7 @@ Options:
 - `keySize`: RSA key size in bits (default: 2048, can be 4096)
 - `dbName`: IndexedDB database name (default: 'capsule-keys')
 - `storeName`: IndexedDB store name (default: 'keypair')
+- `keyId`: Key identifier for multi-key scenarios (default: 'default')
 
 #### Methods
 
