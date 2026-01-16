@@ -5,8 +5,8 @@ export default function ClientPage() {
     <main className="content-page">
       <h1>Client Integration</h1>
       <p>
-        The Capsule client is a lightweight browser library that handles key management
-        and content decryption using the Web Crypto API.
+        The Capsule client is a lightweight browser library that handles key
+        management and content decryption using the Web Crypto API.
       </p>
 
       <h2>Installation</h2>
@@ -148,7 +148,8 @@ function Article({ encryptedData }) {
 
       <h2>Advanced: DEK Caching</h2>
       <p>
-        For subscription-based models, cache unwrapped DEKs to avoid repeated server requests:
+        For subscription-based models, cache unwrapped DEKs to avoid repeated
+        server requests:
       </p>
       <CodeBlock>{`const dekCache = new Map(); // tier → CryptoKey
 
@@ -193,7 +194,8 @@ async function unlockTier(tier, client) {
         <li>✅ Edge 79+</li>
       </ul>
       <p>
-        Note: Web Crypto API is only available in secure contexts (HTTPS or localhost).
+        Note: Web Crypto API is only available in secure contexts (HTTPS or
+        localhost).
       </p>
     </main>
   );

@@ -21,14 +21,14 @@ npm install @sesamy/capsule
 ### Initialize the Client
 
 ```typescript
-import { CapsuleClient } from 'capsule-client';
+import { CapsuleClient } from "capsule-client";
 
 // Default client (single key)
 const client = new CapsuleClient();
 
 // Multi-key scenario (e.g., tier-based or article-specific keys)
-const premiumClient = new CapsuleClient({ keyId: 'premium-tier' });
-const articleClient = new CapsuleClient({ keyId: 'article-123' });
+const premiumClient = new CapsuleClient({ keyId: "premium-tier" });
+const articleClient = new CapsuleClient({ keyId: "article-123" });
 ```
 
 ### Generate and Store Keys (First Time Setup)
@@ -38,10 +38,10 @@ const articleClient = new CapsuleClient({ keyId: 'article-123' });
 const publicKeyB64 = await client.generateKeyPair();
 
 // Send publicKeyB64 to your server for registration
-await fetch('/api/register-key', {
-    method: 'POST',
-    body: JSON.stringify({ publicKey: publicKeyB64 }),
-    headers: { 'Content-Type': 'application/json' }
+await fetch("/api/register-key", {
+  method: "POST",
+  body: JSON.stringify({ publicKey: publicKeyB64 }),
+  headers: { "Content-Type": "application/json" },
 });
 ```
 
@@ -51,9 +51,9 @@ await fetch('/api/register-key', {
 const hasKeys = await client.hasKeyPair();
 
 if (!hasKeys) {
-    // Need to generate keys
-    const publicKey = await client.generateKeyPair();
-    // ... register with server
+  // Need to generate keys
+  const publicKey = await client.generateKeyPair();
+  // ... register with server
 }
 ```
 
@@ -67,53 +67,53 @@ const publicKeyB64 = await client.getPublicKey();
 
 ```typescript
 // Fetch encrypted payload from server
-const response = await fetch('/api/article/123');
+const response = await fetch("/api/article/123");
 const encryptedPayload = await response.json();
 
 // Decrypt using the stored private key
 const articleContent = await client.decryptArticle(encryptedPayload);
 
 // Display the decrypted content
-document.getElementById('article').textContent = articleContent;
+document.getElementById("article").textContent = articleContent;
 ```
 
 ### Full Example
 
 ```typescript
-import { CapsuleClient } from 'capsule-client';
+import { CapsuleClient } from "capsule-client";
 
 const client = new CapsuleClient();
 
 async function setupEncryption() {
-    // Check if we already have keys
-    const hasKeys = await client.hasKeyPair();
-    
-    if (!hasKeys) {
-        // Generate new key pair
-        const publicKey = await client.generateKeyPair();
-        
-        // Register public key with server
-        await fetch('/api/user/public-key', {
-            method: 'POST',
-            body: JSON.stringify({ publicKey }),
-            headers: { 'Content-Type': 'application/json' }
-        });
-    }
+  // Check if we already have keys
+  const hasKeys = await client.hasKeyPair();
+
+  if (!hasKeys) {
+    // Generate new key pair
+    const publicKey = await client.generateKeyPair();
+
+    // Register public key with server
+    await fetch("/api/user/public-key", {
+      method: "POST",
+      body: JSON.stringify({ publicKey }),
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
 
 async function readArticle(articleId: string) {
-    // Fetch encrypted article
-    const response = await fetch(`/api/articles/${articleId}`);
-    const payload = await response.json();
-    
-    // Decrypt and display
-    try {
-        const content = await client.decryptArticle(payload);
-        document.getElementById('article-content').innerHTML = content;
-    } catch (error) {
-        console.error('Failed to decrypt article:', error);
-        // Handle decryption failure (e.g., key mismatch)
-    }
+  // Fetch encrypted article
+  const response = await fetch(`/api/articles/${articleId}`);
+  const payload = await response.json();
+
+  // Decrypt and display
+  try {
+    const content = await client.decryptArticle(payload);
+    document.getElementById("article-content").innerHTML = content;
+  } catch (error) {
+    console.error("Failed to decrypt article:", error);
+    // Handle decryption failure (e.g., key mismatch)
+  }
 }
 
 // Initialize on page load
@@ -133,6 +133,7 @@ new CapsuleClient(options?: CapsuleClientOptions)
 ```
 
 Options:
+
 - `keySize`: RSA key size in bits (default: 2048, can be 4096)
 - `dbName`: IndexedDB database name (default: 'capsule-keys')
 - `storeName`: IndexedDB store name (default: 'keypair')
@@ -170,9 +171,9 @@ Delete all stored keys from IndexedDB.
 
 ```typescript
 interface EncryptedPayload {
-    encryptedContent: string; // Base64
-    iv: string;               // Base64
-    encryptedDek: string;     // Base64
+  encryptedContent: string; // Base64
+  iv: string; // Base64
+  encryptedDek: string; // Base64
 }
 ```
 
@@ -186,6 +187,7 @@ interface EncryptedPayload {
 ## Browser Compatibility
 
 Requires browsers with Web Crypto API support:
+
 - Chrome 37+
 - Firefox 34+
 - Safari 11+

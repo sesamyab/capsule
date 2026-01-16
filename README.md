@@ -25,14 +25,14 @@ capsule/
 
 ### Packages
 
-| Package | Description | Location |
-|---------|-------------|----------|
+| Package           | Description                            | Location                                             |
+| ----------------- | -------------------------------------- | ---------------------------------------------------- |
 | `@sesamy/capsule` | Browser client-side decryption library | [packages/capsule-client](./packages/capsule-client) |
 
 ### Apps
 
-| App | Description | Location |
-|-----|-------------|----------|
+| App            | Description                          | Location                 |
+| -------------- | ------------------------------------ | ------------------------ |
 | `capsule-demo` | Next.js demo with encrypted articles | [apps/demo](./apps/demo) |
 
 ## Development
@@ -141,7 +141,7 @@ pnpm add @sesamy/capsule
 ### Basic Usage
 
 ```typescript
-import { CapsuleClient } from '@sesamy/capsule';
+import { CapsuleClient } from "@sesamy/capsule";
 
 const client = new CapsuleClient();
 
@@ -159,34 +159,32 @@ Server-side implementations can use the Web Crypto API in Node.js or any languag
 
 ```typescript
 // Node.js example (see demo for full implementation)
-import { subtle } from 'crypto';
+import { subtle } from "crypto";
 
 // 1. Generate random AES-256 key (DEK)
-const dek = await subtle.generateKey(
-  { name: 'AES-GCM', length: 256 },
-  true,
-  ['encrypt']
-);
+const dek = await subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
+  "encrypt",
+]);
 
 // 2. Encrypt content with DEK
 const iv = crypto.getRandomValues(new Uint8Array(12));
 const encryptedContent = await subtle.encrypt(
-  { name: 'AES-GCM', iv },
+  { name: "AES-GCM", iv },
   dek,
   new TextEncoder().encode(content)
 );
 
 // 3. Wrap DEK with recipient's public RSA key
 const publicKey = await subtle.importKey(/* ... */);
-const wrappedDek = await subtle.wrapKey('raw', dek, publicKey, {
-  name: 'RSA-OAEP'
+const wrappedDek = await subtle.wrapKey("raw", dek, publicKey, {
+  name: "RSA-OAEP",
 });
 
 // 4. Return payload
 return {
   encryptedContent: base64(encryptedContent),
   iv: base64(iv),
-  encryptedDek: base64(wrappedDek)
+  encryptedDek: base64(wrappedDek),
 };
 ```
 

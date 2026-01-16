@@ -6,13 +6,11 @@
   "scripts": {
     "dev": "pnpm --filter capsule-demo dev",
     "build": "pnpm -r build",
-    "build:client": "pnpm --filter capsule-client build",
-    "build:demo": "pnpm --filter capsule-demo build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "clean": "pnpm -r exec rm -rf node_modules dist .next && rm -rf node_modules",
     "demo": "pnpm --filter capsule-demo",
-    "client": "pnpm --filter capsule-client"
+    "client": "pnpm --filter @sesamy/capsule"
   },
   "keywords": [
     "encryption",
