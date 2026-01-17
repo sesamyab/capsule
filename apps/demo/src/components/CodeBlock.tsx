@@ -39,12 +39,24 @@ function highlightCode(code: string, language: string): string {
 }
 
 function highlightJavaScript(code: string): string {
-  // Comments (single line and multi-line)
-  code = code.replace(/(\/\/.*$)/gm, '<span class="hljs-comment">$1</span>');
-  code = code.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="hljs-comment">$1</span>');
+  // Use placeholder approach to prevent re-processing highlighted content
+  const placeholders: string[] = [];
+  
+  // Helper to store content and return placeholder
+  const placeholder = (content: string, className: string) => {
+    const index = placeholders.length;
+    placeholders.push(`<span class="hljs-${className}">${content}</span>`);
+    return `__PLACEHOLDER_${index}__`;
+  };
+  
+  // Comments first (single line and multi-line) - store as placeholders
+  code = code.replace(/(\/\/.*$)/gm, (match) => placeholder(match, 'comment'));
+  code = code.replace(/(\/\*[\s\S]*?\*\/)/g, (match) => placeholder(match, 'comment'));
 
-  // Strings (double and single quotes, template literals)
-  code = code.replace(/(&quot;[^&]*&quot;|'[^']*'|`[^`]*`)/g, '<span class="hljs-string">$1</span>');
+  // Strings (double and single quotes, template literals) - store as placeholders
+  code = code.replace(/(&quot;[^&]*&quot;)/g, (match) => placeholder(match, 'string'));
+  code = code.replace(/('[^']*')/g, (match) => placeholder(match, 'string'));
+  code = code.replace(/(`[^`]*`)/g, (match) => placeholder(match, 'string'));
 
   // Keywords
   const keywords = [
@@ -74,20 +86,40 @@ function highlightJavaScript(code: string): string {
   // Properties after dot
   code = code.replace(/\.([a-zA-Z_][a-zA-Z0-9_]*)/g, '.<span class="hljs-property">$1</span>');
 
+  // Restore placeholders
+  placeholders.forEach((content, index) => {
+    code = code.replace(`__PLACEHOLDER_${index}__`, content);
+  });
+
   return code;
 }
 
 function highlightBash(code: string): string {
+  // Use placeholder approach to prevent re-processing highlighted content
+  const placeholders: string[] = [];
+  
+  const placeholder = (content: string, className: string) => {
+    const index = placeholders.length;
+    placeholders.push(`<span class="hljs-${className}">${content}</span>`);
+    return `__PLACEHOLDER_${index}__`;
+  };
+  
   // Comments
-  code = code.replace(/(#.*$)/gm, '<span class="hljs-comment">$1</span>');
+  code = code.replace(/(#.*$)/gm, (match) => placeholder(match, 'comment'));
 
   // Strings
-  code = code.replace(/(&quot;[^&]*&quot;|'[^']*')/g, '<span class="hljs-string">$1</span>');
+  code = code.replace(/(&quot;[^&]*&quot;)/g, (match) => placeholder(match, 'string'));
+  code = code.replace(/('[^']*')/g, (match) => placeholder(match, 'string'));
 
   // Commands at start of line or after pipe/semicolon
   const commands = ["npm", "npx", "yarn", "pip", "python", "node", "php", "cd", "mkdir", "git", "curl", "install"];
   const cmdRegex = new RegExp(`\\b(${commands.join("|")})\\b`, "g");
   code = code.replace(cmdRegex, '<span class="hljs-keyword">$1</span>');
+
+  // Restore placeholders
+  placeholders.forEach((content, index) => {
+    code = code.replace(`__PLACEHOLDER_${index}__`, content);
+  });
 
   return code;
 }
@@ -109,13 +141,23 @@ function highlightJson(code: string): string {
 }
 
 function highlightPhp(code: string): string {
+  // Use placeholder approach to prevent re-processing highlighted content
+  const placeholders: string[] = [];
+  
+  const placeholder = (content: string, className: string) => {
+    const index = placeholders.length;
+    placeholders.push(`<span class="hljs-${className}">${content}</span>`);
+    return `__PLACEHOLDER_${index}__`;
+  };
+  
   // Comments
-  code = code.replace(/(\/\/.*$)/gm, '<span class="hljs-comment">$1</span>');
-  code = code.replace(/(#.*$)/gm, '<span class="hljs-comment">$1</span>');
-  code = code.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="hljs-comment">$1</span>');
+  code = code.replace(/(\/\/.*$)/gm, (match) => placeholder(match, 'comment'));
+  code = code.replace(/(#.*$)/gm, (match) => placeholder(match, 'comment'));
+  code = code.replace(/(\/\*[\s\S]*?\*\/)/g, (match) => placeholder(match, 'comment'));
 
   // Strings
-  code = code.replace(/(&quot;[^&]*&quot;|'[^']*')/g, '<span class="hljs-string">$1</span>');
+  code = code.replace(/(&quot;[^&]*&quot;)/g, (match) => placeholder(match, 'string'));
+  code = code.replace(/('[^']*')/g, (match) => placeholder(match, 'string'));
 
   // PHP keywords
   const keywords = [
@@ -132,16 +174,31 @@ function highlightPhp(code: string): string {
   // Numbers
   code = code.replace(/\b(\d+)\b/g, '<span class="hljs-number">$1</span>');
 
+  // Restore placeholders
+  placeholders.forEach((content, index) => {
+    code = code.replace(`__PLACEHOLDER_${index}__`, content);
+  });
+
   return code;
 }
 
 function highlightPython(code: string): string {
+  // Use placeholder approach to prevent re-processing highlighted content
+  const placeholders: string[] = [];
+  
+  const placeholder = (content: string, className: string) => {
+    const index = placeholders.length;
+    placeholders.push(`<span class="hljs-${className}">${content}</span>`);
+    return `__PLACEHOLDER_${index}__`;
+  };
+  
   // Comments
-  code = code.replace(/(#.*$)/gm, '<span class="hljs-comment">$1</span>');
+  code = code.replace(/(#.*$)/gm, (match) => placeholder(match, 'comment'));
 
   // Strings (triple quotes, double, single)
-  code = code.replace(/(&quot;&quot;&quot;[\s\S]*?&quot;&quot;&quot;|'''[\s\S]*?''')/g, '<span class="hljs-string">$1</span>');
-  code = code.replace(/(&quot;[^&]*&quot;|'[^']*')/g, '<span class="hljs-string">$1</span>');
+  code = code.replace(/(&quot;&quot;&quot;[\s\S]*?&quot;&quot;&quot;|'''[\s\S]*?''')/g, (match) => placeholder(match, 'string'));
+  code = code.replace(/(&quot;[^&]*&quot;)/g, (match) => placeholder(match, 'string'));
+  code = code.replace(/('[^']*')/g, (match) => placeholder(match, 'string'));
 
   // Keywords
   const keywords = [
@@ -158,6 +215,11 @@ function highlightPython(code: string): string {
 
   // Numbers
   code = code.replace(/\b(\d+)\b/g, '<span class="hljs-number">$1</span>');
+
+  // Restore placeholders
+  placeholders.forEach((content, index) => {
+    code = code.replace(`__PLACEHOLDER_${index}__`, content);
+  });
 
   return code;
 }

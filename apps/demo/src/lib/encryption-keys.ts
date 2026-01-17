@@ -1,22 +1,21 @@
 /**
  * Server-side encryption keys for different subscription tiers and articles.
  * 
- * In production, these would be stored securely (e.g., in a KMS).
- * Each subscription tier has its own DEK that's used to encrypt all articles in that tier.
- * Articles can also have their own unique DEKs for per-article access.
+ * TIER KEYS: Derived from master secret + time bucket using HKDF.
+ * This provides forward secrecy - old bucket keys can't decrypt new content.
+ * 
+ * ARTICLE KEYS: Static per-article DEKs (for permanent article-specific access).
+ * In production, these would be stored in a KMS.
  */
 
-// Pre-generated DEKs for each subscription tier (Base64 encoded)
-// In production, use a proper key management system
-export const SUBSCRIPTION_KEYS: Record<string, { dek: string }> = {
-  premium: {
-    // 256-bit AES key (32 bytes) - in production, generate securely and store in KMS
-    dek: "K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=",
-  },
-};
+import { deriveBucketKey, getCurrentBucket, getNextBucket, getBucketExpiration } from "./time-buckets";
+
+/** Valid subscription tiers */
+export const VALID_TIERS = ["premium", "basic"] as const;
+export type SubscriptionTier = typeof VALID_TIERS[number];
 
 // Per-article DEKs (for article-specific access control)
-// In production, these would be generated and stored securely
+// These are static - once purchased, the article is accessible forever
 export const ARTICLE_KEYS: Record<string, { dek: string }> = {
   "premium-guide": {
     dek: "xQGvT8HnJkLmPq2Rs3TuVw4XyZ0A1B2C3D4E5F6G7H8=",
@@ -27,18 +26,56 @@ export const ARTICLE_KEYS: Record<string, { dek: string }> = {
 };
 
 /**
- * Get the DEK for a subscription tier.
+ * Check if a tier is valid.
  */
-export function getSubscriptionKey(tier: string): Buffer {
-  const keyData = SUBSCRIPTION_KEYS[tier];
-  if (!keyData) {
+export function isValidTier(tier: string): tier is SubscriptionTier {
+  return VALID_TIERS.includes(tier as SubscriptionTier);
+}
+
+/**
+ * Get the DEK for a subscription tier at a specific time bucket.
+ * The DEK is derived using HKDF from master secret + bucket ID.
+ */
+export function getSubscriptionKey(tier: string, bucketId?: string): Buffer {
+  if (!isValidTier(tier)) {
     throw new Error(`Unknown subscription tier: ${tier}`);
   }
-  return Buffer.from(keyData.dek, "base64");
+  const bucket = bucketId ?? getCurrentBucket();
+  return deriveBucketKey(tier, bucket);
+}
+
+/**
+ * Get DEKs for both current and next time buckets.
+ * Used by CMS to encrypt content for both windows (handles clock drift).
+ */
+export function getSubscriptionKeysForEncryption(tier: string): {
+  current: { bucketId: string; dek: Buffer; expiresAt: Date };
+  next: { bucketId: string; dek: Buffer; expiresAt: Date };
+} {
+  if (!isValidTier(tier)) {
+    throw new Error(`Unknown subscription tier: ${tier}`);
+  }
+  
+  const currentBucket = getCurrentBucket();
+  const nextBucket = getNextBucket();
+  
+  return {
+    current: {
+      bucketId: currentBucket,
+      dek: deriveBucketKey(tier, currentBucket),
+      expiresAt: getBucketExpiration(currentBucket),
+    },
+    next: {
+      bucketId: nextBucket,
+      dek: deriveBucketKey(tier, nextBucket),
+      expiresAt: getBucketExpiration(nextBucket),
+    },
+  };
 }
 
 /**
  * Get the DEK for a specific article.
+ * Article keys are static (not bucket-based) for permanent access.
  */
 export function getArticleKey(articleId: string): Buffer {
   const keyData = ARTICLE_KEYS[articleId];

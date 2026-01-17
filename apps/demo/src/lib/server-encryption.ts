@@ -2,11 +2,16 @@
  * Server-side encryption utilities.
  * 
  * Pre-encrypts article content using subscription-tier DEKs and article-specific DEKs.
- * The encrypted content is embedded in the SSR page.
+ * 
+ * TIER KEYS: Time-bucket based. Content is encrypted with both current and next
+ * bucket keys to handle clock drift between CMS and client. When the bucket
+ * rotates, old keys become invalid - providing forward secrecy.
+ * 
+ * ARTICLE KEYS: Static. Once a user has an article key, they can always decrypt.
  */
 
 import { createCipheriv, randomBytes } from "crypto";
-import { getSubscriptionKey, getArticleKey, hasArticleKey } from "./encryption-keys";
+import { getSubscriptionKeysForEncryption, getArticleKey, hasArticleKey } from "./encryption-keys";
 
 /** GCM IV size in bytes (96 bits as recommended by NIST) */
 const GCM_IV_SIZE = 12;
@@ -23,12 +28,16 @@ export interface EncryptedArticleData {
   keyType: "tier" | "article";
   /** Subscription tier (for tier keys) or article ID (for article keys) */
   keyId: string;
+  /** Bucket ID for time-based keys (undefined for static article keys) */
+  bucketId?: string;
 }
 
 export interface MultiEncryptedArticle {
-  /** Tier-based encryption (unlocks all articles in tier) */
+  /** Tier-based encryption for current bucket (unlocks all articles in tier) */
   tier: EncryptedArticleData;
-  /** Article-specific encryption (unlocks only this article) */
+  /** Tier-based encryption for next bucket (handles clock drift) */
+  tierNext: EncryptedArticleData;
+  /** Article-specific encryption (unlocks only this article, static key) */
   article: EncryptedArticleData | null;
 }
 
@@ -39,7 +48,8 @@ function encryptWithKey(
   content: string,
   dek: Buffer,
   keyType: "tier" | "article",
-  keyId: string
+  keyId: string,
+  bucketId?: string
 ): EncryptedArticleData {
   const iv = randomBytes(GCM_IV_SIZE);
   
@@ -59,21 +69,45 @@ function encryptWithKey(
     iv: iv.toString("base64"),
     keyType,
     keyId,
+    bucketId,
   };
 }
 
 /**
  * Encrypt article content using both tier and article-specific keys.
- * Returns both encrypted versions so the client can choose.
+ * 
+ * For tier keys: encrypts with both current and next bucket keys.
+ * For article keys: encrypts with static key (if available).
+ * 
+ * Returns all encrypted versions so the client can try them.
  */
 export function encryptArticleContent(
   articleId: string,
   content: string,
   tier: string
 ): MultiEncryptedArticle {
-  const tierDek = getSubscriptionKey(tier);
-  const tierEncrypted = encryptWithKey(content, tierDek, "tier", tier);
+  // Get time-bucket based tier keys
+  const tierKeys = getSubscriptionKeysForEncryption(tier);
   
+  // Encrypt with current bucket key
+  const tierEncrypted = encryptWithKey(
+    content, 
+    tierKeys.current.dek, 
+    "tier", 
+    tier, 
+    tierKeys.current.bucketId
+  );
+  
+  // Encrypt with next bucket key (for clock drift handling)
+  const tierNextEncrypted = encryptWithKey(
+    content, 
+    tierKeys.next.dek, 
+    "tier", 
+    tier, 
+    tierKeys.next.bucketId
+  );
+  
+  // Article-specific encryption (static key)
   let articleEncrypted: EncryptedArticleData | null = null;
   if (hasArticleKey(articleId)) {
     const articleDek = getArticleKey(articleId);
@@ -82,37 +116,30 @@ export function encryptArticleContent(
   
   return {
     tier: tierEncrypted,
+    tierNext: tierNextEncrypted,
     article: articleEncrypted,
   };
 }
 
 /**
- * Pre-encrypt all articles for SSR embedding.
- * In production, this would be done at build time or cached.
+ * Get encrypted article content for a specific article.
+ * 
+ * NOTE: This re-encrypts on every request since bucket keys rotate.
+ * In production with longer bucket periods, you'd cache within the bucket window.
  */
-export function getPreEncryptedArticles(): Record<string, MultiEncryptedArticle> {
+export function getEncryptedArticle(articleId: string): MultiEncryptedArticle | null {
   // Import articles here to avoid circular dependency
   const { articles } = require("./articles");
   
-  const encrypted: Record<string, MultiEncryptedArticle> = {};
-  
-  for (const [id, article] of Object.entries(articles)) {
-    encrypted[id] = encryptArticleContent(
-      id,
-      (article as { premiumContent: string }).premiumContent,
-      "premium" // All demo articles use premium tier
-    );
+  const article = articles[articleId];
+  if (!article) {
+    return null;
   }
   
-  return encrypted;
-}
-
-// Cache the pre-encrypted articles (would be done at build time in production)
-let cachedEncryptedArticles: Record<string, MultiEncryptedArticle> | null = null;
-
-export function getEncryptedArticle(articleId: string): MultiEncryptedArticle | null {
-  if (!cachedEncryptedArticles) {
-    cachedEncryptedArticles = getPreEncryptedArticles();
-  }
-  return cachedEncryptedArticles[articleId] || null;
+  // Re-encrypt with current bucket keys (they rotate)
+  return encryptArticleContent(
+    articleId,
+    article.premiumContent,
+    "premium" // All demo articles use premium tier
+  );
 }

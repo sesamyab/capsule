@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConsole, LogEntry } from "./ConsoleContext";
 
 const typeColors: Record<LogEntry["type"], string> = {
@@ -24,6 +24,12 @@ const typeIcons: Record<LogEntry["type"], string> = {
 export function DevConsole() {
   const { logs, clear } = useConsole();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Prevent hydration mismatch by only rendering after mount
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -55,9 +61,9 @@ export function DevConsole() {
         </button>
       </div>
       <div className="console-body" ref={scrollRef}>
-        {logs.map((entry) => (
+        {isMounted && logs.map((entry) => (
           <div key={entry.id} className="console-line">
-            <span className="console-time">{formatTime(entry.timestamp)}</span>
+            <span className="console-time" suppressHydrationWarning>{formatTime(entry.timestamp)}</span>
             <span
               className="console-icon"
               style={{ color: typeColors[entry.type] }}

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ConfigInfoButton } from "@/components/ConfigInfoButton";
 
 export default function DemoPage() {
   return (
@@ -8,6 +9,21 @@ export default function DemoPage() {
         Try Capsule with these demo articles. Unlock individual articles or get a 
         subscription key to unlock all premium content at once.
       </p>
+
+      <ConfigInfoButton />
+
+      <div style={{ 
+        background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1))',
+        border: '1px solid rgba(59, 130, 246, 0.3)',
+        padding: '1rem 1.25rem', 
+        borderRadius: '8px',
+        marginBottom: '1.5rem',
+        fontSize: '0.85rem'
+      }}>
+        <strong>⏱️ Demo Mode:</strong> Keys rotate every <strong>30 seconds</strong> for 
+        demonstration purposes. In production, this would typically be <strong>1 hour</strong> or longer.
+        Watch the console to see automatic key renewal in action!
+      </div>
 
       <div style={{ 
         background: 'var(--border)', 

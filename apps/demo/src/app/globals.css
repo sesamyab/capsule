@@ -306,6 +306,16 @@ p {
   font-weight: 500;
 }
 
+.key-expiry-badge {
+  margin-left: auto;
+  padding: 0.2rem 0.5rem;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
 .premium-content {
   padding: 1.5rem;
 }
@@ -659,6 +669,22 @@ p {
   font-size: 0.9em;
 }
 
+/* ASCII diagram styling - works in both light and dark modes */
+.content-page pre.diagram {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 1.25rem 1.5rem;
+  border-radius: 12px;
+  overflow-x: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  margin: 1.5rem 0;
+  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .content-page p code,
 .content-page li code {
   background: #1e1e2e;
@@ -892,6 +918,17 @@ body.with-console main {
 .key-tag-label {
   font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
   letter-spacing: -0.02em;
+}
+
+.key-tag-expiry {
+  font-size: 0.55rem;
+  font-weight: 400;
+  opacity: 0.8;
+  padding: 0.1rem 0.3rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  margin-left: 0.2rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .key-tag-remove {

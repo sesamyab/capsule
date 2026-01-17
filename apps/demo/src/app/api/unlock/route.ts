@@ -1,31 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { publicEncrypt, constants, createPublicKey } from "crypto";
-import { getSubscriptionKey, getArticleKey, hasArticleKey } from "@/lib/encryption-keys";
+import { getSubscriptionKey, getArticleKey, hasArticleKey, isValidTier } from "@/lib/encryption-keys";
+import { getCurrentBucket, getBucketExpiration, BUCKET_PERIOD_SECONDS, isBucketValid } from "@/lib/time-buckets";
 
 /**
  * POST /api/unlock
  *
  * Receives a client's public key and key request, returns the DEK wrapped
  * with the client's public key.
+ * 
+ * For TIER keys: DEK is derived from master secret + bucketId using HKDF.
+ * This provides forward secrecy - when the bucket expires, the key changes.
+ * 
+ * For ARTICLE keys: DEK is static (permanent access once purchased).
  *
  * Request body:
  * {
  *   keyType: "tier" | "article",
  *   keyId: string (tier name like "premium" or article ID),
- *   publicKey: string (Base64 SPKI format)
+ *   publicKey: string (Base64 SPKI format),
+ *   bucketId?: string (optional - for requesting a specific bucket's key)
  * }
  *
  * Response:
  * {
  *   encryptedDek: string (Base64),
  *   keyType: "tier" | "article",
- *   keyId: string
+ *   keyId: string,
+ *   expiresAt: string (ISO 8601),
+ *   bucketId: string
  * }
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { keyType, keyId, publicKey, tier } = body;
+    const { keyType, keyId, publicKey, tier, bucketId } = body;
     
     // Support legacy format (tier only)
     const actualKeyType = keyType || "tier";
@@ -46,10 +55,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // For tier keys, determine which bucket to use
+    let targetBucketId = getCurrentBucket();
+    if (actualKeyType === "tier" && bucketId) {
+      // Client requested a specific bucket - validate it's current or adjacent
+      if (!isBucketValid(bucketId)) {
+        return NextResponse.json(
+          { error: "Invalid or expired bucket" },
+          { status: 400 }
+        );
+      }
+      targetBucketId = bucketId;
+    }
+
     // Get the appropriate DEK
     let dek: Buffer;
+    let expiresAt: Date;
+    let responseBucketId: string;
+    
     try {
       if (actualKeyType === "article") {
+        // Article keys are static (permanent access)
         if (!hasArticleKey(actualKeyId)) {
           return NextResponse.json(
             { error: "No article-specific key available" },
@@ -57,10 +83,22 @@ export async function POST(request: NextRequest) {
           );
         }
         dek = getArticleKey(actualKeyId);
+        // Article keys expire at end of current bucket but can be renewed indefinitely
+        responseBucketId = targetBucketId;
+        expiresAt = getBucketExpiration(targetBucketId);
       } else {
-        dek = getSubscriptionKey(actualKeyId);
+        // Tier keys are bucket-based (forward secrecy)
+        if (!isValidTier(actualKeyId)) {
+          return NextResponse.json(
+            { error: `Invalid tier: ${actualKeyId}` },
+            { status: 400 }
+          );
+        }
+        dek = getSubscriptionKey(actualKeyId, targetBucketId);
+        responseBucketId = targetBucketId;
+        expiresAt = getBucketExpiration(targetBucketId);
       }
-    } catch {
+    } catch (err) {
       return NextResponse.json(
         { error: `Invalid ${actualKeyType}: ${actualKeyId}` },
         { status: 400 }
@@ -87,6 +125,9 @@ export async function POST(request: NextRequest) {
       encryptedDek: encryptedDek.toString("base64"),
       keyType: actualKeyType,
       keyId: actualKeyId,
+      bucketId: responseBucketId,
+      expiresAt: expiresAt.toISOString(),
+      bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
     });
   } catch (error) {
     console.error("Unlock error:", error);

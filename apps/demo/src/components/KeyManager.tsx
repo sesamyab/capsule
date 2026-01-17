@@ -2,54 +2,51 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useConsole } from "./ConsoleContext";
-
-// Reference to the DEK cache from EncryptedSection
-// We need to export it so we can clear it
-// Keys are stored as "tier:keyId" or "article:keyId"
-export const dekCache = new Map<string, CryptoKey>();
+import { 
+  getAllStoredDeks, 
+  deleteDek, 
+  clearAllDeks, 
+  purgeExpiredDeks,
+  getTimeUntilExpiry,
+  type StoredDek 
+} from "@/lib/dek-storage";
 
 const DB_NAME = "capsule-demo-keys";
 const STORE_NAME = "keypair";
 
-interface CachedKey {
-  cacheKey: string;
-  keyType: "tier" | "article";
-  keyId: string;
-}
-
 interface KeyStatus {
   hasRsaKeys: boolean;
-  cachedKeys: CachedKey[];
-}
-
-function parseCacheKey(cacheKey: string): CachedKey {
-  const [keyType, keyId] = cacheKey.split(":");
-  return {
-    cacheKey,
-    keyType: keyType as "tier" | "article",
-    keyId,
-  };
+  cachedDeks: StoredDek[];
 }
 
 export function KeyManager() {
   const { log } = useConsole();
   const [keyStatus, setKeyStatus] = useState<KeyStatus>({
     hasRsaKeys: false,
-    cachedKeys: [],
+    cachedDeks: [],
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Prevent hydration mismatch by only rendering after mount
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   const checkKeyStatus = useCallback(async () => {
     try {
+      // Purge expired DEKs first (non-critical, may fail silently)
+      await purgeExpiredDeks();
+      
       // Check IndexedDB for RSA keys
       const hasRsa = await checkRsaKeys();
       
-      // Check DEK cache
-      const keys = Array.from(dekCache.keys()).map(parseCacheKey);
+      // Get all valid stored DEKs (may return empty if DB issues)
+      const deks = await getAllStoredDeks();
       
       setKeyStatus({
         hasRsaKeys: hasRsa,
-        cachedKeys: keys,
+        cachedDeks: deks,
       });
     } catch (err) {
       console.error("Failed to check key status:", err);
@@ -61,7 +58,7 @@ export function KeyManager() {
   useEffect(() => {
     checkKeyStatus();
     
-    // Re-check periodically to catch DEK cache changes
+    // Re-check frequently to update expiry countdown and purge expired keys
     const interval = setInterval(checkKeyStatus, 1000);
     return () => clearInterval(interval);
   }, [checkKeyStatus]);
@@ -78,26 +75,21 @@ export function KeyManager() {
     }
   };
 
-  const handleRemoveDek = (key: CachedKey) => {
-    const label = key.keyType === "tier" ? `tier "${key.keyId}"` : `article "${key.keyId}"`;
-    log(`Removing cached DEK for ${label}...`, "crypto");
-    dekCache.delete(key.cacheKey);
-    log(`DEK for ${label} removed from cache`, "success");
+  const handleRemoveDek = async (stored: StoredDek) => {
+    const label = stored.keyType === "tier" ? `tier "${stored.keyId}"` : `article "${stored.keyId}"`;
+    log(`Removing DEK for ${label}...`, "crypto");
+    await deleteDek(stored.keyType, stored.keyId);
+    log(`DEK for ${label} removed`, "success");
     log("⚠️ You'll need to request a new key to decrypt", "info");
-    checkKeyStatus();
+    await checkKeyStatus();
   };
 
   const handleClearAll = async () => {
     log("Clearing all keys...", "key");
     
-    // Clear DEK cache
-    const keys = Array.from(dekCache.keys());
-    keys.forEach(cacheKey => {
-      const parsed = parseCacheKey(cacheKey);
-      const label = parsed.keyType === "tier" ? `tier "${parsed.keyId}"` : `article "${parsed.keyId}"`;
-      dekCache.delete(cacheKey);
-      log(`DEK for ${label} removed`, "crypto");
-    });
+    // Clear all DEKs
+    await clearAllDeks();
+    log("All DEKs removed", "crypto");
     
     // Clear RSA keys
     try {
@@ -111,11 +103,11 @@ export function KeyManager() {
     await checkKeyStatus();
   };
 
-  if (isLoading) {
+  if (isLoading || !isMounted) {
     return null;
   }
 
-  const hasAnyKeys = keyStatus.hasRsaKeys || keyStatus.cachedKeys.length > 0;
+  const hasAnyKeys = keyStatus.hasRsaKeys || keyStatus.cachedDeks.length > 0;
 
   if (!hasAnyKeys) {
     return (
@@ -145,16 +137,19 @@ export function KeyManager() {
             </button>
           </div>
         )}
-        {keyStatus.cachedKeys.map(key => (
-          <div key={key.cacheKey} className={`key-tag ${key.keyType === "tier" ? "dek-tier" : "dek-article"}`}>
-            <span className="key-tag-icon">{key.keyType === "tier" ? "🎫" : "📄"}</span>
+        {keyStatus.cachedDeks.map(stored => (
+          <div key={stored.cacheKey} className={`key-tag ${stored.keyType === "tier" ? "dek-tier" : "dek-article"}`}>
+            <span className="key-tag-icon">{stored.keyType === "tier" ? "🎫" : "📄"}</span>
             <span className="key-tag-label">
-              {key.keyType === "tier" ? `Tier: ${key.keyId}` : `Article: ${key.keyId}`}
+              {stored.keyType === "tier" ? `Tier: ${stored.keyId}` : `Article: ${stored.keyId}`}
+            </span>
+            <span className="key-tag-expiry" title={`Expires at ${new Date(stored.expiresAt).toLocaleTimeString()}`} suppressHydrationWarning>
+              {getTimeUntilExpiry(stored)}
             </span>
             <button 
               className="key-tag-remove" 
-              onClick={() => handleRemoveDek(key)}
-              title={`Remove ${key.keyType} key`}
+              onClick={() => handleRemoveDek(stored)}
+              title={`Remove ${stored.keyType} key`}
             >
               ×
             </button>

