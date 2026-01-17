@@ -11,6 +11,7 @@ export function Navigation() {
           <Link href="/spec">Specification</Link>
           <Link href="/client">Client</Link>
           <Link href="/servers">Servers</Link>
+          <Link href="/cms-test">CMS API</Link>
           <Link href="/demo">Demo</Link>
         </div>
       </div>

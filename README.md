@@ -114,19 +114,76 @@ pnpm clean            # Clean all node_modules and build outputs
 ## Security Constraints
 
 - **Private RSA key never leaves the client** - stored as non-extractable in IndexedDB
-- **AES key only exists in memory** - during decryption process only
-- **Each article has a unique DEK** - compromise of one doesn't affect others
-- **RSA-OAEP** for key wrapping (2048 or 4096-bit)
-- **AES-256-GCM** for content encryption with authentication
-
-## Security Constraints
-
-- **Private RSA key never leaves the client** - stored as non-extractable in IndexedDB
 - **AES DEK only exists in memory** - during decryption process only
 - **Each article has a unique DEK** - compromise of one doesn't affect others
 - **Dual key model** - Tier keys (unlock all tier articles) + Article-specific keys (single article)
 - **RSA-OAEP (2048-bit, SHA-256)** for key wrapping
 - **AES-256-GCM** for content encryption with authentication
+
+## DEK Storage Security Modes
+
+Capsule supports two security modes for storing Data Encryption Keys (DEKs), configurable via the `securityMode` prop on `<EncryptedSection>`:
+
+### Persist Mode (Default)
+
+```tsx
+<EncryptedSection securityMode="persist" {...props} />
+```
+
+| Aspect | Description |
+|--------|-------------|
+| **Storage** | Non-extractable `CryptoKey` stored directly in IndexedDB |
+| **Page Refresh** | ✅ No network request needed - instant decryption |
+| **Exfiltration** | ✅ Key material cannot be exported via `exportKey()` |
+| **Local Attack** | ⚠️ Attacker with IndexedDB access can *use* the key locally |
+| **Best For** | Typical premium content, performance-critical apps |
+
+**How it works**: The `CryptoKey` object is stored directly in IndexedDB (it's structured-cloneable). On page refresh, the key is loaded and used immediately without any network requests. The key is marked as `extractable: false`, meaning `crypto.subtle.exportKey()` will throw an error - an attacker cannot export the raw key bytes to send to their server.
+
+### Session Mode
+
+```tsx
+<EncryptedSection securityMode="session" {...props} />
+```
+
+| Aspect | Description |
+|--------|-------------|
+| **Storage** | DEK kept in memory only (not persisted) |
+| **Page Refresh** | ⚠️ Requires network request to fetch new DEK |
+| **Exfiltration** | ✅ Key vanishes when tab closes |
+| **Local Attack** | ✅ Key only exists while tab is open |
+| **Best For** | Highly sensitive content, security-critical apps |
+
+**How it works**: The DEK is only stored in JavaScript memory and expires when the page is closed or refreshed. Each page load requires a new network request to obtain a fresh DEK.
+
+### Security Comparison
+
+```
+┌────────────────────┬─────────────────┬─────────────────┐
+│ Threat             │ Persist Mode    │ Session Mode    │
+├────────────────────┼─────────────────┼─────────────────┤
+│ Network sniffing   │ ✅ Protected    │ ✅ Protected    │
+│ Server compromise  │ ✅ Protected    │ ✅ Protected    │
+│ Key exfiltration   │ ✅ Protected    │ ✅ Protected    │
+│ Local key usage    │ ⚠️ Vulnerable  │ ✅ Protected*   │
+│ Performance        │ ✅ Fast         │ ⚠️ Network req │
+└────────────────────┴─────────────────┴─────────────────┘
+* While tab is closed
+```
+
+### Important: Client-Side Decryption Limitations
+
+**No browser mechanism can fully protect against a compromised browser.** If an attacker can execute JavaScript in your origin (via XSS, malicious extension, or physical access), they can:
+
+1. Intercept decrypted content after decryption
+2. Use stored keys (even non-extractable ones) for local decryption
+3. Modify the page to exfiltrate content
+
+**Defense in depth is essential:**
+- Content Security Policy (CSP) to prevent script injection
+- Subresource Integrity (SRI) for all scripts
+- Time-limited DEKs with bucket rotation
+- Server-side entitlement checks as the primary gate
 
 ## Client Library Usage
 
