@@ -294,105 +294,6 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     return false;
   }, [getKeyOptions, decryptContent, unwrapKeyWithRsa, unwrapDekWithKek, log]);
 
-  // Initialize key pair on mount
-  useEffect(() => {
-    let mounted = true;
-
-    async function initKeys() {
-      try {
-        log(`Loading article "${articleId}"...`, "info");
-        
-        log("Checking IndexedDB for existing RSA key pair...", "key");
-        let keys = await loadKeysFromStorage();
-        
-        if (!keys) {
-          log("No existing keys found. Generating new RSA-2048 key pair...", "key");
-          keys = await crypto.subtle.generateKey(
-            {
-              name: "RSA-OAEP",
-              modulusLength: 2048,
-              publicExponent: RSA_PUBLIC_EXPONENT,
-              hash: "SHA-256",
-            },
-            true,
-            ["wrapKey", "unwrapKey"]
-          );
-          
-          log("RSA key pair generated successfully", "success");
-          log("Storing keys in IndexedDB...", "key");
-          await saveKeysToStorage(keys);
-          log("Keys stored securely in IndexedDB", "success");
-        } else {
-          log("Found existing RSA key pair in IndexedDB", "success");
-        }
-
-        if (mounted) {
-          setKeyPair(keys);
-          setIsInitializing(false);
-          
-          if (encryptedData) {
-            const autoDecrypted = await tryAutoDecrypt(encryptedData, keys);
-            if (!autoDecrypted) {
-              const { tierKeys, articleKeys } = getKeyOptions();
-              log(`Encrypted content ready (${securityMode} mode)`, "info");
-              log(`Available keys: ${tierKeys.length} tier, ${articleKeys.length} article`, "info");
-              log("Click 'Unlock' to request decryption key", "info");
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to initialize keys:", err);
-        log(`Error: ${err instanceof Error ? err.message : "Failed to initialize"}`, "error");
-        if (mounted) {
-          setError(err instanceof Error ? err.message : "Failed to initialize");
-          setIsInitializing(false);
-        }
-      }
-    }
-
-    initKeys();
-    return () => { mounted = false; };
-  }, [encryptedData, articleId, log, tryAutoDecrypt, getKeyOptions, securityMode]);
-
-  // Auto-renew KEK/DEK before it expires
-  useEffect(() => {
-    if (state !== "unlocked" || !keyPair || !usedKeyId || !encryptedData) {
-      return;
-    }
-
-    const parsed = parseKeyId(usedKeyId);
-    const RENEW_BUFFER_MS = 5000;
-    // For tier keys, cache is by tier:bucketId (KEK)
-    // For article keys, cache is by articleId (DEK)
-    const cacheId = parsed.type === "tier" && parsed.bucketId
-      ? `${parsed.baseId}:${parsed.bucketId}`
-      : parsed.baseId;
-    
-    const checkAndRenew = async () => {
-      const stored = await getStoredDek(parsed.type, cacheId);
-      if (!stored) return;
-      
-      const timeUntilExpiry = stored.expiresAt - Date.now();
-      
-      if (timeUntilExpiry <= RENEW_BUFFER_MS) {
-        log(`Key expires in ${Math.round(timeUntilExpiry / 1000)}s, auto-renewing...`, "info");
-        
-        // Find the wrapped key for this keyId
-        const wrappedKey = encryptedData.wrappedKeys.find(wk => wk.keyId === usedKeyId);
-        if (!wrappedKey) {
-          log("Cannot renew - wrapped key not found", "error");
-          return;
-        }
-        
-        await fetchAndUnwrapKey(wrappedKey);
-      }
-    };
-    
-    checkAndRenew();
-    const interval = setInterval(checkAndRenew, 1000);
-    return () => clearInterval(interval);
-  }, [state, keyPair, usedKeyId, encryptedData, log]);
-
   // Fetch and unwrap key from server
   // For tier keys: gets KEK (key-wrapping key) and uses it to unwrap DEK locally
   // For article keys: gets DEK directly
@@ -492,7 +393,106 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
       log(`Failed to fetch key: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
       return false;
     }
-  }, [keyPair, unwrapKeyWithRsa, unwrapDekWithKek, decryptContent, log, securityMode, articleId]);
+  }, [keyPair, unwrapKeyWithRsa, unwrapDekWithKek, decryptContent, log, securityMode]);
+
+  // Initialize key pair on mount
+  useEffect(() => {
+    let mounted = true;
+
+    async function initKeys() {
+      try {
+        log(`Loading article "${articleId}"...`, "info");
+        
+        log("Checking IndexedDB for existing RSA key pair...", "key");
+        let keys = await loadKeysFromStorage();
+        
+        if (!keys) {
+          log("No existing keys found. Generating new RSA-2048 key pair...", "key");
+          keys = await crypto.subtle.generateKey(
+            {
+              name: "RSA-OAEP",
+              modulusLength: 2048,
+              publicExponent: RSA_PUBLIC_EXPONENT,
+              hash: "SHA-256",
+            },
+            true,
+            ["wrapKey", "unwrapKey"]
+          );
+          
+          log("RSA key pair generated successfully", "success");
+          log("Storing keys in IndexedDB...", "key");
+          await saveKeysToStorage(keys);
+          log("Keys stored securely in IndexedDB", "success");
+        } else {
+          log("Found existing RSA key pair in IndexedDB", "success");
+        }
+
+        if (mounted) {
+          setKeyPair(keys);
+          setIsInitializing(false);
+          
+          if (encryptedData) {
+            const autoDecrypted = await tryAutoDecrypt(encryptedData, keys);
+            if (!autoDecrypted) {
+              const { tierKeys, articleKeys } = getKeyOptions();
+              log(`Encrypted content ready (${securityMode} mode)`, "info");
+              log(`Available keys: ${tierKeys.length} tier, ${articleKeys.length} article`, "info");
+              log("Click 'Unlock' to request decryption key", "info");
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to initialize keys:", err);
+        log(`Error: ${err instanceof Error ? err.message : "Failed to initialize"}`, "error");
+        if (mounted) {
+          setError(err instanceof Error ? err.message : "Failed to initialize");
+          setIsInitializing(false);
+        }
+      }
+    }
+
+    initKeys();
+    return () => { mounted = false; };
+  }, [encryptedData, articleId, log, tryAutoDecrypt, getKeyOptions, securityMode]);
+
+  // Auto-renew KEK/DEK before it expires
+  useEffect(() => {
+    if (state !== "unlocked" || !keyPair || !usedKeyId || !encryptedData) {
+      return;
+    }
+
+    const parsed = parseKeyId(usedKeyId);
+    const RENEW_BUFFER_MS = 5000;
+    // For tier keys, cache is by tier:bucketId (KEK)
+    // For article keys, cache is by articleId (DEK)
+    const cacheId = parsed.type === "tier" && parsed.bucketId
+      ? `${parsed.baseId}:${parsed.bucketId}`
+      : parsed.baseId;
+    
+    const checkAndRenew = async () => {
+      const stored = await getStoredDek(parsed.type, cacheId);
+      if (!stored) return;
+      
+      const timeUntilExpiry = stored.expiresAt - Date.now();
+      
+      if (timeUntilExpiry <= RENEW_BUFFER_MS) {
+        log(`Key expires in ${Math.round(timeUntilExpiry / 1000)}s, auto-renewing...`, "info");
+        
+        // Find the wrapped key for this keyId
+        const wrappedKey = encryptedData.wrappedKeys.find(wk => wk.keyId === usedKeyId);
+        if (!wrappedKey) {
+          log("Cannot renew - wrapped key not found", "error");
+          return;
+        }
+        
+        await fetchAndUnwrapKey(wrappedKey);
+      }
+    };
+    
+    checkAndRenew();
+    const interval = setInterval(checkAndRenew, 1000);
+    return () => clearInterval(interval);
+  }, [state, keyPair, usedKeyId, encryptedData, log, fetchAndUnwrapKey]);
 
   // Handle unlock button click
   const handleUnlock = async (keyType: "tier" | "article") => {

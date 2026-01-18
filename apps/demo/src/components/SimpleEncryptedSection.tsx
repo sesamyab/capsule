@@ -32,7 +32,7 @@ function formatMarkdown(content: string): string {
     .replace(/\n\n/g, "</p><p>");
 }
 
-export function SimpleEncryptedSection({ articleId, encryptedData }: SimpleEncryptedSectionProps) {
+export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }: SimpleEncryptedSectionProps) {
   const [state, setState] = useState<State>("loading");
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +49,7 @@ export function SimpleEncryptedSection({ articleId, encryptedData }: SimpleEncry
         const { CapsuleClient } = await import("@sesamy/capsule");
 
         // Define the unlock function - this is how we fetch DEKs from the server
-        const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey, articleId }) => {
+        const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey, articleId: _articleId }) => {
           const response = await fetch("/api/unlock", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

@@ -6,7 +6,7 @@
  * - Option 2: JWT with asymmetric keys (EdDSA/Ed25519)
  */
 
-import { createHash, generateKeyPairSync, sign, verify } from "crypto";
+import { generateKeyPairSync, sign, verify } from "crypto";
 import { constantTimeCompare } from "./time-buckets";
 
 /**

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateCmsRequest } from "@/lib/auth";
-import { getCurrentBucketKeys, getConfig, KEY_EXCHANGE_METHOD } from "@/lib/time-buckets";
+import { getCurrentBucketKeys, getConfig } from "@/lib/time-buckets";
 
 /**
  * POST /api/cms/bucket-keys

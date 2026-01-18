@@ -28,6 +28,11 @@ import { deriveBucketKey, getBucketKeys, getCurrentBucket, getBucketExpiration, 
 import { unwrapDek } from "./encryption";
 import type { BucketKey, UnlockResponse, WrappedKey } from "./types";
 
+/** Check if a string looks like a numeric bucket ID */
+function isNumericBucketId(str: string): boolean {
+  return /^\d+$/.test(str);
+}
+
 /** Options for creating a subscription server */
 export interface SubscriptionServerOptions {
   /** Master secret for deriving bucket keys (base64 encoded string or Buffer) */
@@ -118,7 +123,6 @@ export class SubscriptionServer {
 
     let keyWrappingKey: Buffer;
     let expiresAt: Date;
-    let bucketId: string | undefined;
 
     // First, try static key lookup if provided (handles "article:xxx" keys)
     if (staticKeyLookup) {
@@ -134,14 +138,21 @@ export class SubscriptionServer {
       }
     }
 
-    // Parse keyId as bucket key: "tier:bucketId"
+    // Parse keyId as bucket key: "tier:bucketId" (only if suffix is numeric)
     const colonIndex = keyId.lastIndexOf(":");
     if (colonIndex === -1) {
       throw new Error(`Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`);
     }
 
     const baseKeyId = keyId.substring(0, colonIndex);
-    bucketId = keyId.substring(colonIndex + 1);
+    const suffix = keyId.substring(colonIndex + 1);
+
+    // Only treat as bucket key if suffix is numeric
+    if (!isNumericBucketId(suffix)) {
+      throw new Error(`No static key found for '${keyId}' and suffix '${suffix}' is not a valid bucket ID. Provide a staticKeyLookup function.`);
+    }
+
+    const bucketId = suffix;
 
     // Time-bucket key - validate and derive
     if (!this.isBucketValid(bucketId)) {
@@ -211,12 +222,20 @@ export class SubscriptionServer {
       dek
     );
 
-    const [, bucketId] = keyId.includes(":") ? keyId.split(":") : [keyId, null];
+    // Only extract bucketId if suffix is numeric (otherwise it's a static key like "article:crypto-guide")
+    let bucketId: string | undefined;
+    const colonIndex = keyId.lastIndexOf(":");
+    if (colonIndex !== -1) {
+      const suffix = keyId.substring(colonIndex + 1);
+      if (isNumericBucketId(suffix)) {
+        bucketId = suffix;
+      }
+    }
 
     return {
       encryptedDek: encryptedDek.toString("base64"),
       keyId,
-      bucketId: bucketId ?? undefined,
+      bucketId,
       expiresAt: expiresAt.toISOString(),
     };
   }

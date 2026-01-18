@@ -316,7 +316,7 @@ export async function purgeExpiredDeks(): Promise<number> {
     });
     
     db.close();
-  } catch (err) {
+  } catch {
     // Silently ignore - purging is not critical
   }
   
