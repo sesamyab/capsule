@@ -56,31 +56,31 @@
  * ```
  */
 
-export { CapsuleClient } from './client';
-export { KeyStorage } from './storage';
+export { CapsuleClient } from "./client";
+export { KeyStorage } from "./storage";
 export type {
-    // Core data types
-    EncryptedPayload,
-    EncryptedArticle,
-    WrappedKey,
+  // Core data types
+  EncryptedPayload,
+  EncryptedArticle,
+  WrappedKey,
 
-    // Unlock function types
-    UnlockParams,
-    UnlockResponse,
-    UnlockFunction,
+  // Unlock function types
+  UnlockParams,
+  UnlockResponse,
+  UnlockFunction,
 
-    // Event types
-    CapsuleUnlockEvent,
-    CapsuleErrorEvent,
-    CapsuleStateEvent,
-    CapsuleEventMap,
+  // Event types
+  CapsuleUnlockEvent,
+  CapsuleErrorEvent,
+  CapsuleStateEvent,
+  CapsuleEventMap,
 
-    // Configuration
-    CapsuleClientOptions,
-    DekStorageMode,
-    ElementState,
+  // Configuration
+  CapsuleClientOptions,
+  DekStorageMode,
+  ElementState,
 
-    // Storage types
-    StoredKeyPair,
-    StoredDek,
-} from './types';
+  // Storage types
+  StoredKeyPair,
+  StoredDek,
+} from "./types";

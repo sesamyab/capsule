@@ -25,21 +25,21 @@ npm install @sesamy/capsule
 ### Minimal Setup
 
 ```typescript
-import { CapsuleClient } from '@sesamy/capsule';
+import { CapsuleClient } from "@sesamy/capsule";
 
 const capsule = new CapsuleClient({
   unlock: async ({ keyId, wrappedDek, publicKey, articleId }) => {
-    const res = await fetch('/api/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keyId, wrappedDek, publicKey }),
     });
     return res.json(); // { encryptedDek, expiresAt }
-  }
+  },
 });
 
 // Unlock a specific article - keys are auto-created if needed!
-const content = await capsule.unlockElement('article-123');
+const content = await capsule.unlockElement("article-123");
 ```
 
 ### Auto-Process All Encrypted Elements
@@ -51,12 +51,16 @@ const capsule = new CapsuleClient({
 });
 
 // Listen for events
-document.addEventListener('capsule:unlock', (e) => {
-  console.log('Unlocked:', e.detail.articleId, e.detail.content.substring(0, 100));
+document.addEventListener("capsule:unlock", (e) => {
+  console.log(
+    "Unlocked:",
+    e.detail.articleId,
+    e.detail.content.substring(0, 100)
+  );
 });
 
-document.addEventListener('capsule:error', (e) => {
-  console.error('Failed to unlock:', e.detail.articleId, e.detail.error);
+document.addEventListener("capsule:error", (e) => {
+  console.error("Failed to unlock:", e.detail.articleId, e.detail.error);
 });
 ```
 
@@ -65,7 +69,9 @@ document.addEventListener('capsule:error', (e) => {
 Add encrypted content to your page with the `data-capsule` attribute:
 
 ```html
-<div data-capsule='{"articleId":"abc123","encryptedContent":"...","iv":"...","wrappedKeys":[...]}'>
+<div
+  data-capsule='{"articleId":"abc123","encryptedContent":"...","iv":"...","wrappedKeys":[...]}'
+>
   <p>Loading encrypted content...</p>
 </div>
 ```
@@ -77,26 +83,26 @@ When unlocked, the element's content is replaced with the decrypted HTML.
 ```typescript
 interface CapsuleClientOptions {
   // Required for automatic unlocking
-  unlock?: UnlockFunction;    // Async function to fetch encrypted DEK from server
+  unlock?: UnlockFunction; // Async function to fetch encrypted DEK from server
 
   // Key settings
-  keySize?: 2048 | 4096;      // RSA key size (default: 2048)
+  keySize?: 2048 | 4096; // RSA key size (default: 2048)
 
   // Processing behavior
-  autoProcess?: boolean;      // Auto-process elements on init (default: false)
-  executeScripts?: boolean;   // Execute <script> tags in decrypted content (default: true)
-  selector?: string;          // CSS selector for encrypted elements (default: '[data-capsule]')
+  autoProcess?: boolean; // Auto-process elements on init (default: false)
+  executeScripts?: boolean; // Execute <script> tags in decrypted content (default: true)
+  selector?: string; // CSS selector for encrypted elements (default: '[data-capsule]')
 
   // DEK caching
-  dekStorage?: 'memory' | 'session' | 'persist';  // How to store DEKs (default: 'persist')
-  renewBuffer?: number;       // Ms before expiry to auto-renew (default: 5000)
+  dekStorage?: "memory" | "session" | "persist"; // How to store DEKs (default: 'persist')
+  renewBuffer?: number; // Ms before expiry to auto-renew (default: 5000)
 
   // Storage
-  dbName?: string;            // IndexedDB database name (default: 'capsule-keys')
-  storeName?: string;         // IndexedDB store name (default: 'keypair')
+  dbName?: string; // IndexedDB database name (default: 'capsule-keys')
+  storeName?: string; // IndexedDB store name (default: 'keypair')
 
   // Debugging
-  logger?: (message: string, level: 'info' | 'error' | 'debug') => void;
+  logger?: (message: string, level: "info" | "error" | "debug") => void;
 }
 ```
 
@@ -118,7 +124,7 @@ const publicKey = await capsule.getPublicKey();
 Find an encrypted element by article ID, decrypt it, and render the content.
 
 ```typescript
-const content = await capsule.unlockElement('article-123');
+const content = await capsule.unlockElement("article-123");
 ```
 
 #### `processAll(): Promise<Map<string, string | Error>>`
@@ -140,7 +146,7 @@ Decrypt an encrypted article, using cached DEK or fetching a new one.
 
 ```typescript
 const article = JSON.parse(element.dataset.capsule);
-const content = await capsule.unlock(article, 'tier');
+const content = await capsule.unlock(article, "tier");
 ```
 
 ### Low-Level Methods
@@ -162,9 +168,9 @@ Decrypt a simple single-key payload (no envelope encryption).
 
 ```typescript
 const content = await capsule.decryptPayload({
-  encryptedContent: '...',
-  iv: '...',
-  encryptedDek: '...'
+  encryptedContent: "...",
+  iv: "...",
+  encryptedDek: "...",
 });
 ```
 
@@ -199,9 +205,12 @@ The client emits custom events on elements and the document:
 Fired when content is successfully decrypted.
 
 ```typescript
-document.addEventListener('capsule:unlock', (e: CustomEvent<CapsuleUnlockEvent>) => {
-  const { articleId, keyId, content, element } = e.detail;
-});
+document.addEventListener(
+  "capsule:unlock",
+  (e: CustomEvent<CapsuleUnlockEvent>) => {
+    const { articleId, keyId, content, element } = e.detail;
+  }
+);
 ```
 
 ### `capsule:error`
@@ -209,9 +218,12 @@ document.addEventListener('capsule:unlock', (e: CustomEvent<CapsuleUnlockEvent>)
 Fired when decryption fails.
 
 ```typescript
-document.addEventListener('capsule:error', (e: CustomEvent<CapsuleErrorEvent>) => {
-  const { articleId, error, element } = e.detail;
-});
+document.addEventListener(
+  "capsule:error",
+  (e: CustomEvent<CapsuleErrorEvent>) => {
+    const { articleId, error, element } = e.detail;
+  }
+);
 ```
 
 ### `capsule:state`
@@ -219,10 +231,13 @@ document.addEventListener('capsule:error', (e: CustomEvent<CapsuleErrorEvent>) =
 Fired when element state changes.
 
 ```typescript
-document.addEventListener('capsule:state', (e: CustomEvent<CapsuleStateEvent>) => {
-  const { articleId, previousState, state, element } = e.detail;
-  // state: 'locked' | 'unlocking' | 'decrypting' | 'unlocked' | 'error'
-});
+document.addEventListener(
+  "capsule:state",
+  (e: CustomEvent<CapsuleStateEvent>) => {
+    const { articleId, previousState, state, element } = e.detail;
+    // state: 'locked' | 'unlocking' | 'decrypting' | 'unlocked' | 'error'
+  }
+);
 ```
 
 ## Unlock Function
@@ -231,14 +246,14 @@ The `unlock` function is called when content needs to be decrypted but no cached
 
 ```typescript
 type UnlockFunction = (params: {
-  keyId: string;      // Key ID from wrappedKeys (e.g., "premium:bucket123")
+  keyId: string; // Key ID from wrappedKeys (e.g., "premium:bucket123")
   wrappedDek: string; // CMK-encrypted DEK from the article
-  publicKey: string;  // User's public key (Base64 SPKI)
-  articleId: string;  // Article being unlocked
+  publicKey: string; // User's public key (Base64 SPKI)
+  articleId: string; // Article being unlocked
 }) => Promise<{
-  encryptedDek: string;     // DEK encrypted with user's public key
+  encryptedDek: string; // DEK encrypted with user's public key
   expiresAt: string | number; // When the DEK expires
-  bucketId?: string;        // Optional bucket ID for time-based keys
+  bucketId?: string; // Optional bucket ID for time-based keys
   bucketPeriodSeconds?: number;
 }>;
 ```
@@ -247,17 +262,17 @@ Example implementation:
 
 ```typescript
 const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey }) => {
-  const response = await fetch('/api/unlock', {
-    method: 'POST',
+  const response = await fetch("/api/unlock", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getAuthToken()}`,
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${getAuthToken()}`,
     },
     body: JSON.stringify({ keyId, wrappedDek, publicKey }),
   });
 
   if (!response.ok) {
-    throw new Error('Unauthorized or payment required');
+    throw new Error("Unauthorized or payment required");
   }
 
   return response.json();
@@ -268,11 +283,11 @@ const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey }) => {
 
 Control how decrypted DEKs are cached:
 
-| Mode | Storage | Persistence | Use Case |
-|------|---------|-------------|----------|
-| `'memory'` | JavaScript memory | Lost on page refresh | Maximum security |
-| `'session'` | sessionStorage | Lost when tab closes | Balance security/UX |
-| `'persist'` | IndexedDB | Survives browser restart | Best offline support |
+| Mode        | Storage           | Persistence              | Use Case             |
+| ----------- | ----------------- | ------------------------ | -------------------- |
+| `'memory'`  | JavaScript memory | Lost on page refresh     | Maximum security     |
+| `'session'` | sessionStorage    | Lost when tab closes     | Balance security/UX  |
+| `'persist'` | IndexedDB         | Survives browser restart | Best offline support |
 
 Note: DEKs are stored **encrypted** with the user's public key. They must be unwrapped using the private key (which never leaves the browser's secure crypto subsystem).
 

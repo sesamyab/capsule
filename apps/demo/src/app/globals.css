@@ -617,7 +617,8 @@ p {
   border-radius: 12px;
   overflow-x: auto;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
   margin: 1.5rem 0;
 }
 
@@ -677,7 +678,8 @@ p {
   border-radius: 12px;
   overflow-x: auto;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
   margin: 1.5rem 0;
   font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
   font-size: 0.875rem;
@@ -695,7 +697,8 @@ p {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.content-page ul, .content-page ol {
+.content-page ul,
+.content-page ol {
   margin: 1rem 0 1rem 2rem;
 }
 
@@ -740,9 +743,15 @@ p {
   border-radius: 50%;
 }
 
-.console-dot.red { background: #ff5f57; }
-.console-dot.yellow { background: #febc2e; }
-.console-dot.green { background: #28c840; }
+.console-dot.red {
+  background: #ff5f57;
+}
+.console-dot.yellow {
+  background: #febc2e;
+}
+.console-dot.green {
+  background: #28c840;
+}
 
 .console-label {
   color: #888;
@@ -817,8 +826,13 @@ p {
 }
 
 @keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
 }
 
 /* Adjust page content to account for console */
@@ -916,7 +930,7 @@ body.with-console main {
 }
 
 .key-tag-label {
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
   letter-spacing: -0.02em;
 }
 
@@ -981,7 +995,7 @@ body.with-console main {
   .key-tag-remove {
     background: rgba(0, 0, 0, 0.2);
   }
-  
+
   .key-tag-remove:hover {
     background: rgba(0, 0, 0, 0.4);
   }
@@ -1030,7 +1044,7 @@ body.with-console main {
   border-radius: 8px;
   padding: 1.5rem;
   margin-bottom: 1.5rem;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .concept-card h3 {
@@ -1101,42 +1115,42 @@ body.with-console main {
   .glossary-subtitle {
     color: #aaa;
   }
-  
+
   .glossary-toc {
     background: #2a2a2a;
   }
-  
+
   .glossary-toc a {
     color: #66b3ff;
   }
-  
+
   .concept-card {
     background: #1a1a1a;
     border-color: #333;
   }
-  
+
   .concept-card h3 {
     color: #eee;
   }
-  
+
   .property {
     background: #1a3a4a;
     color: #66ccff;
   }
-  
+
   .security-note {
     background: #3d3200;
     border-color: #ffc107;
   }
-  
+
   .info-table th {
     background: #2a2a2a;
   }
-  
+
   .info-table td {
     border-color: #444;
   }
-  
+
   .info-table tr:nth-child(even) {
     background: #1a1a1a;
   }

@@ -1,19 +1,19 @@
 /**
  * Subscription Server Utilities
- * 
+ *
  * For building subscription server endpoints that:
  * 1. Provide bucket keys to CMS (for encryption)
  * 2. Unwrap DEKs for authenticated users (for decryption)
- * 
+ *
  * @example
  * ```typescript
  * import { createSubscriptionServer } from '@sesamy/capsule-server';
- * 
+ *
  * const server = createSubscriptionServer({
  *   masterSecret: process.env.MASTER_SECRET,
  *   bucketPeriodSeconds: 30,
  * });
- * 
+ *
  * // Endpoint for users to unlock content
  * app.post('/api/unlock', async (req, res) => {
  *   const { keyId, wrappedDek, publicKey } = req.body;
@@ -24,7 +24,14 @@
  */
 
 import { publicEncrypt, constants, createPublicKey } from "crypto";
-import { deriveBucketKey, getBucketKeys, getCurrentBucket, getBucketExpiration, isBucketValid, DEFAULT_BUCKET_PERIOD_SECONDS } from "./time-buckets";
+import {
+  deriveBucketKey,
+  getBucketKeys,
+  getCurrentBucket,
+  getBucketExpiration,
+  isBucketValid,
+  DEFAULT_BUCKET_PERIOD_SECONDS,
+} from "./time-buckets";
 import { unwrapDek } from "./encryption";
 import type { BucketKey, UnlockResponse, WrappedKey } from "./types";
 
@@ -43,11 +50,11 @@ export interface SubscriptionServerOptions {
 
 /**
  * Subscription Server for Capsule.
- * 
+ *
  * Manages master secret and provides:
  * - Bucket keys for CMS (time-limited)
  * - DEK unwrapping for authenticated users
- * 
+ *
  * @see createSubscriptionServer for the recommended way to create an instance
  */
 export class SubscriptionServer {
@@ -58,12 +65,13 @@ export class SubscriptionServer {
     this.masterSecret = Buffer.isBuffer(options.masterSecret)
       ? options.masterSecret
       : Buffer.from(options.masterSecret, "base64");
-    this.bucketPeriodSeconds = options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
+    this.bucketPeriodSeconds =
+      options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
   }
 
   /**
    * Get bucket keys for a key ID (for CMS).
-   * 
+   *
    * Returns current and next bucket keys so CMS can encrypt
    * content that works across bucket boundaries.
    */
@@ -102,13 +110,13 @@ export class SubscriptionServer {
 
   /**
    * Unwrap a DEK and re-wrap it with a user's RSA public key.
-   * 
+   *
    * This is the core unlock operation:
    * 1. Parse the wrapped key to extract keyId and bucket info
    * 2. Derive the key-wrapping key from master secret
    * 3. Unwrap the DEK
    * 4. Re-wrap with user's RSA public key
-   * 
+   *
    * @param wrappedKey - The wrapped key entry from the article
    * @param userPublicKeyB64 - User's RSA public key (Base64 SPKI format)
    * @param staticKeyLookup - Optional function to look up static keys (for per-article keys). Can be sync or async.
@@ -131,17 +139,29 @@ export class SubscriptionServer {
         keyWrappingKey = staticKey;
         // Static keys use current bucket expiration for client cache timing
         const currentBucket = getCurrentBucket(this.bucketPeriodSeconds);
-        expiresAt = getBucketExpiration(currentBucket, this.bucketPeriodSeconds);
-        
+        expiresAt = getBucketExpiration(
+          currentBucket,
+          this.bucketPeriodSeconds
+        );
+
         // Unwrap and re-wrap
-        return this.unwrapAndRewrap(wrappedDekBuffer, keyWrappingKey, userPublicKeyB64, keyId, undefined, expiresAt);
+        return this.unwrapAndRewrap(
+          wrappedDekBuffer,
+          keyWrappingKey,
+          userPublicKeyB64,
+          keyId,
+          undefined,
+          expiresAt
+        );
       }
     }
 
     // Parse keyId as bucket key: "tier:bucketId" (only if suffix is numeric)
     const colonIndex = keyId.lastIndexOf(":");
     if (colonIndex === -1) {
-      throw new Error(`Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`);
+      throw new Error(
+        `Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`
+      );
     }
 
     const baseKeyId = keyId.substring(0, colonIndex);
@@ -149,7 +169,9 @@ export class SubscriptionServer {
 
     // Only treat as bucket key if suffix is numeric
     if (!isNumericBucketId(suffix)) {
-      throw new Error(`No static key found for '${keyId}' and suffix '${suffix}' is not a valid bucket ID. Provide a staticKeyLookup function.`);
+      throw new Error(
+        `No static key found for '${keyId}' and suffix '${suffix}' is not a valid bucket ID. Provide a staticKeyLookup function.`
+      );
     }
 
     const bucketId = suffix;
@@ -161,7 +183,14 @@ export class SubscriptionServer {
     keyWrappingKey = deriveBucketKey(this.masterSecret, baseKeyId, bucketId);
     expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
 
-    return this.unwrapAndRewrap(wrappedDekBuffer, keyWrappingKey, userPublicKeyB64, keyId, bucketId, expiresAt);
+    return this.unwrapAndRewrap(
+      wrappedDekBuffer,
+      keyWrappingKey,
+      userPublicKeyB64,
+      keyId,
+      bucketId,
+      expiresAt
+    );
   }
 
   /**
@@ -250,12 +279,12 @@ export class SubscriptionServer {
 
   /**
    * Get the key-wrapping key for a tier, wrapped with user's RSA public key.
-   * 
+   *
    * This enables "unlock once, access all" for tier content:
    * - Client receives the AES-KW key (not the DEK)
    * - Client can unwrap any article's DEK locally
    * - No per-article unlock requests needed
-   * 
+   *
    * @param tier - The tier name (e.g., "premium")
    * @param bucketId - The bucket ID to get the key for
    * @param userPublicKeyB64 - User's RSA public key (Base64 SPKI format)
@@ -304,20 +333,22 @@ export class SubscriptionServer {
       base64Lines.push(base64.slice(i, i + 64));
     }
 
-    return `-----BEGIN PUBLIC KEY-----\n${base64Lines.join("\n")}\n-----END PUBLIC KEY-----`;
+    return `-----BEGIN PUBLIC KEY-----\n${base64Lines.join(
+      "\n"
+    )}\n-----END PUBLIC KEY-----`;
   }
 }
 
 /**
  * Create a subscription server for handling unlock requests.
- * 
+ *
  * @example
  * ```typescript
  * const server = createSubscriptionServer({
  *   masterSecret: process.env.MASTER_SECRET,
  *   bucketPeriodSeconds: 30,
  * });
- * 
+ *
  * app.post('/api/unlock', async (req, res) => {
  *   const { keyId, wrappedDek, publicKey } = req.body;
  *   const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
@@ -325,7 +356,9 @@ export class SubscriptionServer {
  * });
  * ```
  */
-export function createSubscriptionServer(options: SubscriptionServerOptions): SubscriptionServer;
+export function createSubscriptionServer(
+  options: SubscriptionServerOptions
+): SubscriptionServer;
 /**
  * Create a subscription server (legacy signature).
  * @deprecated Use createSubscriptionServer({ masterSecret, bucketPeriodSeconds }) instead
@@ -339,14 +372,18 @@ export function createSubscriptionServer(
   bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS
 ): SubscriptionServer {
   // Handle both signatures
-  if (typeof optionsOrSecret === 'object' && !Buffer.isBuffer(optionsOrSecret)) {
+  if (
+    typeof optionsOrSecret === "object" &&
+    !Buffer.isBuffer(optionsOrSecret)
+  ) {
     return new SubscriptionServer(optionsOrSecret);
   }
-  
+
   // Legacy signature
-  const secret = typeof optionsOrSecret === "string"
-    ? optionsOrSecret
-    : optionsOrSecret.toString("base64");
+  const secret =
+    typeof optionsOrSecret === "string"
+      ? optionsOrSecret
+      : optionsOrSecret.toString("base64");
 
   return new SubscriptionServer({
     masterSecret: secret,

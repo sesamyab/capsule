@@ -3,7 +3,7 @@
  *
  * Receives client's public key and wrapped DEK, unwraps the DEK,
  * re-wraps it with the client's public key, and returns it.
- * 
+ *
  * Uses @sesamy/capsule-server for key management.
  */
 
@@ -13,8 +13,11 @@ import { createSubscriptionServer } from "@sesamy/capsule-server";
 import { BUCKET_PERIOD_SECONDS } from "../../lib/encryption";
 
 /** Master secret for key derivation */
-const MASTER_SECRET = import.meta.env.CAPSULE_MASTER_SECRET || 
-  Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString("base64");
+const MASTER_SECRET =
+  import.meta.env.CAPSULE_MASTER_SECRET ||
+  Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString(
+    "base64"
+  );
 
 /**
  * Subscription server instance for handling unlock requests.
@@ -31,17 +34,16 @@ export const POST: APIRoute = async ({ request }) => {
 
     if (!publicKey || !keyId || !wrappedDek) {
       return new Response(
-        JSON.stringify({ error: "Missing required fields: keyId, wrappedDek, publicKey" }), 
+        JSON.stringify({
+          error: "Missing required fields: keyId, wrappedDek, publicKey",
+        }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
     // Use the subscription server to unlock
     // In production, you'd validate user subscription here first!
-    const result = await server.unlockForUser(
-      { keyId, wrappedDek },
-      publicKey
-    );
+    const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
 
     // Build response matching UnlockResponse interface
     const response: UnlockResponse = {

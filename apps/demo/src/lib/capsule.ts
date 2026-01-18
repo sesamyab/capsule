@@ -12,8 +12,11 @@ const BUCKET_PERIOD_SECONDS = 30;
  * Master secret for key derivation.
  * In production, use KMS (AWS Secrets Manager, etc.)
  */
-const MASTER_SECRET = process.env.CAPSULE_MASTER_SECRET || 
-  Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString("base64");
+const MASTER_SECRET =
+  process.env.CAPSULE_MASTER_SECRET ||
+  Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString(
+    "base64"
+  );
 
 /**
  * TOTP key provider for deriving time-bucket keys.
@@ -25,7 +28,7 @@ const totp = createTotpKeyProvider({
 
 /**
  * Shared CMS server instance.
- * 
+ *
  * Use this to encrypt article content:
  * ```typescript
  * const encrypted = await cms.encrypt(articleId, content, {
@@ -35,14 +38,16 @@ const totp = createTotpKeyProvider({
  */
 export const cms = createCmsServer({
   getKeys: async (keyIds) => {
-    const keys = await totp.getKeys(keyIds.filter(id => !id.startsWith('article:')));
-    
+    const keys = await totp.getKeys(
+      keyIds.filter((id) => !id.startsWith("article:"))
+    );
+
     // Handle article keys
-    for (const id of keyIds.filter(id => id.startsWith('article:'))) {
+    for (const id of keyIds.filter((id) => id.startsWith("article:"))) {
       const articleId = id.slice(8);
       keys.push(await totp.getArticleKey(articleId));
     }
-    
+
     return keys;
   },
 });

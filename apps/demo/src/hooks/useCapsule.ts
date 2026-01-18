@@ -1,12 +1,15 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import type { EncryptedPayload, CapsuleClient as CapsuleClientType } from "@sesamy/capsule";
+import type {
+  EncryptedPayload,
+  CapsuleClient as CapsuleClientType,
+} from "@sesamy/capsule";
 
 /**
  * React hook for using the Capsule client-side decryption library.
  * Handles key generation, storage, and decryption.
- * 
+ *
  * The new Capsule client auto-creates keys on first use, so no manual
  * key generation is needed.
  */

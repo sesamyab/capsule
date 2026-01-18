@@ -11,6 +11,7 @@
     "clean": "pnpm -r exec rm -rf node_modules dist .next && rm -rf node_modules",
     "demo": "pnpm --filter capsule-demo",
     "client": "pnpm --filter @sesamy/capsule",
+    "js-server": "pnpm --filter @sesamy/capsule-server",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm build && changeset publish",

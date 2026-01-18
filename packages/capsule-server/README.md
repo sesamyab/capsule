@@ -15,11 +15,15 @@ pnpm add @sesamy/capsule-server
 The CMS server just needs a way to get keys - it doesn't care about tiers or how keys are derived.
 
 ```typescript
-import { createCmsServer, createTotpKeyProvider, createSubscriptionServer } from '@sesamy/capsule-server';
+import {
+  createCmsServer,
+  createTotpKeyProvider,
+  createSubscriptionServer,
+} from "@sesamy/capsule-server";
 
 // Create a TOTP key provider (derives keys from master secret)
 const totp = createTotpKeyProvider({
-  masterSecret: process.env.MASTER_SECRET,  // Base64-encoded 256-bit secret
+  masterSecret: process.env.MASTER_SECRET, // Base64-encoded 256-bit secret
 });
 
 // CMS side: encrypt content
@@ -27,8 +31,8 @@ const cms = createCmsServer({
   getKeys: (keyIds) => totp.getKeys(keyIds),
 });
 
-const encrypted = await cms.encrypt('article-123', premiumContent, {
-  keyIds: ['premium', 'enterprise'],  // Just key IDs - CMS doesn't know what they mean
+const encrypted = await cms.encrypt("article-123", premiumContent, {
+  keyIds: ["premium", "enterprise"], // Just key IDs - CMS doesn't know what they mean
 });
 
 // Subscription side: handle unlock requests
@@ -47,13 +51,13 @@ The CMS server encrypts content with envelope encryption. It doesn't know or car
 ### Creating the Server
 
 ```typescript
-import { createCmsServer } from '@sesamy/capsule-server';
+import { createCmsServer } from "@sesamy/capsule-server";
 
 // Option 1: Fetch keys from subscription server
 const cms = createCmsServer({
   getKeys: async (keyIds) => {
-    const response = await fetch('/api/keys', {
-      method: 'POST',
+    const response = await fetch("/api/keys", {
+      method: "POST",
       body: JSON.stringify({ keyIds }),
     });
     return response.json();
@@ -71,21 +75,22 @@ const cms = createCmsServer({
 ### Encrypting Content
 
 ```typescript
-const encrypted = await cms.encrypt('article-123', content, {
-  keyIds: ['premium', 'enterprise'],  // Key IDs to encrypt with
+const encrypted = await cms.encrypt("article-123", content, {
+  keyIds: ["premium", "enterprise"], // Key IDs to encrypt with
 });
 ```
 
 **Returns (JSON format):**
+
 ```json
 {
   "articleId": "article-123",
-  "encryptedContent": "base64...",  // AES-256-GCM encrypted content
-  "iv": "base64...",                 // 12-byte initialization vector
+  "encryptedContent": "base64...", // AES-256-GCM encrypted content
+  "iv": "base64...", // 12-byte initialization vector
   "wrappedKeys": [
     {
       "keyId": "premium:1737158400",
-      "wrappedDek": "base64...",     // DEK wrapped with this key
+      "wrappedDek": "base64...", // DEK wrapped with this key
       "expiresAt": "2025-01-18T01:00:00.000Z"
     },
     {
@@ -101,23 +106,27 @@ const encrypted = await cms.encrypt('article-123', content, {
 
 ```typescript
 // JSON (default) - for API responses
-const data = await cms.encrypt(id, content, { keyIds: ['premium'] });
+const data = await cms.encrypt(id, content, { keyIds: ["premium"] });
 
 // HTML - ready to embed in your page
 const html = await cms.encrypt(id, content, {
-  keyIds: ['premium'],
-  format: 'html',
-  htmlClass: 'premium-content',
-  placeholder: '<p>Subscribe to unlock...</p>',
+  keyIds: ["premium"],
+  format: "html",
+  htmlClass: "premium-content",
+  placeholder: "<p>Subscribe to unlock...</p>",
 });
 // Result: <div class="premium-content" data-capsule='{"articleId":...}' data-capsule-id="article-123">
 //           <p>Subscribe to unlock...</p>
 //         </div>
 
 // Template helper - get all formats at once
-const { data, json, attribute, html } = await cms.encryptForTemplate(id, content, {
-  keyIds: ['premium'],
-});
+const { data, json, attribute, html } = await cms.encryptForTemplate(
+  id,
+  content,
+  {
+    keyIds: ["premium"],
+  }
+);
 ```
 
 ## TOTP Key Provider
@@ -125,15 +134,15 @@ const { data, json, attribute, html } = await cms.encryptForTemplate(id, content
 For deriving time-bucket keys locally from a shared master secret:
 
 ```typescript
-import { createTotpKeyProvider } from '@sesamy/capsule-server';
+import { createTotpKeyProvider } from "@sesamy/capsule-server";
 
 const totp = createTotpKeyProvider({
   masterSecret: process.env.MASTER_SECRET,
-  bucketPeriodSeconds: 30,  // Optional, default 30
+  bucketPeriodSeconds: 30, // Optional, default 30
 });
 
 // Get keys for given IDs (returns current + next bucket for each)
-const keys = await totp.getKeys(['premium', 'enterprise']);
+const keys = await totp.getKeys(["premium", "enterprise"]);
 // Returns: [
 //   { keyId: 'premium:1737158400', key: Buffer, expiresAt: Date },
 //   { keyId: 'premium:1737158430', key: Buffer, expiresAt: Date },
@@ -142,7 +151,7 @@ const keys = await totp.getKeys(['premium', 'enterprise']);
 // ]
 
 // For per-article purchase keys (static, no expiration)
-const articleKey = await totp.getArticleKey('article-123');
+const articleKey = await totp.getArticleKey("article-123");
 // Returns: { keyId: 'article:article-123', key: Buffer }
 ```
 
@@ -151,21 +160,23 @@ const articleKey = await totp.getArticleKey('article-123');
 ```typescript
 const cms = createCmsServer({
   getKeys: async (keyIds) => {
-    const keys = await totp.getKeys(keyIds.filter(id => !id.startsWith('article:')));
-    
+    const keys = await totp.getKeys(
+      keyIds.filter((id) => !id.startsWith("article:"))
+    );
+
     // Add article keys if requested
-    for (const id of keyIds.filter(id => id.startsWith('article:'))) {
+    for (const id of keyIds.filter((id) => id.startsWith("article:"))) {
       const articleId = id.slice(8);
       keys.push(await totp.getArticleKey(articleId));
     }
-    
+
     return keys;
   },
 });
 
 // Now you can mix time-bucket and article keys
-await cms.encrypt('article-123', content, {
-  keyIds: ['premium', 'article:article-123'],
+await cms.encrypt("article-123", content, {
+  keyIds: ["premium", "article:article-123"],
 });
 ```
 
@@ -176,7 +187,7 @@ Handles unlock requests from users.
 ### Creating the Server
 
 ```typescript
-import { createSubscriptionServer } from '@sesamy/capsule-server';
+import { createSubscriptionServer } from "@sesamy/capsule-server";
 
 const server = createSubscriptionServer({
   masterSecret: process.env.MASTER_SECRET,
@@ -187,10 +198,10 @@ const server = createSubscriptionServer({
 ### Unlock Endpoint
 
 ```typescript
-app.post('/api/unlock', async (req) => {
+app.post("/api/unlock", async (req) => {
   // Validate user subscription here!
   const { keyId, wrappedDek, publicKey } = req.body;
-  
+
   return server.unlockForUser(
     { keyId, wrappedDek },
     publicKey,
@@ -239,7 +250,7 @@ When using `TotpKeyProvider`, keys rotate automatically:
 
 ```typescript
 // lib/capsule.ts
-import { createCmsServer, createTotpKeyProvider } from '@sesamy/capsule-server';
+import { createCmsServer, createTotpKeyProvider } from "@sesamy/capsule-server";
 
 const totp = createTotpKeyProvider({
   masterSecret: process.env.MASTER_SECRET!,
@@ -252,13 +263,12 @@ export const cms = createCmsServer({
 // app/article/[slug]/page.tsx
 export default async function ArticlePage({ params }) {
   const article = await getArticle(params.slug);
-  
-  const encryptedHtml = await cms.encrypt(
-    article.id,
-    article.premiumContent,
-    { keyIds: ['premium'], format: 'html' }
-  );
-  
+
+  const encryptedHtml = await cms.encrypt(article.id, article.premiumContent, {
+    keyIds: ["premium"],
+    format: "html",
+  });
+
   return (
     <article>
       <h1>{article.title}</h1>
@@ -294,7 +304,7 @@ const { attribute } = await cms.encryptForTemplate(
 <article>
   <h1>{article.title}</h1>
   <div set:html={article.preview} />
-  <div 
+  <div
     data-capsule={attribute}
     data-capsule-id={article.id}
   >
@@ -306,26 +316,34 @@ const { attribute } = await cms.encryptForTemplate(
 ### Express
 
 ```typescript
-import express from 'express';
-import { createCmsServer, createTotpKeyProvider, createSubscriptionServer } from '@sesamy/capsule-server';
+import express from "express";
+import {
+  createCmsServer,
+  createTotpKeyProvider,
+  createSubscriptionServer,
+} from "@sesamy/capsule-server";
 
 const app = express();
 
-const totp = createTotpKeyProvider({ masterSecret: process.env.MASTER_SECRET! });
+const totp = createTotpKeyProvider({
+  masterSecret: process.env.MASTER_SECRET!,
+});
 const cms = createCmsServer({ getKeys: (keyIds) => totp.getKeys(keyIds) });
-const server = createSubscriptionServer({ masterSecret: process.env.MASTER_SECRET! });
+const server = createSubscriptionServer({
+  masterSecret: process.env.MASTER_SECRET!,
+});
 
 // Encrypt content
-app.get('/api/article/:id', async (req, res) => {
+app.get("/api/article/:id", async (req, res) => {
   const article = await db.getArticle(req.params.id);
   const encrypted = await cms.encrypt(article.id, article.content, {
-    keyIds: ['premium'],
+    keyIds: ["premium"],
   });
   res.json({ ...article, encrypted });
 });
 
 // Unlock endpoint
-app.post('/api/unlock', async (req, res) => {
+app.post("/api/unlock", async (req, res) => {
   // Validate user subscription first!
   const { keyId, wrappedDek, publicKey } = req.body;
   const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);

@@ -1,6 +1,6 @@
 /**
  * Server-side encryption utilities using @sesamy/capsule-server.
- * 
+ *
  * This is a thin wrapper that provides the encrypted article data
  * for the demo pages. The actual encryption is handled by CmsServer.
  */
@@ -32,32 +32,34 @@ function getCurrentBucketId(): string {
 
 /**
  * Get encrypted article for display.
- * 
+ *
  * Uses the high-level CmsServer API to encrypt content with:
  * - Current and next bucket keys for the tier (handles clock drift)
  * - Article-specific key if available (for per-article purchases)
- * 
+ *
  * Caches the encrypted content within a bucket period so that:
  * - Page refreshes don't break client-side DEK caching
  * - The same DEK is used consistently within a time window
  */
-export async function getEncryptedArticle(articleId: string): Promise<EncryptedArticle | null> {
+export async function getEncryptedArticle(
+  articleId: string
+): Promise<EncryptedArticle | null> {
   const currentBucket = getCurrentBucketId();
-  
+
   // Check cache - reuse if same bucket
   const cached = encryptionCache.get(articleId);
   if (cached && cached.bucketId === currentBucket) {
     return cached.data;
   }
-  
+
   // Import articles here to avoid circular dependency
   const { articles } = await import("./articles");
-  
+
   const article = articles[articleId];
   if (!article) {
     return null;
   }
-  
+
   // Build key IDs list
   const keyIds = ["premium"];
   if (hasArticleKey(articleId)) {
@@ -68,7 +70,7 @@ export async function getEncryptedArticle(articleId: string): Promise<EncryptedA
   const encrypted = await cms.encrypt(articleId, article.premiumContent, {
     keyIds,
   });
-  
+
   // Cache for this bucket period
   encryptionCache.set(articleId, {
     data: encrypted,

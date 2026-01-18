@@ -14,12 +14,12 @@ const server = createSubscriptionServer({
  * POST /api/unlock
  *
  * Two modes of operation:
- * 
+ *
  * 1. TIER KEY MODE (mode: "tier" or default for tier keys)
  *    Returns the key-wrapping key (KEK) for a tier.
  *    Client can then unwrap any article's DEK locally.
  *    → "Unlock once, access all premium content"
- * 
+ *
  * 2. ARTICLE KEY MODE (for article:xxx keys)
  *    Returns the unwrapped DEK for a specific article.
  *    → Single article access
@@ -63,7 +63,8 @@ export async function POST(request: NextRequest) {
 
     // Determine if this is a tier key or article key
     const isArticleKey = keyId.startsWith("article:");
-    const useTierMode = mode === "tier" || (!isArticleKey && mode !== "article");
+    const useTierMode =
+      mode === "tier" || (!isArticleKey && mode !== "article");
 
     if (useTierMode && !isArticleKey) {
       // TIER KEY MODE: Return the key-wrapping key (KEK)
@@ -75,12 +76,12 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      
+
       const tier = keyId.substring(0, colonIndex);
       const bucketId = keyId.substring(colonIndex + 1);
-      
+
       const result = server.getTierKeyForUser(tier, bucketId, publicKey);
-      
+
       return NextResponse.json({
         ...result,
         keyType: "kek", // Key-encrypting key (can unwrap DEKs)
@@ -101,7 +102,9 @@ export async function POST(request: NextRequest) {
       if (keyId.startsWith("article:")) {
         const articleId = keyId.slice(8);
         const keyEntry = await totp.getArticleKey(articleId);
-        return Buffer.isBuffer(keyEntry.key) ? keyEntry.key : Buffer.from(keyEntry.key, 'base64');
+        return Buffer.isBuffer(keyEntry.key)
+          ? keyEntry.key
+          : Buffer.from(keyEntry.key, "base64");
       }
       return null;
     };
@@ -121,17 +124,20 @@ export async function POST(request: NextRequest) {
     console.error("Unlock error:", error);
 
     if (error instanceof Error) {
-      if (error.message.includes("public key") || error.message.includes("SPKI")) {
+      if (
+        error.message.includes("public key") ||
+        error.message.includes("SPKI")
+      ) {
         return NextResponse.json(
           { error: "Invalid public key format" },
           { status: 400 }
         );
       }
-      if (error.message.includes("expired") || error.message.includes("invalid")) {
-        return NextResponse.json(
-          { error: error.message },
-          { status: 400 }
-        );
+      if (
+        error.message.includes("expired") ||
+        error.message.includes("invalid")
+      ) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
       }
     }
 

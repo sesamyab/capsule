@@ -5,16 +5,18 @@ export default function ServersPage() {
     <main className="content-page">
       <h1>Server Implementations</h1>
       <p>
-        Capsule uses a two-server architecture: a <strong>CMS Server</strong> that encrypts
-        content and a <strong>Subscription Server</strong> that manages keys and user access.
-        This separation ensures strong security while keeping the CMS simple.
+        Capsule uses a two-server architecture: a <strong>CMS Server</strong>{" "}
+        that encrypts content and a <strong>Subscription Server</strong> that
+        manages keys and user access. This separation ensures strong security
+        while keeping the CMS simple.
       </p>
 
       <h2>Quick Start with @sesamy/capsule-server</h2>
       <p>
-        The <code>@sesamy/capsule-server</code> package provides a high-level API for both 
-        CMS encryption and subscription server functionality. The CMS just works with key IDs -
-        it doesn&apos;t know or care about subscription tiers.
+        The <code>@sesamy/capsule-server</code> package provides a high-level
+        API for both CMS encryption and subscription server functionality. The
+        CMS just works with key IDs - it doesn&apos;t know or care about
+        subscription tiers.
       </p>
       <CodeBlock language="bash">{`npm install @sesamy/capsule-server`}</CodeBlock>
 
@@ -87,7 +89,7 @@ const { data, json, attribute, html } = await cms.encryptForTemplate(id, content
 });`}</CodeBlock>
 
       <h2>Architecture Overview</h2>
-      
+
       <h3>CMS Server (Content Management)</h3>
       <ul>
         <li>✅ Has plaintext article content</li>
@@ -135,46 +137,62 @@ const { data, json, attribute, html } = await cms.encryptForTemplate(id, content
 
       <h2>Key Exchange Methods</h2>
       <p>
-        The CMS can obtain bucket keys from the Subscription Server using three methods.
-        From the <strong>browser&apos;s perspective, all three are identical</strong> - it just
-        receives encrypted content and calls the unlock endpoint.
+        The CMS can obtain bucket keys from the Subscription Server using three
+        methods. From the{" "}
+        <strong>browser&apos;s perspective, all three are identical</strong> -
+        it just receives encrypted content and calls the unlock endpoint.
       </p>
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem' }}>
+      <table
+        style={{ width: "100%", borderCollapse: "collapse", marginTop: "1rem" }}
+      >
         <thead>
-          <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
-            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Method</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem' }}>How It Works</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Rotation Control</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem' }}>Best For</th>
+          <tr style={{ borderBottom: "2px solid var(--border-color)" }}>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>Method</th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>
+              How It Works
+            </th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>
+              Rotation Control
+            </th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>Best For</th>
           </tr>
         </thead>
         <tbody>
-          <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-            <td style={{ padding: '0.5rem' }}><strong>TOTP</strong></td>
-            <td style={{ padding: '0.5rem' }}>Shared secret, both derive locally</td>
-            <td style={{ padding: '0.5rem' }}>Fixed at setup (e.g., 15 min)</td>
-            <td style={{ padding: '0.5rem' }}>Offline CMS, no API calls</td>
+          <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+            <td style={{ padding: "0.5rem" }}>
+              <strong>TOTP</strong>
+            </td>
+            <td style={{ padding: "0.5rem" }}>
+              Shared secret, both derive locally
+            </td>
+            <td style={{ padding: "0.5rem" }}>Fixed at setup (e.g., 15 min)</td>
+            <td style={{ padding: "0.5rem" }}>Offline CMS, no API calls</td>
           </tr>
-          <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-            <td style={{ padding: '0.5rem' }}><strong>API Key</strong></td>
-            <td style={{ padding: '0.5rem' }}>Bearer token, fetch keys</td>
-            <td style={{ padding: '0.5rem' }}>Server controls rotation</td>
-            <td style={{ padding: '0.5rem' }}>Simple integration</td>
+          <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+            <td style={{ padding: "0.5rem" }}>
+              <strong>API Key</strong>
+            </td>
+            <td style={{ padding: "0.5rem" }}>Bearer token, fetch keys</td>
+            <td style={{ padding: "0.5rem" }}>Server controls rotation</td>
+            <td style={{ padding: "0.5rem" }}>Simple integration</td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem' }}><strong>OAuth2</strong></td>
-            <td style={{ padding: '0.5rem' }}>Client credentials flow</td>
-            <td style={{ padding: '0.5rem' }}>Server controls rotation</td>
-            <td style={{ padding: '0.5rem' }}>Enterprise, multi-tenant</td>
+            <td style={{ padding: "0.5rem" }}>
+              <strong>OAuth2</strong>
+            </td>
+            <td style={{ padding: "0.5rem" }}>Client credentials flow</td>
+            <td style={{ padding: "0.5rem" }}>Server controls rotation</td>
+            <td style={{ padding: "0.5rem" }}>Enterprise, multi-tenant</td>
           </tr>
         </tbody>
       </table>
 
       <h3>Method 1: TOTP (RFC 6238)</h3>
       <p>
-        Both servers share a secret and derive bucket keys locally using time-based OTP.
-        The bucket duration is fixed at setup time - this is part of the TOTP standard.
+        Both servers share a secret and derive bucket keys locally using
+        time-based OTP. The bucket duration is fixed at setup time - this is
+        part of the TOTP standard.
       </p>
       <CodeBlock>{`// TOTP URI format (like Google Authenticator QR codes)
 // otpauth://totp/Capsule:cms@example.com?secret=BASE32SECRET&period=900&algorithm=SHA256
@@ -202,8 +220,9 @@ const bucketKey = deriveBucketKey('premium');`}</CodeBlock>
 
       <h3>Method 2: API Key (Bearer Token)</h3>
       <p>
-        CMS fetches bucket keys from the Subscription Server using a simple API key.
-        The server controls rotation - it can return keys with any expiration time.
+        CMS fetches bucket keys from the Subscription Server using a simple API
+        key. The server controls rotation - it can return keys with any
+        expiration time.
       </p>
       <CodeBlock>{`// CMS fetches bucket keys
 const response = await fetch('https://subscription.example.com/api/bucket-keys', {
@@ -227,8 +246,9 @@ bucketKeyCache.set(tier, { keys: { current, next }, expiresAt: current.expiresAt
 
       <h3>Method 3: OAuth2 Client Credentials</h3>
       <p>
-        Standard OAuth2 flow - more secure for enterprise and multi-tenant deployments.
-        CMS authenticates with client ID/secret, receives access token, then fetches keys.
+        Standard OAuth2 flow - more secure for enterprise and multi-tenant
+        deployments. CMS authenticates with client ID/secret, receives access
+        token, then fetches keys.
       </p>
       <CodeBlock>{`// 1. Get access token (cached until expiry)
 const tokenResponse = await fetch('https://subscription.example.com/oauth/token', {
@@ -260,24 +280,25 @@ const { current, next } = await keysResponse.json();
       <h2>Choosing a Method</h2>
       <ul>
         <li>
-          <strong>TOTP:</strong> Best for static site generators, edge deployments, or when
-          you want zero API calls. Bucket period is fixed at setup (e.g., 15 min via QR code).
+          <strong>TOTP:</strong> Best for static site generators, edge
+          deployments, or when you want zero API calls. Bucket period is fixed
+          at setup (e.g., 15 min via QR code).
         </li>
         <li>
-          <strong>API Key:</strong> Simple to implement. Subscription server controls rotation.
-          Good for trusted CMS servers.
+          <strong>API Key:</strong> Simple to implement. Subscription server
+          controls rotation. Good for trusted CMS servers.
         </li>
         <li>
-          <strong>OAuth2:</strong> Industry standard. Better audit trails, token revocation,
-          and scope management. Best for enterprise deployments.
+          <strong>OAuth2:</strong> Industry standard. Better audit trails, token
+          revocation, and scope management. Best for enterprise deployments.
         </li>
       </ul>
 
       <h2>Time-Bucket Keys</h2>
       <p>
-        Regardless of the method used, Capsule uses <strong>time-bucket keys</strong> that
-        rotate periodically. This enables automatic access revocation without re-encrypting
-        content.
+        Regardless of the method used, Capsule uses{" "}
+        <strong>time-bucket keys</strong> that rotate periodically. This enables
+        automatic access revocation without re-encrypting content.
       </p>
 
       <h3>How It Works</h3>
@@ -300,9 +321,7 @@ const wrappedDek = wrapDek(articleDek, bucketKey);
       <h2>CMS Server Implementation</h2>
 
       <h3>Unified Bucket Key Client</h3>
-      <p>
-        A single client that supports all three methods:
-      </p>
+      <p>A single client that supports all three methods:</p>
       <CodeBlock>{`import { createCipheriv, createHmac, randomBytes } from 'crypto';
 
 type KeyMethod = 'totp' | 'api-key' | 'oauth2';
@@ -574,7 +593,8 @@ function deriveBucketKey(tier: string, bucketId: string): Buffer {
 
       <h3>Bucket Keys Endpoint (API Key / OAuth2)</h3>
       <p>
-        Only needed for API Key and OAuth2 methods. TOTP clients derive keys locally.
+        Only needed for API Key and OAuth2 methods. TOTP clients derive keys
+        locally.
       </p>
       <CodeBlock>{`// POST /api/bucket-keys
 app.post('/api/bucket-keys', authenticate, async (req, res) => {
@@ -628,8 +648,8 @@ function authenticate(req, res, next) {
 
       <h3>User Unlock Endpoint</h3>
       <p>
-        The main endpoint users call. Works with any key exchange method - it just needs
-        to derive the same bucket key the CMS used.
+        The main endpoint users call. Works with any key exchange method - it
+        just needs to derive the same bucket key the CMS used.
       </p>
       <CodeBlock>{`// POST /api/unlock
 app.post('/api/unlock', async (req, res) => {
@@ -682,9 +702,7 @@ function unwrapDek(wrappedDek: Buffer, bucketKey: Buffer): Buffer {
       <h2>Testing</h2>
 
       <h3>Test TOTP Key Derivation</h3>
-      <p>
-        Run on both CMS and Subscription Server - output should match:
-      </p>
+      <p>Run on both CMS and Subscription Server - output should match:</p>
       <CodeBlock>{`const crypto = require('crypto');
 
 const SHARED_SECRET = Buffer.from(process.env.CAPSULE_SHARED_SECRET, 'base64');
@@ -736,24 +754,44 @@ curl -X POST http://localhost:3000/api/unlock \\
 
       <h2>Security Best Practices</h2>
       <ul>
-        <li>🔒 <strong>Store secrets in KMS</strong> (AWS Secrets Manager, Google Secret Manager, HashiCorp Vault)</li>
-        <li>🔒 <strong>Use HTTPS</strong> for all API endpoints</li>
-        <li>🔒 <strong>Rate limit</strong> bucket-keys and unlock endpoints</li>
-        <li>🔒 <strong>Log all requests</strong> for audit trails</li>
-        <li>🔒 <strong>Rotate secrets periodically</strong></li>
+        <li>
+          🔒 <strong>Store secrets in KMS</strong> (AWS Secrets Manager, Google
+          Secret Manager, HashiCorp Vault)
+        </li>
+        <li>
+          🔒 <strong>Use HTTPS</strong> for all API endpoints
+        </li>
+        <li>
+          🔒 <strong>Rate limit</strong> bucket-keys and unlock endpoints
+        </li>
+        <li>
+          🔒 <strong>Log all requests</strong> for audit trails
+        </li>
+        <li>
+          🔒 <strong>Rotate secrets periodically</strong>
+        </li>
       </ul>
-      
+
       <h4>Method-Specific</h4>
       <ul>
-        <li><strong>TOTP:</strong> Sync clocks via NTP (servers must agree on time bucket)</li>
-        <li><strong>API Key:</strong> Rotate keys every 90 days, use different keys per environment</li>
-        <li><strong>OAuth2:</strong> Use short token expiry (5-15 min), implement token revocation</li>
+        <li>
+          <strong>TOTP:</strong> Sync clocks via NTP (servers must agree on time
+          bucket)
+        </li>
+        <li>
+          <strong>API Key:</strong> Rotate keys every 90 days, use different
+          keys per environment
+        </li>
+        <li>
+          <strong>OAuth2:</strong> Use short token expiry (5-15 min), implement
+          token revocation
+        </li>
       </ul>
 
       <h2>Node.js</h2>
       <p>
-        The Node.js implementation uses the built-in <code>crypto</code> module for
-        maximum performance and minimal dependencies.
+        The Node.js implementation uses the built-in <code>crypto</code> module
+        for maximum performance and minimal dependencies.
       </p>
 
       <h3>Installation</h3>
@@ -833,9 +871,7 @@ const encrypted = articles.map(article =>
 );`}</CodeBlock>
 
       <h2>PHP</h2>
-      <p>
-        PHP implementation using OpenSSL for cryptographic operations.
-      </p>
+      <p>PHP implementation using OpenSSL for cryptographic operations.</p>
 
       <h3>Installation</h3>
       <CodeBlock language="bash">{`composer require capsule/capsule-php`}</CodeBlock>
@@ -903,7 +939,9 @@ function convertSpkiToPem($base64Spki) {
 }`}</CodeBlock>
 
       <h2>Python</h2>
-      <p>Python support using the <code>cryptography</code> library.</p>
+      <p>
+        Python support using the <code>cryptography</code> library.
+      </p>
 
       <h3>Installation</h3>
       <CodeBlock language="bash">{`pip install capsule-py`}</CodeBlock>
@@ -956,8 +994,11 @@ def wrap_dek(dek: bytes, public_key_spki: str) -> str:
       </ul>
 
       <p>
-        Want to contribute an implementation? Check out the{' '}
-        <a href="https://github.com/capsule-standard/capsule">GitHub repository</a>.
+        Want to contribute an implementation? Check out the{" "}
+        <a href="https://github.com/capsule-standard/capsule">
+          GitHub repository
+        </a>
+        .
       </p>
     </main>
   );

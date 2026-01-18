@@ -5,25 +5,25 @@ export default function SpecPage() {
     <main className="content-page">
       <h1>Specification</h1>
       <p>
-        Capsule is an open standard for client-side article encryption using envelope
-        encryption. It enables secure content delivery without requiring server-side
-        authentication or permission systems.
+        Capsule is an open standard for client-side article encryption using
+        envelope encryption. It enables secure content delivery without
+        requiring server-side authentication or permission systems.
       </p>
 
       <h2>Architecture Overview</h2>
       <p>
-        Capsule uses <strong>envelope encryption</strong>, combining the efficiency of
-        symmetric encryption (AES-256-GCM) with the key management benefits of asymmetric
-        encryption (RSA-OAEP).
+        Capsule uses <strong>envelope encryption</strong>, combining the
+        efficiency of symmetric encryption (AES-256-GCM) with the key management
+        benefits of asymmetric encryption (RSA-OAEP).
       </p>
 
       <h2>Encryption Flow</h2>
 
       <h3>1. Server-Side Pre-Encryption</h3>
       <p>
-        Content is encrypted at build time or when published. A unique Data Encryption Key
-        (DEK) is generated for each article, then wrapped with one or more key-wrapping keys
-        to enable different unlock paths.
+        Content is encrypted at build time or when published. A unique Data
+        Encryption Key (DEK) is generated for each article, then wrapped with
+        one or more key-wrapping keys to enable different unlock paths.
       </p>
       <CodeBlock>{`// Generate unique DEK for this article
 const contentDek = randomBytes(32); // 256-bit AES key
@@ -53,9 +53,9 @@ const wrappedKeys = {
 
       <h3>2. HTML Embedding</h3>
       <p>
-        Encrypted content is embedded directly in the server-rendered HTML, enabling
-        offline access and browser caching. Each article includes the ciphertext and
-        wrapped keys for the supported unlock paths.
+        Encrypted content is embedded directly in the server-rendered HTML,
+        enabling offline access and browser caching. Each article includes the
+        ciphertext and wrapped keys for the supported unlock paths.
       </p>
       <CodeBlock>{`<template
   id="encrypted-article-123"
@@ -70,9 +70,10 @@ const wrappedKeys = {
 
       <h3>3. Client Key Generation</h3>
       <p>
-        On first visit, the browser generates an RSA-OAEP key pair using the Web Crypto API.
-        The private key is stored in IndexedDB with <code>extractable: false</code>, ensuring
-        it cannot be exported or accessed outside the crypto engine.
+        On first visit, the browser generates an RSA-OAEP key pair using the Web
+        Crypto API. The private key is stored in IndexedDB with{" "}
+        <code>extractable: false</code>, ensuring it cannot be exported or
+        accessed outside the crypto engine.
       </p>
       <CodeBlock>{`const keyPair = await crypto.subtle.generateKey(
   {
@@ -103,42 +104,86 @@ await indexedDB.put("keypair", {
 
       <h4>Why Different Extractability?</h4>
       <p>
-        The public and private keys have different <code>extractable</code> settings for important
-        security and functional reasons:
+        The public and private keys have different <code>extractable</code>{" "}
+        settings for important security and functional reasons:
       </p>
-      
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem', marginBottom: '1rem' }}>
+
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          marginTop: "1rem",
+          marginBottom: "1rem",
+        }}
+      >
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Key</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Extractable</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Reason</th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Key
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Extractable
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Reason
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><strong>Public Key</strong></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>true</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
-              Must be exported to SPKI format and sent to the server for DEK wrapping.
-              Safe to share - can only <em>encrypt</em>, not <em>decrypt</em>.
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <strong>Public Key</strong>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <code>true</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Must be exported to SPKI format and sent to the server for DEK
+              wrapping. Safe to share - can only <em>encrypt</em>, not{" "}
+              <em>decrypt</em>.
             </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><strong>Private Key</strong></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>false</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
-              Must stay locked in the browser's crypto engine. Can only be used for unwrapping DEKs,
-              never exported. Guarantees true end-to-end encryption.
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <strong>Private Key</strong>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <code>false</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Must stay locked in the browser's crypto engine. Can only be used
+              for unwrapping DEKs, never exported. Guarantees true end-to-end
+              encryption.
             </td>
           </tr>
         </tbody>
       </table>
 
-      <p><strong>Security Implication:</strong></p>
       <p>
-        Even if an attacker gains access to IndexedDB (through XSS or browser DevTools), they can see
-        the <code>CryptoKey</code> object but cannot extract the private key bytes:
+        <strong>Security Implication:</strong>
+      </p>
+      <p>
+        Even if an attacker gains access to IndexedDB (through XSS or browser
+        DevTools), they can see the <code>CryptoKey</code> object but cannot
+        extract the private key bytes:
       </p>
       <CodeBlock>{`// Attacker can do this:
 const keyPair = await indexedDB.get('keypair', 'default');
@@ -153,22 +198,24 @@ await crypto.subtle.exportKey('jwk', keyPair.privateKey);
 // The actual key material lives in the browser's crypto subsystem
 // and cannot be accessed as raw bytes.`}</CodeBlock>
 
-      <p>
-        This architectural design ensures that:
-      </p>
+      <p>This architectural design ensures that:</p>
       <ul>
         <li>✅ Server can wrap DEKs using the public key</li>
         <li>✅ Browser can unwrap DEKs using the private key</li>
         <li>❌ Private key cannot be stolen, even by malicious JavaScript</li>
         <li>❌ Private key cannot be accidentally exported by the user</li>
-        <li>❌ Server compromise cannot reveal private keys (they're not on the server)</li>
+        <li>
+          ❌ Server compromise cannot reveal private keys (they're not on the
+          server)
+        </li>
       </ul>
 
       <h3>4. Key Exchange Protocol</h3>
       <p>
-        When unlocking content, the client sends its public key and the key ID it wants to use.
-        The server validates access, unwraps the content DEK using the appropriate key-wrapping key,
-        then re-wraps it with the client's public key.
+        When unlocking content, the client sends its public key and the key ID
+        it wants to use. The server validates access, unwraps the content DEK
+        using the appropriate key-wrapping key, then re-wraps it with the
+        client's public key.
       </p>
       <CodeBlock language="json">{`// Client → Server
 POST /api/unlock
@@ -193,8 +240,9 @@ POST /api/unlock
 
       <h3>5. Client-Side Decryption</h3>
       <p>
-        The client unwraps the DEK using its private key, then decrypts the content using
-        AES-GCM. The unwrapped DEK is cached in memory until expiration.
+        The client unwraps the DEK using its private key, then decrypts the
+        content using AES-GCM. The unwrapped DEK is cached in memory until
+        expiration.
       </p>
       <CodeBlock>{`// Unwrap content DEK with private key
 const contentDek = await crypto.subtle.unwrapKey(
@@ -219,14 +267,18 @@ const decrypted = await crypto.subtle.decrypt(
 
       <h3>6. Handling Decrypted Content in Scripts</h3>
       <p>
-        Since content is decrypted client-side <em>after</em> the initial page load, any scripts 
-        that need to process the content (syntax highlighting, analytics, interactive widgets, etc.) 
-        must run after decryption completes. There are two approaches:
+        Since content is decrypted client-side <em>after</em> the initial page
+        load, any scripts that need to process the content (syntax highlighting,
+        analytics, interactive widgets, etc.) must run after decryption
+        completes. There are two approaches:
       </p>
 
-      <h4>Option A: Listen for the <code>capsule:unlocked</code> Event</h4>
+      <h4>
+        Option A: Listen for the <code>capsule:unlocked</code> Event
+      </h4>
       <p>
-        Capsule dispatches a custom event when content is decrypted and added to the DOM:
+        Capsule dispatches a custom event when content is decrypted and added to
+        the DOM:
       </p>
       <CodeBlock>{`document.addEventListener("capsule:unlocked", (event) => {
   const { articleId, element, keyId } = event.detail;
@@ -241,7 +293,8 @@ const decrypted = await crypto.subtle.decrypt(
 
       <h4>Option B: Use a MutationObserver</h4>
       <p>
-        For more generic DOM change detection, use a <code>MutationObserver</code>:
+        For more generic DOM change detection, use a{" "}
+        <code>MutationObserver</code>:
       </p>
       <CodeBlock>{`const observer = new MutationObserver((mutations) => {
   for (const mutation of mutations) {
@@ -266,13 +319,20 @@ observer.observe(document.body, {
 
       <h3>Two-Layer Encryption</h3>
       <p>
-        Each piece of content uses <strong>two-layer envelope encryption</strong>:
+        Each piece of content uses{" "}
+        <strong>two-layer envelope encryption</strong>:
       </p>
       <ol>
-        <li><strong>Content DEK</strong> - A unique AES-256 key generated for each article at encryption time. 
-        This encrypts the actual content (fast, efficient symmetric encryption).</li>
-        <li><strong>Key-wrapping keys</strong> - The content DEK is then <em>wrapped</em> (encrypted) with 
-        one or more key-wrapping keys. Each wrapped copy allows a different unlock path.</li>
+        <li>
+          <strong>Content DEK</strong> - A unique AES-256 key generated for each
+          article at encryption time. This encrypts the actual content (fast,
+          efficient symmetric encryption).
+        </li>
+        <li>
+          <strong>Key-wrapping keys</strong> - The content DEK is then{" "}
+          <em>wrapped</em> (encrypted) with one or more key-wrapping keys. Each
+          wrapped copy allows a different unlock path.
+        </li>
       </ol>
 
       <CodeBlock>{`// Article encryption at build/publish time
@@ -299,46 +359,102 @@ observer.observe(document.body, {
 
       <h3>Multiple Unlock Paths</h3>
       <p>
-        The same content can be unlocked through different key IDs. Each key ID represents 
-        a different access path:
+        The same content can be unlocked through different key IDs. Each key ID
+        represents a different access path:
       </p>
-      
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem', marginBottom: '1rem' }}>
+
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          marginTop: "1rem",
+          marginBottom: "1rem",
+        }}
+      >
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Key ID Type</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Example</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Use Case</th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Key ID Type
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Example
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Use Case
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Subscription tier</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>premium</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>User has premium subscription</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Subscription tier
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <code>premium</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              User has premium subscription
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Article ID</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>crypto-guide</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>User purchased this specific article</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Article ID
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <code>crypto-guide</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              User purchased this specific article
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Partner/Server</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>partner:acme</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Different subscription provider</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Partner/Server
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <code>partner:acme</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Different subscription provider
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Time bucket</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>premium:123456</code></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Current 15-minute window</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Time bucket
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <code>premium:123456</code>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Current 15-minute window
+            </td>
           </tr>
         </tbody>
       </table>
 
       <h3>Example: Article with Multiple Access Paths</h3>
       <p>
-        Consider an article that can be unlocked via subscription OR individual purchase, 
-        with 2 time buckets (current + next) for the subscription path:
+        Consider an article that can be unlocked via subscription OR individual
+        purchase, with 2 time buckets (current + next) for the subscription
+        path:
       </p>
 
       <CodeBlock>{`// 4 wrapped keys for this article:
@@ -355,8 +471,9 @@ wrappedKeys: {
 
       <h3>Time-Bucket Keys</h3>
       <p>
-        For subscription-based access, <strong>time-bucket keys</strong> rotate every 15 minutes.
-        This enables automatic access revocation without re-encrypting content.
+        For subscription-based access, <strong>time-bucket keys</strong> rotate
+        every 15 minutes. This enables automatic access revocation without
+        re-encrypting content.
       </p>
       <CodeBlock>{`// Bucket keys derived deterministically from master secret
 function deriveBucketKey(tier, bucketId) {
@@ -375,7 +492,9 @@ function deriveBucketKey(tier, bucketId) {
 // - Server refuses new unlock requests
 // - No content re-encryption needed`}</CodeBlock>
 
-      <p><strong>Benefits of time buckets:</strong></p>
+      <p>
+        <strong>Benefits of time buckets:</strong>
+      </p>
       <ul>
         <li>✅ Automatic access revocation (15-minute window)</li>
         <li>✅ No content re-encryption needed when subscriptions change</li>
@@ -385,7 +504,8 @@ function deriveBucketKey(tier, bucketId) {
 
       <h3>Static Keys (Per-Article Purchases)</h3>
       <p>
-        For permanent access (e.g., article purchases), static keys don't rotate:
+        For permanent access (e.g., article purchases), static keys don't
+        rotate:
       </p>
       <ul>
         <li>✅ Permanent access once unlocked</li>
@@ -397,33 +517,69 @@ function deriveBucketKey(tier, bucketId) {
 
       <h3>CMS Server ↔ Subscription Server</h3>
       <p>
-        Modern Capsule deployments use separate CMS and Subscription servers for security:
+        Modern Capsule deployments use separate CMS and Subscription servers for
+        security:
       </p>
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem', marginBottom: '1rem' }}>
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          marginTop: "1rem",
+          marginBottom: "1rem",
+        }}
+      >
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Server</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Responsibilities</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Has Access To</th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Server
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Responsibilities
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Has Access To
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><strong>CMS</strong></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <strong>CMS</strong>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
               Content management, encryption, publishing
             </td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
               Plaintext content, time-bucket keys (15-min cache)
             </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><strong>Subscription</strong></td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              <strong>Subscription</strong>
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
               Key management, user auth, access control
             </td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
               Master secret, bucket keys (derived), user subscriptions
             </td>
           </tr>
@@ -433,8 +589,13 @@ function deriveBucketKey(tier, bucketId) {
       <h4>Authentication Options</h4>
       <p>CMS authenticates with Subscription Server using:</p>
       <ul>
-        <li><strong>Option 1: API Key</strong> - Simple shared secret</li>
-        <li><strong>Option 2: JWT with Ed25519</strong> - Asymmetric signatures (more secure)</li>
+        <li>
+          <strong>Option 1: API Key</strong> - Simple shared secret
+        </li>
+        <li>
+          <strong>Option 2: JWT with Ed25519</strong> - Asymmetric signatures
+          (more secure)
+        </li>
       </ul>
 
       <CodeBlock>{`// CMS requests bucket keys (API Key)
@@ -453,9 +614,7 @@ Authorization: Bearer YOUR_API_KEY
 }`}</CodeBlock>
 
       <h2>Flow Summary</h2>
-      <p>
-        A simplified view of the complete encryption and decryption flow:
-      </p>
+      <p>A simplified view of the complete encryption and decryption flow:</p>
       <CodeBlock>{`// 1. CMS encrypts article
 DEK = generateRandomKey(256)
 ciphertext = AES-GCM-Encrypt(DEK, articleContent)
@@ -485,60 +644,127 @@ plaintext = AES-GCM-Decrypt(DEK, article.ciphertext, article.iv)
 
       <h3>Master Secret Protection</h3>
       <p>
-        The master secret is the root of all security. If compromised, attackers can derive
-        all future bucket keys. <strong>Never</strong> give the master secret to the CMS.
+        The master secret is the root of all security. If compromised, attackers
+        can derive all future bucket keys. <strong>Never</strong> give the
+        master secret to the CMS.
       </p>
-      
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem', marginBottom: '1rem' }}>
+
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          marginTop: "1rem",
+          marginBottom: "1rem",
+        }}
+      >
         <thead>
           <tr>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Component</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Public/Secret</th>
-            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Storage</th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Component
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Public/Secret
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Storage
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Master Secret</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>🔒 SECRET</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>KMS only (Subscription Server)</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Master Secret
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              🔒 SECRET
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              KMS only (Subscription Server)
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Bucket Derivation Algorithm</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>✅ Public</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Open source code</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Bucket Derivation Algorithm
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              ✅ Public
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Open source code
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Bucket Keys</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>🔒 SECRET</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Derived on-demand, cached 15 min on CMS</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Bucket Keys
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              🔒 SECRET
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Derived on-demand, cached 15 min on CMS
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Article DEKs</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>🔒 SECRET</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Wrapped (never in plaintext)</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Article DEKs
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              🔒 SECRET
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Wrapped (never in plaintext)
+            </td>
           </tr>
           <tr>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>User Private Keys</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>🔒 SECRET</td>
-            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Browser IndexedDB (non-extractable)</td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              User Private Keys
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              🔒 SECRET
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Browser IndexedDB (non-extractable)
+            </td>
           </tr>
         </tbody>
       </table>
 
       <h3>Access Revocation</h3>
       <p>
-        With time-bucket keys, access is automatically revoked within the bucket duration (15 minutes):
+        With time-bucket keys, access is automatically revoked within the bucket
+        duration (15 minutes):
       </p>
       <ul>
         <li>User's browser caches unwrapped DEK until bucket expires</li>
-        <li>When subscription cancelled, server refuses new bucket key requests</li>
+        <li>
+          When subscription cancelled, server refuses new bucket key requests
+        </li>
         <li>Cached DEK expires → user can no longer decrypt new content</li>
         <li>No content re-encryption needed</li>
       </ul>
 
       <h3>CMS Compromise Scenarios</h3>
-      <p><strong>If CMS is compromised, attacker gets:</strong></p>
+      <p>
+        <strong>If CMS is compromised, attacker gets:</strong>
+      </p>
       <ul>
         <li>❌ Plaintext content (CMS already has this)</li>
         <li>❌ Current bucket keys (valid for ≤15 minutes)</li>
@@ -547,59 +773,89 @@ plaintext = AES-GCM-Decrypt(DEK, article.ciphertext, article.iv)
       </ul>
 
       <h3>Subscription Server Compromise Scenarios</h3>
-      <p><strong>If Subscription Server is compromised, attacker gets:</strong></p>
+      <p>
+        <strong>If Subscription Server is compromised, attacker gets:</strong>
+      </p>
       <ul>
         <li>❌ Master secret → can derive all bucket keys</li>
         <li>❌ Can unwrap article DEKs</li>
         <li>✅ Cannot read content (CMS has encrypted content only)</li>
       </ul>
 
-      <p><strong>Mitigation:</strong> Use separate infrastructure, different access controls, audit logs</p>
+      <p>
+        <strong>Mitigation:</strong> Use separate infrastructure, different
+        access controls, audit logs
+      </p>
 
       <h3>Private Key Protection</h3>
       <p>
-        Private keys must be stored with <code>extractable: false</code> in the Web Crypto API.
-        This prevents JavaScript from accessing the raw key material.
+        Private keys must be stored with <code>extractable: false</code> in the
+        Web Crypto API. This prevents JavaScript from accessing the raw key
+        material.
       </p>
 
       <h3>DEK Storage</h3>
       <p>
-        Server-side DEKs should be stored in a secure key management system (KMS) in production.
-        Never hardcode DEKs in source code.
+        Server-side DEKs should be stored in a secure key management system
+        (KMS) in production. Never hardcode DEKs in source code.
       </p>
 
       <h3>Transport Security</h3>
       <p>
-        The key exchange endpoint must use HTTPS. While the wrapped DEK is encrypted, HTTPS
-        prevents MITM attacks on the public key exchange.
+        The key exchange endpoint must use HTTPS. While the wrapped DEK is
+        encrypted, HTTPS prevents MITM attacks on the public key exchange.
       </p>
 
       <h3>IV Uniqueness</h3>
       <p>
-        Each encrypted article must use a unique initialization vector (IV). Never reuse IVs
-        with the same DEK, as this breaks AES-GCM security.
+        Each encrypted article must use a unique initialization vector (IV).
+        Never reuse IVs with the same DEK, as this breaks AES-GCM security.
       </p>
 
       <h2>Security Properties</h2>
-      
+
       <h3>What Capsule Provides</h3>
       <ul>
-        <li>✅ <strong>Confidentiality:</strong> Content encrypted at rest and in transit</li>
-        <li>✅ <strong>Integrity:</strong> AES-GCM authentication detects tampering</li>
-        <li>✅ <strong>Forward Secrecy:</strong> Time buckets limit exposure window</li>
-        <li>✅ <strong>Secure Key Transport:</strong> RSA-OAEP for key exchange</li>
-        <li>✅ <strong>Offline Access:</strong> Cached keys work without network</li>
-        <li>✅ <strong>No Server-Side User Tracking:</strong> Keys are bearer tokens</li>
+        <li>
+          ✅ <strong>Confidentiality:</strong> Content encrypted at rest and in
+          transit
+        </li>
+        <li>
+          ✅ <strong>Integrity:</strong> AES-GCM authentication detects
+          tampering
+        </li>
+        <li>
+          ✅ <strong>Forward Secrecy:</strong> Time buckets limit exposure
+          window
+        </li>
+        <li>
+          ✅ <strong>Secure Key Transport:</strong> RSA-OAEP for key exchange
+        </li>
+        <li>
+          ✅ <strong>Offline Access:</strong> Cached keys work without network
+        </li>
+        <li>
+          ✅ <strong>No Server-Side User Tracking:</strong> Keys are bearer
+          tokens
+        </li>
       </ul>
 
       <h3>What Capsule Does NOT Provide</h3>
       <ul>
-        <li>❌ <strong>DRM:</strong> Determined users can extract decrypted content</li>
-        <li>❌ <strong>Copy Protection:</strong> Once decrypted, content can be copied</li>
-        <li>❌ <strong>Watermarking:</strong> No user-specific content marking</li>
+        <li>
+          ❌ <strong>DRM:</strong> Determined users can extract decrypted
+          content
+        </li>
+        <li>
+          ❌ <strong>Copy Protection:</strong> Once decrypted, content can be
+          copied
+        </li>
+        <li>
+          ❌ <strong>Watermarking:</strong> No user-specific content marking
+        </li>
       </ul>
       <p>
-        Capsule is designed for honest users who want convenient access, not for 
+        Capsule is designed for honest users who want convenient access, not for
         preventing determined adversaries from extracting content.
       </p>
 

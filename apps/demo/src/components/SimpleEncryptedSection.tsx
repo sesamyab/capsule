@@ -2,13 +2,17 @@
 
 /**
  * SimpleEncryptedSection - Demonstrates the high-level @sesamy/capsule API
- * 
+ *
  * This is a simplified example showing how easy it is to use the Capsule client.
  * For the full-featured demo with DEK caching visualization, see EncryptedSection.tsx
  */
 
 import { useState, useEffect, useRef } from "react";
-import type { CapsuleClient as CapsuleClientType, EncryptedArticle, UnlockFunction } from "@sesamy/capsule";
+import type {
+  CapsuleClient as CapsuleClientType,
+  EncryptedArticle,
+  UnlockFunction,
+} from "@sesamy/capsule";
 
 interface SimpleEncryptedSectionProps {
   articleId: string;
@@ -32,7 +36,10 @@ function formatMarkdown(content: string): string {
     .replace(/\n\n/g, "</p><p>");
 }
 
-export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }: SimpleEncryptedSectionProps) {
+export function SimpleEncryptedSection({
+  articleId: _articleId,
+  encryptedData,
+}: SimpleEncryptedSectionProps) {
   const [state, setState] = useState<State>("loading");
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +56,12 @@ export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }:
         const { CapsuleClient } = await import("@sesamy/capsule");
 
         // Define the unlock function - this is how we fetch DEKs from the server
-        const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey, articleId: _articleId }) => {
+        const unlock: UnlockFunction = async ({
+          keyId,
+          wrappedDek,
+          publicKey,
+          articleId: _articleId,
+        }) => {
           const response = await fetch("/api/unlock", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -86,7 +98,9 @@ export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }:
     }
 
     init();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // Handle unlock
@@ -103,10 +117,12 @@ export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }:
       // 3. Caches the DEK
       // 4. Decrypts the content
       const decrypted = await clientRef.current.unlock(encryptedData, "tier");
-      
+
       // Get which key was used (first tier key in this case)
-      const usedKey = encryptedData.wrappedKeys.find(k => !k.keyId.startsWith("article:"));
-      
+      const usedKey = encryptedData.wrappedKeys.find(
+        (k) => !k.keyId.startsWith("article:")
+      );
+
       setContent(decrypted);
       setKeyId(usedKey?.keyId || "unknown");
       setState("unlocked");
@@ -170,7 +186,9 @@ export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }:
             <div className="lock-icon">🔐</div>
             <p>Unlocking content...</p>
             <div className="loading-spinner" />
-            <p className="status-detail">Using @sesamy/capsule high-level API</p>
+            <p className="status-detail">
+              Using @sesamy/capsule high-level API
+            </p>
           </>
         ) : (
           <>
@@ -184,9 +202,12 @@ export function SimpleEncryptedSection({ articleId: _articleId, encryptedData }:
                 <small>One-click unlock with high-level API</small>
               </span>
             </button>
-            <p className="hint" style={{ marginTop: "1rem", fontSize: "0.85rem", opacity: 0.7 }}>
-              This uses <code>capsule.unlock()</code> which handles key generation, 
-              DEK fetching, caching, and decryption automatically.
+            <p
+              className="hint"
+              style={{ marginTop: "1rem", fontSize: "0.85rem", opacity: 0.7 }}
+            >
+              This uses <code>capsule.unlock()</code> which handles key
+              generation, DEK fetching, caching, and decryption automatically.
             </p>
           </>
         )}
