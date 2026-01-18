@@ -4,86 +4,78 @@
  * Server-side encryption library for Capsule.
  * 
  * This package provides:
- * - High-level CapsuleServer for easy content encryption
- * - CMS content encryption with envelope encryption
- * - Time-bucket key derivation (TOTP-style)
- * - Subscription server utilities for key management
+ * - CmsServer for encrypting content (works with any key source)
+ * - TotpKeyProvider for TOTP-based key derivation
+ * - SubscriptionServer for handling unlock requests
+ * - Envelope encryption with AES-256-GCM
  * 
- * @example Quick Start (High-Level API)
+ * @example Quick Start with TOTP
  * ```typescript
- * import { CapsuleServer } from '@sesamy/capsule-server';
+ * import { createCmsServer, createTotpKeyProvider, createSubscriptionServer } from '@sesamy/capsule-server';
  * 
- * const capsule = new CapsuleServer({
+ * // Create TOTP key provider (derives keys from master secret)
+ * const totp = createTotpKeyProvider({
  *   masterSecret: process.env.MASTER_SECRET,
  * });
  * 
- * // Encrypt with tier-based access
- * const encrypted = await capsule.encrypt('article-123', content, {
- *   tiers: ['premium'],
+ * // CMS side: encrypt content
+ * const cms = createCmsServer({
+ *   getKeys: (keyIds) => totp.getKeys(keyIds),
  * });
  * 
- * // Or get HTML ready for templates
- * const html = await capsule.encrypt('article-123', content, {
- *   tiers: ['premium'],
- *   format: 'html',
- *   placeholder: 'Subscribe to unlock...',
- * });
- * ```
- * 
- * @example With Async Key Provider
- * ```typescript
- * import { createCapsuleWithKeyProvider } from '@sesamy/capsule-server';
- * 
- * const capsule = createCapsuleWithKeyProvider(async (articleId) => {
- *   // Fetch keys from your CMS, subscription server, or cache
- *   const response = await fetch(`/api/keys?article=${articleId}`);
- *   return response.json(); // [{ keyId, key, expiresAt? }]
+ * const encrypted = await cms.encrypt('article-123', content, {
+ *   keyIds: ['premium', 'enterprise'],
  * });
  * 
- * const encrypted = await capsule.encrypt('article-123', content);
- * ```
- * 
- * @example CMS Usage (Low-Level API)
- * ```typescript
- * import { createTotpEncryptor } from '@sesamy/capsule-server';
- * 
- * const encryptor = createTotpEncryptor(process.env.MASTER_SECRET);
- * 
- * const encrypted = await encryptor.encryptArticleWithTier(
- *   'article-123',
- *   'Premium content here...',
- *   'premium'
- * );
- * ```
- * 
- * @example Subscription Server
- * ```typescript
- * import { createSubscriptionServer } from '@sesamy/capsule-server';
- * 
- * const server = createSubscriptionServer(process.env.MASTER_SECRET);
- * 
- * // Endpoint for CMS to get bucket keys
- * app.post('/api/cms/bucket-keys', (req) => {
- *   return server.getBucketKeysResponse(req.body.keyId);
+ * // Subscription side: handle unlock requests
+ * const server = createSubscriptionServer({
+ *   masterSecret: process.env.MASTER_SECRET,
  * });
  * 
- * // Endpoint for users to unlock content
  * app.post('/api/unlock', async (req) => {
  *   const { wrappedKey, publicKey } = req.body;
  *   return server.unlockForUser(wrappedKey, publicKey);
+ * });
+ * ```
+ * 
+ * @example With External Key Provider
+ * ```typescript
+ * import { createCmsServer } from '@sesamy/capsule-server';
+ * 
+ * const cms = createCmsServer({
+ *   getKeys: async (keyIds) => {
+ *     // Fetch keys from your subscription server
+ *     const response = await fetch('/api/keys', {
+ *       method: 'POST',
+ *       body: JSON.stringify({ keyIds }),
+ *     });
+ *     return response.json(); // [{ keyId, key, expiresAt? }]
+ *   },
+ * });
+ * 
+ * const encrypted = await cms.encrypt('article-123', content, {
+ *   keyIds: ['premium'],
  * });
  * ```
  */
 
 // High-level API (recommended)
 export { 
-  CapsuleServer, 
-  createCapsule, 
-  createCapsuleWithKeyProvider,
-  type CapsuleServerOptions,
+  // CMS Server
+  CmsServer, 
+  createCmsServer, 
+  type CmsServerOptions,
   type EncryptOptions,
   type KeyEntry,
   type KeyProvider,
+  // TOTP Key Provider
+  TotpKeyProvider,
+  createTotpKeyProvider,
+  type TotpKeyProviderOptions,
+  // Legacy aliases (deprecated)
+  CapsuleServer, 
+  createCapsule, 
+  type CapsuleServerOptions,
 } from "./capsule";
 
 // CMS encryption (low-level)

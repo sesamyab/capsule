@@ -1,67 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
-import { publicEncrypt, constants, createPublicKey, createDecipheriv } from "crypto";
-import { getArticleKey, hasArticleKey, isValidTier } from "@/lib/encryption-keys";
-import { deriveBucketKey, getCurrentBucket, getBucketExpiration, BUCKET_PERIOD_SECONDS, isBucketValid } from "@/lib/time-buckets";
-
-/** GCM IV size in bytes */
-const GCM_IV_SIZE = 12;
-
-/** GCM authentication tag length in bytes */
-const GCM_TAG_LENGTH = 16;
+import { createSubscriptionServer } from "@sesamy/capsule-server";
+import { MASTER_SECRET, BUCKET_PERIOD_SECONDS, totp } from "@/lib/capsule";
 
 /**
- * Unwrap a DEK that was wrapped with AES-256-GCM.
+ * Create subscription server with the same master secret as the CMS.
  */
-function unwrapDek(wrappedDek: Buffer, wrappingKey: Buffer): Buffer {
-  const iv = wrappedDek.subarray(0, GCM_IV_SIZE);
-  const ciphertext = wrappedDek.subarray(GCM_IV_SIZE, -GCM_TAG_LENGTH);
-  const authTag = wrappedDek.subarray(-GCM_TAG_LENGTH);
-  
-  const decipher = createDecipheriv("aes-256-gcm", wrappingKey, iv, {
-    authTagLength: GCM_TAG_LENGTH,
-  });
-  decipher.setAuthTag(authTag);
-  
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-}
+const server = createSubscriptionServer({
+  masterSecret: MASTER_SECRET,
+  bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+});
 
 /**
  * POST /api/unlock
  *
- * Receives a wrapped DEK and client's public key, unwraps the DEK and
- * re-wraps it with the client's public key.
+ * Two modes of operation:
+ * 
+ * 1. TIER KEY MODE (mode: "tier" or default for tier keys)
+ *    Returns the key-wrapping key (KEK) for a tier.
+ *    Client can then unwrap any article's DEK locally.
+ *    → "Unlock once, access all premium content"
+ * 
+ * 2. ARTICLE KEY MODE (for article:xxx keys)
+ *    Returns the unwrapped DEK for a specific article.
+ *    → Single article access
  *
  * Request body:
  * {
  *   keyId: string (e.g., "premium:123456" or "article:crypto-guide"),
- *   wrappedDek: string (Base64-encoded wrapped DEK from article),
- *   publicKey: string (Base64 SPKI format)
+ *   wrappedDek?: string (required for article keys, optional for tier keys),
+ *   publicKey: string (Base64 SPKI format),
+ *   mode?: "tier" | "article" (default: auto-detect from keyId)
  * }
  *
  * Response:
  * {
- *   encryptedDek: string (Base64 RSA-OAEP wrapped DEK),
+ *   encryptedDek: string (Base64 RSA-OAEP wrapped key),
  *   keyId: string,
  *   bucketId?: string,
- *   expiresAt: string (ISO 8601)
+ *   expiresAt: string (ISO 8601),
+ *   keyType: "kek" | "dek" (indicates what encryptedDek contains)
  * }
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { keyId, wrappedDek, publicKey } = body;
+    const { keyId, wrappedDek, publicKey, mode } = body;
 
     // Validate required fields
     if (!keyId || typeof keyId !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid keyId" },
-        { status: 400 }
-      );
-    }
-
-    if (!wrappedDek || typeof wrappedDek !== "string") {
-      return NextResponse.json(
-        { error: "Missing or invalid wrappedDek" },
         { status: 400 }
       );
     }
@@ -73,86 +61,60 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Parse keyId to determine type: "tier:bucketId" or "article:articleId"
-    const [keyType, keySubId] = keyId.includes(":") 
-      ? keyId.split(":", 2) 
-      : [keyId, null];
+    // Determine if this is a tier key or article key
+    const isArticleKey = keyId.startsWith("article:");
+    const useTierMode = mode === "tier" || (!isArticleKey && mode !== "article");
 
-    let keyWrappingKey: Buffer;
-    let expiresAt: Date;
-    let bucketId: string | undefined;
-
-    if (keyType === "article" && keySubId) {
-      // Static article key
-      if (!hasArticleKey(keySubId)) {
+    if (useTierMode && !isArticleKey) {
+      // TIER KEY MODE: Return the key-wrapping key (KEK)
+      // Parse tier:bucketId
+      const colonIndex = keyId.lastIndexOf(":");
+      if (colonIndex === -1) {
         return NextResponse.json(
-          { error: `Unknown article key: ${keySubId}` },
-          { status: 400 }
-        );
-      }
-      keyWrappingKey = getArticleKey(keySubId);
-      // Static keys use current bucket expiration for client cache timing
-      const currentBucket = getCurrentBucket();
-      expiresAt = getBucketExpiration(currentBucket);
-    } else if (keySubId) {
-      // Tier key with bucket ID (e.g., "premium:123456")
-      if (!isValidTier(keyType)) {
-        return NextResponse.json(
-          { error: `Invalid tier: ${keyType}` },
+          { error: "Invalid tier keyId format. Expected 'tier:bucketId'" },
           { status: 400 }
         );
       }
       
-      if (!isBucketValid(keySubId)) {
-        return NextResponse.json(
-          { error: `Bucket ${keySubId} is expired or invalid` },
-          { status: 400 }
-        );
-      }
+      const tier = keyId.substring(0, colonIndex);
+      const bucketId = keyId.substring(colonIndex + 1);
       
-      bucketId = keySubId;
-      keyWrappingKey = deriveBucketKey(keyType, bucketId);
-      expiresAt = getBucketExpiration(bucketId);
-    } else {
+      const result = server.getTierKeyForUser(tier, bucketId, publicKey);
+      
+      return NextResponse.json({
+        ...result,
+        keyType: "kek", // Key-encrypting key (can unwrap DEKs)
+        bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+      });
+    }
+
+    // ARTICLE KEY MODE: Return the unwrapped DEK
+    if (!wrappedDek || typeof wrappedDek !== "string") {
       return NextResponse.json(
-        { error: "Invalid keyId format. Expected 'tier:bucketId' or 'article:articleId'" },
+        { error: "Missing or invalid wrappedDek (required for article keys)" },
         { status: 400 }
       );
     }
 
-    // Unwrap the DEK using the key-wrapping key
-    const wrappedDekBuffer = Buffer.from(wrappedDek, "base64");
-    let dek: Buffer;
-    
-    try {
-      dek = unwrapDek(wrappedDekBuffer, keyWrappingKey);
-    } catch (err) {
-      console.error("Failed to unwrap DEK:", err);
-      return NextResponse.json(
-        { error: "Failed to unwrap DEK - key may have expired" },
-        { status: 400 }
-      );
-    }
+    // Static key lookup for article keys - derive from same TOTP provider as CMS
+    const staticKeyLookup = async (keyId: string): Promise<Buffer | null> => {
+      if (keyId.startsWith("article:")) {
+        const articleId = keyId.slice(8);
+        const keyEntry = await totp.getArticleKey(articleId);
+        return Buffer.isBuffer(keyEntry.key) ? keyEntry.key : Buffer.from(keyEntry.key, 'base64');
+      }
+      return null;
+    };
 
-    // Convert Base64 SPKI to PEM format for Node.js crypto
-    const publicKeyPem = convertToPem(publicKey);
-    const pubKey = createPublicKey(publicKeyPem);
-
-    // Re-wrap the DEK with the client's public key using RSA-OAEP with SHA-256
-    const encryptedDek = publicEncrypt(
-      {
-        key: pubKey,
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
-      },
-      dek
+    const result = await server.unlockForUser(
+      { keyId, wrappedDek },
+      publicKey,
+      staticKeyLookup
     );
 
     return NextResponse.json({
-      encryptedDek: encryptedDek.toString("base64"),
-      keyId,
-      bucketId,
-      expiresAt: expiresAt.toISOString(),
+      ...result,
+      keyType: "dek", // Data encryption key (decrypts content directly)
       bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
     });
   } catch (error) {
@@ -165,6 +127,12 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      if (error.message.includes("expired") || error.message.includes("invalid")) {
+        return NextResponse.json(
+          { error: error.message },
+          { status: 400 }
+        );
+      }
     }
 
     return NextResponse.json(
@@ -172,19 +140,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-/**
- * Convert Base64 SPKI to PEM format for Node.js crypto.
- */
-function convertToPem(publicKeyB64: string): string {
-  const keyDer = Buffer.from(publicKeyB64, "base64");
-  const base64Lines: string[] = [];
-  const base64 = keyDer.toString("base64");
-
-  for (let i = 0; i < base64.length; i += 64) {
-    base64Lines.push(base64.slice(i, i + 64));
-  }
-
-  return `-----BEGIN PUBLIC KEY-----\n${base64Lines.join("\n")}\n-----END PUBLIC KEY-----`;
 }

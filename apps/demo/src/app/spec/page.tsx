@@ -217,6 +217,51 @@ const decrypted = await crypto.subtle.decrypt(
   encryptedContent
 );`}</CodeBlock>
 
+      <h3>6. Handling Decrypted Content in Scripts</h3>
+      <p>
+        Since content is decrypted client-side <em>after</em> the initial page load, any scripts 
+        that need to process the content (syntax highlighting, analytics, interactive widgets, etc.) 
+        must run after decryption completes. There are two approaches:
+      </p>
+
+      <h4>Option A: Listen for the <code>capsule:unlocked</code> Event</h4>
+      <p>
+        Capsule dispatches a custom event when content is decrypted and added to the DOM:
+      </p>
+      <CodeBlock>{`document.addEventListener("capsule:unlocked", (event) => {
+  const { articleId, element, keyId } = event.detail;
+  
+  // element is the DOM container with the decrypted content
+  // Run your initialization code here
+  highlightCodeBlocks(element);
+  initializeWidgets(element);
+  
+  console.log(\`Article "\${articleId}" unlocked with key: \${keyId}\`);
+});`}</CodeBlock>
+
+      <h4>Option B: Use a MutationObserver</h4>
+      <p>
+        For more generic DOM change detection, use a <code>MutationObserver</code>:
+      </p>
+      <CodeBlock>{`const observer = new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    for (const node of mutation.addedNodes) {
+      if (node instanceof HTMLElement) {
+        // Check if this is unlocked content
+        if (node.classList.contains("premium-content")) {
+          initializeContent(node);
+        }
+      }
+    }
+  }
+});
+
+// Observe the container where encrypted sections appear
+observer.observe(document.body, { 
+  childList: true, 
+  subtree: true 
+});`}</CodeBlock>
+
       <h2>Key Architecture</h2>
 
       <h3>Two-Layer Encryption</h3>
@@ -407,7 +452,34 @@ Authorization: Bearer YOUR_API_KEY
   "next": { ... }
 }`}</CodeBlock>
 
-      <h2>Security Considerations</h2>
+      <h2>Flow Summary</h2>
+      <p>
+        A simplified view of the complete encryption and decryption flow:
+      </p>
+      <CodeBlock>{`// 1. CMS encrypts article
+DEK = generateRandomKey(256)
+ciphertext = AES-GCM-Encrypt(DEK, articleContent)
+for each tier in [premium, basic]:
+  for each bucket in [current, next]:
+    KEK = HKDF(masterSecret, tier + ":" + bucket)
+    wrappedDek = AES-GCM-Wrap(KEK, DEK)
+
+// 2. Client requests tier access
+POST /api/unlock { keyId: "premium:57906340", publicKey }
+
+// 3. Server wraps KEK with client's public key
+KEK = HKDF(masterSecret, "premium:57906340")
+encryptedKEK = RSA-OAEP-Encrypt(clientPublicKey, KEK)
+
+// 4. Client unwraps KEK and caches it
+KEK = RSA-OAEP-Decrypt(privateKey, encryptedKEK)
+IndexedDB.store("tier:premium:57906340", KEK)
+
+// 5. Client decrypts content (no network needed!)
+DEK = AES-GCM-Unwrap(KEK, article.wrappedKeys["premium:57906340"])
+plaintext = AES-GCM-Decrypt(DEK, article.ciphertext, article.iv)
+
+// 6. Subsequent articles use cached KEK - "unlock once, access all"`}</CodeBlock>
 
       <h2>Security Considerations</h2>
 
@@ -506,6 +578,29 @@ Authorization: Bearer YOUR_API_KEY
       <p>
         Each encrypted article must use a unique initialization vector (IV). Never reuse IVs
         with the same DEK, as this breaks AES-GCM security.
+      </p>
+
+      <h2>Security Properties</h2>
+      
+      <h3>What Capsule Provides</h3>
+      <ul>
+        <li>✅ <strong>Confidentiality:</strong> Content encrypted at rest and in transit</li>
+        <li>✅ <strong>Integrity:</strong> AES-GCM authentication detects tampering</li>
+        <li>✅ <strong>Forward Secrecy:</strong> Time buckets limit exposure window</li>
+        <li>✅ <strong>Secure Key Transport:</strong> RSA-OAEP for key exchange</li>
+        <li>✅ <strong>Offline Access:</strong> Cached keys work without network</li>
+        <li>✅ <strong>No Server-Side User Tracking:</strong> Keys are bearer tokens</li>
+      </ul>
+
+      <h3>What Capsule Does NOT Provide</h3>
+      <ul>
+        <li>❌ <strong>DRM:</strong> Determined users can extract decrypted content</li>
+        <li>❌ <strong>Copy Protection:</strong> Once decrypted, content can be copied</li>
+        <li>❌ <strong>Watermarking:</strong> No user-specific content marking</li>
+      </ul>
+      <p>
+        Capsule is designed for honest users who want convenient access, not for 
+        preventing determined adversaries from extracting content.
       </p>
 
       <h2>Implementation Checklist</h2>

@@ -9,6 +9,7 @@ export function Navigation() {
         </Link>
         <div className="nav-links">
           <Link href="/spec">Specification</Link>
+          <Link href="/glossary">Glossary</Link>
           <Link href="/client">Client</Link>
           <Link href="/servers">Servers</Link>
           <Link href="/cms-test">CMS API</Link>

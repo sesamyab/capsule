@@ -13,28 +13,33 @@ export default function ServersPage() {
       <h2>Quick Start with @sesamy/capsule-server</h2>
       <p>
         The <code>@sesamy/capsule-server</code> package provides a high-level API for both 
-        CMS encryption and subscription server functionality.
+        CMS encryption and subscription server functionality. The CMS just works with key IDs -
+        it doesn&apos;t know or care about subscription tiers.
       </p>
       <CodeBlock language="bash">{`npm install @sesamy/capsule-server`}</CodeBlock>
 
       <h3>CMS: Encrypting Content</h3>
-      <CodeBlock>{`import { CapsuleServer } from '@sesamy/capsule-server';
+      <CodeBlock>{`import { createCmsServer, createTotpKeyProvider } from '@sesamy/capsule-server';
 
-const capsule = new CapsuleServer({
+// Create TOTP key provider (or fetch keys from your subscription server)
+const totp = createTotpKeyProvider({
   masterSecret: process.env.MASTER_SECRET,  // Base64-encoded 256-bit secret
 });
 
-// Encrypt with tier-based subscription access
-const encrypted = await capsule.encrypt('article-123', premiumContent, {
-  tiers: ['premium'],           // Subscription tiers
-  includeArticleKey: true,      // Add per-article purchase key
+const cms = createCmsServer({
+  getKeys: (keyIds) => totp.getKeys(keyIds),
+});
+
+// Encrypt with specific key IDs
+const encrypted = await cms.encrypt('article-123', premiumContent, {
+  keyIds: ['premium', 'enterprise'],  // Just key IDs - CMS doesn't know what they mean
 });
 
 // Result: { articleId, encryptedContent, iv, wrappedKeys: [...] }
 
 // Or get HTML ready for templates
-const html = await capsule.encrypt('article-123', content, {
-  tiers: ['premium'],
+const html = await cms.encrypt('article-123', content, {
+  keyIds: ['premium'],
   format: 'html',
   placeholder: '<p>Subscribe to unlock...</p>',
 });`}</CodeBlock>
@@ -42,7 +47,10 @@ const html = await capsule.encrypt('article-123', content, {
       <h3>Subscription Server: Unlock Endpoint</h3>
       <CodeBlock>{`import { createSubscriptionServer } from '@sesamy/capsule-server';
 
-const server = createSubscriptionServer(process.env.MASTER_SECRET, 30);
+const server = createSubscriptionServer({
+  masterSecret: process.env.MASTER_SECRET,
+  bucketPeriodSeconds: 30,
+});
 
 // POST /api/unlock
 app.post('/api/unlock', async (req, res) => {
@@ -62,10 +70,11 @@ app.post('/api/unlock', async (req, res) => {
 
       <h3>Output Formats</h3>
       <CodeBlock>{`// JSON (default) - for API responses
-const data = await capsule.encrypt(id, content, { tiers: ['premium'] });
+const data = await cms.encrypt(id, content, { keyIds: ['premium'] });
 
 // HTML - ready to embed
-const html = await capsule.encrypt(id, content, {
+const html = await cms.encrypt(id, content, {
+  keyIds: ['premium'],
   format: 'html',
   htmlClass: 'premium-content',
   placeholder: 'Loading...',
@@ -73,8 +82,8 @@ const html = await capsule.encrypt(id, content, {
 // <div class="premium-content" data-capsule='{...}' data-capsule-id="...">Loading...</div>
 
 // Template helper - get all formats
-const { data, json, attribute, html } = await capsule.encryptForTemplate(id, content, {
-  tiers: ['premium'],
+const { data, json, attribute, html } = await cms.encryptForTemplate(id, content, {
+  keyIds: ['premium'],
 });`}</CodeBlock>
 
       <h2>Architecture Overview</h2>

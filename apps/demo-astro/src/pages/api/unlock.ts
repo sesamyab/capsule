@@ -19,7 +19,10 @@ const MASTER_SECRET = import.meta.env.CAPSULE_MASTER_SECRET ||
 /**
  * Subscription server instance for handling unlock requests.
  */
-const server = createSubscriptionServer(MASTER_SECRET, BUCKET_PERIOD_SECONDS);
+const server = createSubscriptionServer({
+  masterSecret: MASTER_SECRET,
+  bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+});
 
 export const POST: APIRoute = async ({ request }) => {
   try {

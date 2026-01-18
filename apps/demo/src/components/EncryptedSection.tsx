@@ -49,10 +49,13 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
   const contentRef = useRef<HTMLDivElement>(null);
   const { log } = useConsole();
 
-  // Execute scripts in decrypted content after render
+  // Execute scripts and dispatch event after content is decrypted
   useEffect(() => {
     if (state === "unlocked" && contentRef.current) {
-      const scripts = contentRef.current.querySelectorAll("script");
+      const contentElement = contentRef.current;
+      
+      // Execute any scripts in the decrypted content
+      const scripts = contentElement.querySelectorAll("script");
       scripts.forEach((oldScript) => {
         const newScript = document.createElement("script");
         // Copy attributes
@@ -67,8 +70,20 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
       if (scripts.length > 0) {
         log(`Executed ${scripts.length} embedded script(s)`, "info");
       }
+
+      // Dispatch custom event for external scripts to react to unlocked content
+      const event = new CustomEvent("capsule:unlocked", {
+        bubbles: true,
+        detail: {
+          articleId,
+          element: contentElement,
+          keyId: usedKeyId,
+        },
+      });
+      contentElement.dispatchEvent(event);
+      log(`Dispatched 'capsule:unlocked' event for article "${articleId}"`, "info");
     }
-  }, [state, decryptedContent, log]);
+  }, [state, decryptedContent, log, articleId, usedKeyId]);
 
   // Parse keyId to get type and base info
   const parseKeyId = (keyId: string): { type: "tier" | "article"; baseId: string; bucketId?: string } => {
@@ -134,65 +149,112 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     }
   }, [encryptedData, log]);
 
-  // Unwrap DEK from encrypted bytes using RSA private key
-  const unwrapDek = useCallback(async (
+  // Unwrap a key using RSA private key (works for both DEK and KEK)
+  const unwrapKeyWithRsa = useCallback(async (
     privateKey: CryptoKey,
-    encryptedDekB64: string
+    encryptedKeyB64: string,
+    keyUsage: "decrypt" | "unwrapKey"
   ): Promise<CryptoKey> => {
-    const encryptedDekBuffer = base64ToArrayBuffer(encryptedDekB64);
+    const encryptedKeyBuffer = base64ToArrayBuffer(encryptedKeyB64);
     return await crypto.subtle.unwrapKey(
       "raw",
-      encryptedDekBuffer,
+      encryptedKeyBuffer,
       privateKey,
       { name: "RSA-OAEP" },
+      { name: "AES-GCM", length: 256 },
+      false, // non-extractable
+      [keyUsage]
+    );
+  }, []);
+
+  // Unwrap DEK using KEK (AES-GCM with prepended IV)
+  // Server format: IV (12 bytes) + ciphertext + auth tag (16 bytes)
+  const unwrapDekWithKek = useCallback(async (
+    kek: CryptoKey,
+    wrappedDekB64: string
+  ): Promise<CryptoKey> => {
+    const wrappedDekBuffer = base64ToArrayBuffer(wrappedDekB64);
+    
+    // Extract IV (first 12 bytes) and encrypted DEK (rest)
+    const iv = wrappedDekBuffer.slice(0, 12);
+    const encryptedDek = wrappedDekBuffer.slice(12);
+    
+    // Decrypt to get raw DEK bytes
+    const dekBytes = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: new Uint8Array(iv) },
+      kek,
+      encryptedDek
+    );
+    
+    // Import the raw DEK bytes as a CryptoKey
+    return await crypto.subtle.importKey(
+      "raw",
+      dekBytes,
       { name: "AES-GCM", length: 256 },
       false, // non-extractable
       ["decrypt"]
     );
   }, []);
 
-  // Try to auto-decrypt with cached DEK
+  // Try to auto-decrypt with cached keys
   const tryAutoDecrypt = useCallback(async (data: EncryptedArticle, keys: CryptoKeyPair) => {
     const { tierKeys, articleKeys } = getKeyOptions();
     
-    // Try tier keys first (more valuable - unlocks all tier content)
+    // Try tier keys first - we cache the KEK (key-wrapping key), not the DEK
+    // KEK is cached by tier:bucketId - shared across all articles in that tier/bucket
     for (const wk of tierKeys) {
       const parsed = parseKeyId(wk.keyId);
-      const cachedDek = getCachedDek("tier", parsed.baseId);
-      const storedDek = await getStoredDek("tier", parsed.baseId);
+      if (!parsed.bucketId) continue;
       
-      if (cachedDek && storedDek) {
-        log(`Using in-memory DEK for tier "${parsed.baseId}" (${getTimeUntilExpiry(storedDek)})`, "crypto");
-        setState("decrypting");
-        const success = await decryptContent(cachedDek, wk.keyId);
-        if (success) {
-          setCachedDekInfo(storedDek);
-          return true;
-        }
-      }
+      // Cache key for tier KEK is just "tier:bucketId" - shared across articles!
+      const kekCacheId = `${parsed.baseId}:${parsed.bucketId}`;
+      const cachedKek = getCachedDek("tier", kekCacheId);
+      const storedKek = await getStoredDek("tier", kekCacheId);
       
-      if (storedDek) {
-        log(`Found stored DEK for tier "${parsed.baseId}" (valid for ${getTimeUntilExpiry(storedDek)})`, "info");
-        log("Unwrapping DEK locally with RSA key (no network!)...", "crypto");
+      if (cachedKek && storedKek) {
+        log(`Using cached KEK for tier "${parsed.baseId}" (${getTimeUntilExpiry(storedKek)})`, "crypto");
+        log("Unwrapping article DEK locally with KEK (no network!)...", "crypto");
         setState("decrypting");
         
         try {
-          const dek = await unwrapDek(keys.privateKey, storedDek.encryptedDek);
-          cacheDek("tier", parsed.baseId, dek, storedDek);
+          const dek = await unwrapDekWithKek(cachedKek, wk.wrappedDek);
+          log("DEK unwrapped successfully", "success");
+          const success = await decryptContent(dek, wk.keyId);
+          if (success) {
+            setCachedDekInfo(storedKek);
+            return true;
+          }
+        } catch (err) {
+          log(`Failed to unwrap DEK with cached KEK: ${err}`, "error");
+        }
+      }
+      
+      if (storedKek) {
+        log(`Found stored KEK for tier "${parsed.baseId}" (valid for ${getTimeUntilExpiry(storedKek)})`, "info");
+        log("Unwrapping KEK with RSA key...", "crypto");
+        setState("decrypting");
+        
+        try {
+          const kek = await unwrapKeyWithRsa(keys.privateKey, storedKek.encryptedDek, "decrypt");
+          cacheDek("tier", kekCacheId, kek, storedKek);
+          log("KEK unwrapped successfully", "success");
+          
+          log("Unwrapping article DEK with KEK (no network!)...", "crypto");
+          const dek = await unwrapDekWithKek(kek, wk.wrappedDek);
           log("DEK unwrapped successfully", "success");
           
           const success = await decryptContent(dek, wk.keyId);
           if (success) {
-            setCachedDekInfo(storedDek);
+            setCachedDekInfo(storedKek);
             return true;
           }
         } catch (err) {
-          log(`Failed to unwrap stored DEK: ${err}`, "error");
+          log(`Failed to unwrap with stored KEK: ${err}`, "error");
         }
       }
     }
     
-    // Try article keys
+    // Try article keys - these are DEKs cached per-article
     for (const wk of articleKeys) {
       const parsed = parseKeyId(wk.keyId);
       const cachedDek = getCachedDek("article", parsed.baseId);
@@ -214,7 +276,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
         setState("decrypting");
         
         try {
-          const dek = await unwrapDek(keys.privateKey, storedDek.encryptedDek);
+          const dek = await unwrapKeyWithRsa(keys.privateKey, storedDek.encryptedDek, "decrypt");
           cacheDek("article", parsed.baseId, dek, storedDek);
           log("DEK unwrapped successfully", "success");
           
@@ -230,7 +292,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     }
     
     return false;
-  }, [getKeyOptions, decryptContent, unwrapDek, log]);
+  }, [getKeyOptions, decryptContent, unwrapKeyWithRsa, unwrapDekWithKek, log]);
 
   // Initialize key pair on mount
   useEffect(() => {
@@ -292,7 +354,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     return () => { mounted = false; };
   }, [encryptedData, articleId, log, tryAutoDecrypt, getKeyOptions, securityMode]);
 
-  // Auto-renew DEK before it expires
+  // Auto-renew KEK/DEK before it expires
   useEffect(() => {
     if (state !== "unlocked" || !keyPair || !usedKeyId || !encryptedData) {
       return;
@@ -300,15 +362,20 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
 
     const parsed = parseKeyId(usedKeyId);
     const RENEW_BUFFER_MS = 5000;
+    // For tier keys, cache is by tier:bucketId (KEK)
+    // For article keys, cache is by articleId (DEK)
+    const cacheId = parsed.type === "tier" && parsed.bucketId
+      ? `${parsed.baseId}:${parsed.bucketId}`
+      : parsed.baseId;
     
     const checkAndRenew = async () => {
-      const stored = await getStoredDek(parsed.type, parsed.baseId);
+      const stored = await getStoredDek(parsed.type, cacheId);
       if (!stored) return;
       
       const timeUntilExpiry = stored.expiresAt - Date.now();
       
       if (timeUntilExpiry <= RENEW_BUFFER_MS) {
-        log(`DEK expires in ${Math.round(timeUntilExpiry / 1000)}s, auto-renewing...`, "info");
+        log(`Key expires in ${Math.round(timeUntilExpiry / 1000)}s, auto-renewing...`, "info");
         
         // Find the wrapped key for this keyId
         const wrappedKey = encryptedData.wrappedKeys.find(wk => wk.keyId === usedKeyId);
@@ -317,7 +384,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
           return;
         }
         
-        await fetchAndUnwrapDek(wrappedKey);
+        await fetchAndUnwrapKey(wrappedKey);
       }
     };
     
@@ -326,59 +393,106 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     return () => clearInterval(interval);
   }, [state, keyPair, usedKeyId, encryptedData, log]);
 
-  // Fetch and unwrap DEK from server
-  const fetchAndUnwrapDek = useCallback(async (wrappedKey: WrappedKey): Promise<boolean> => {
+  // Fetch and unwrap key from server
+  // For tier keys: gets KEK (key-wrapping key) and uses it to unwrap DEK locally
+  // For article keys: gets DEK directly
+  const fetchAndUnwrapKey = useCallback(async (wrappedKey: WrappedKey): Promise<boolean> => {
     if (!keyPair) return false;
     
     try {
       const parsed = parseKeyId(wrappedKey.keyId);
+      const isTierKey = parsed.type === "tier";
       
       log("Exporting public key as SPKI format...", "key");
       const publicKeySpki = await crypto.subtle.exportKey("spki", keyPair.publicKey);
       const publicKeyB64 = arrayBufferToBase64(publicKeySpki);
       log(`Public key exported (${publicKeyB64.length} chars, Base64)`, "success");
 
-      log(`POST /api/unlock { keyId: "${wrappedKey.keyId}", wrappedDek: "...", publicKey: "..." }`, "network");
-      const response = await fetch("/api/unlock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          keyId: wrappedKey.keyId,
-          wrappedDek: wrappedKey.wrappedDek,
-          publicKey: publicKeyB64,
-        }),
-      });
+      if (isTierKey) {
+        // TIER KEY: Request KEK (key-wrapping key), then unwrap DEK locally
+        log(`POST /api/unlock { keyId: "${wrappedKey.keyId}", publicKey: "..." } (tier mode - getting KEK)`, "network");
+        const response = await fetch("/api/unlock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            keyId: wrappedKey.keyId,
+            publicKey: publicKeyB64,
+            mode: "tier", // Request KEK, not DEK
+          }),
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        log(`Server error: ${errorData.error}`, "error");
-        return false;
+        if (!response.ok) {
+          const errorData = await response.json();
+          log(`Server error: ${errorData.error}`, "error");
+          return false;
+        }
+
+        const { encryptedDek: encryptedKek, expiresAt, bucketId, bucketPeriodSeconds, keyType } = await response.json();
+        log(`Received encrypted ${keyType?.toUpperCase() || "KEK"} (${encryptedKek.length} chars)`, "success");
+        log(`KEK valid until: ${new Date(expiresAt).toLocaleTimeString()} (bucket ${bucketId}, ${bucketPeriodSeconds}s period)`, "info");
+
+        log("Unwrapping KEK using RSA-OAEP with private key...", "crypto");
+        const kek = await unwrapKeyWithRsa(keyPair.privateKey, encryptedKek, "decrypt");
+        log("KEK unwrapped successfully (AES-256-GCM key for DEK unwrapping)", "success");
+
+        // Cache KEK by tier:bucketId - shared across all articles!
+        const kekCacheId = `${parsed.baseId}:${bucketId}`;
+        await storeDek("tier", kekCacheId, encryptedKek, kek, new Date(expiresAt), bucketId, securityMode);
+        const storedKek = await getStoredDek("tier", kekCacheId);
+        setCachedDekInfo(storedKek);
+        log(`KEK stored in ${securityMode} mode (shared for all ${parsed.baseId} content!)`, "success");
+
+        // Now unwrap the article's DEK locally using the KEK
+        log("Unwrapping article DEK locally with KEK (no additional network!)...", "crypto");
+        const dek = await unwrapDekWithKek(kek, wrappedKey.wrappedDek);
+        log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
+
+        // Decrypt content
+        const success = await decryptContent(dek, wrappedKey.keyId);
+        return success;
+      } else {
+        // ARTICLE KEY: Request DEK directly
+        log(`POST /api/unlock { keyId: "${wrappedKey.keyId}", wrappedDek: "...", publicKey: "..." }`, "network");
+        const response = await fetch("/api/unlock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            keyId: wrappedKey.keyId,
+            wrappedDek: wrappedKey.wrappedDek,
+            publicKey: publicKeyB64,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          log(`Server error: ${errorData.error}`, "error");
+          return false;
+        }
+
+        const { encryptedDek, expiresAt, bucketId, bucketPeriodSeconds } = await response.json();
+        log(`Received encrypted DEK (${encryptedDek.length} chars)`, "success");
+        log(`DEK valid until: ${new Date(expiresAt).toLocaleTimeString()} (bucket ${bucketId || "static"}, ${bucketPeriodSeconds}s period)`, "info");
+
+        log("Unwrapping DEK using RSA-OAEP with private key...", "crypto");
+        const dek = await unwrapKeyWithRsa(keyPair.privateKey, encryptedDek, "decrypt");
+        log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
+
+        // Store DEK by article ID
+        await storeDek("article", parsed.baseId, encryptedDek, dek, new Date(expiresAt), bucketId || "static", securityMode);
+        const storedDek = await getStoredDek("article", parsed.baseId);
+        setCachedDekInfo(storedDek);
+        log(`DEK stored in ${securityMode} mode`, "success");
+
+        // Decrypt content
+        const success = await decryptContent(dek, wrappedKey.keyId);
+        return success;
       }
-
-      const { encryptedDek, expiresAt, bucketId, bucketPeriodSeconds } = await response.json();
-      log(`Received encrypted DEK (${encryptedDek.length} chars)`, "success");
-      log(`DEK valid until: ${new Date(expiresAt).toLocaleTimeString()} (bucket ${bucketId || "static"}, ${bucketPeriodSeconds}s period)`, "info");
-
-      log("Unwrapping DEK using RSA-OAEP with private key...", "crypto");
-      const dek = await unwrapDek(keyPair.privateKey, encryptedDek);
-      log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
-
-      // Store DEK
-      await storeDek(parsed.type, parsed.baseId, encryptedDek, dek, new Date(expiresAt), bucketId, securityMode);
-      const storedDek = await getStoredDek(parsed.type, parsed.baseId);
-      setCachedDekInfo(storedDek);
-      
-      log(`DEK stored in ${securityMode} mode`, "success");
-
-      // Decrypt content
-      const success = await decryptContent(dek, wrappedKey.keyId);
-      return success;
     } catch (err) {
-      console.error("Failed to fetch DEK:", err);
-      log(`Failed to fetch DEK: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+      console.error("Failed to fetch key:", err);
+      log(`Failed to fetch key: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
       return false;
     }
-  }, [keyPair, unwrapDek, decryptContent, log, securityMode]);
+  }, [keyPair, unwrapKeyWithRsa, unwrapDekWithKek, decryptContent, log, securityMode, articleId]);
 
   // Handle unlock button click
   const handleUnlock = async (keyType: "tier" | "article") => {
@@ -401,7 +515,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     // Try each key in order (for tier keys, try current bucket first)
     for (const wrappedKey of keys) {
       log(`Trying to unlock with ${wrappedKey.keyId}...`, "info");
-      const success = await fetchAndUnwrapDek(wrappedKey);
+      const success = await fetchAndUnwrapKey(wrappedKey);
       if (success) return;
     }
     

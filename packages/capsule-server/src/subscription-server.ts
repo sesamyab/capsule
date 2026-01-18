@@ -4,6 +4,23 @@
  * For building subscription server endpoints that:
  * 1. Provide bucket keys to CMS (for encryption)
  * 2. Unwrap DEKs for authenticated users (for decryption)
+ * 
+ * @example
+ * ```typescript
+ * import { createSubscriptionServer } from '@sesamy/capsule-server';
+ * 
+ * const server = createSubscriptionServer({
+ *   masterSecret: process.env.MASTER_SECRET,
+ *   bucketPeriodSeconds: 30,
+ * });
+ * 
+ * // Endpoint for users to unlock content
+ * app.post('/api/unlock', async (req, res) => {
+ *   const { keyId, wrappedDek, publicKey } = req.body;
+ *   const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
+ *   res.json(result);
+ * });
+ * ```
  */
 
 import { publicEncrypt, constants, createPublicKey } from "crypto";
@@ -11,9 +28,10 @@ import { deriveBucketKey, getBucketKeys, getCurrentBucket, getBucketExpiration, 
 import { unwrapDek } from "./encryption";
 import type { BucketKey, UnlockResponse, WrappedKey } from "./types";
 
+/** Options for creating a subscription server */
 export interface SubscriptionServerOptions {
-  /** Master secret for deriving bucket keys (base64 encoded) */
-  masterSecret: string;
+  /** Master secret for deriving bucket keys (base64 encoded string or Buffer) */
+  masterSecret: string | Buffer;
   /** Bucket period in seconds (default: 30) */
   bucketPeriodSeconds?: number;
 }
@@ -24,13 +42,17 @@ export interface SubscriptionServerOptions {
  * Manages master secret and provides:
  * - Bucket keys for CMS (time-limited)
  * - DEK unwrapping for authenticated users
+ * 
+ * @see createSubscriptionServer for the recommended way to create an instance
  */
 export class SubscriptionServer {
   private masterSecret: Buffer;
   private bucketPeriodSeconds: number;
 
   constructor(options: SubscriptionServerOptions) {
-    this.masterSecret = Buffer.from(options.masterSecret, "base64");
+    this.masterSecret = Buffer.isBuffer(options.masterSecret)
+      ? options.masterSecret
+      : Buffer.from(options.masterSecret, "base64");
     this.bucketPeriodSeconds = options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
   }
 
@@ -84,47 +106,64 @@ export class SubscriptionServer {
    * 
    * @param wrappedKey - The wrapped key entry from the article
    * @param userPublicKeyB64 - User's RSA public key (Base64 SPKI format)
-   * @param staticKeyLookup - Optional function to look up static keys (for per-article keys)
+   * @param staticKeyLookup - Optional function to look up static keys (for per-article keys). Can be sync or async.
    */
   async unlockForUser(
     wrappedKey: WrappedKey,
     userPublicKeyB64: string,
-    staticKeyLookup?: (keyId: string) => Buffer | null
+    staticKeyLookup?: (keyId: string) => Buffer | null | Promise<Buffer | null>
   ): Promise<UnlockResponse> {
     const { keyId, wrappedDek } = wrappedKey;
     const wrappedDekBuffer = Buffer.from(wrappedDek, "base64");
 
-    // Parse keyId to determine if it's a bucket key or static key
-    // Format: "tier:bucketId" for bucket keys, or just "keyId" for static keys
-    const [baseKeyId, bucketId] = keyId.includes(":") 
-      ? keyId.split(":") 
-      : [keyId, null];
-
     let keyWrappingKey: Buffer;
     let expiresAt: Date;
+    let bucketId: string | undefined;
 
-    if (bucketId) {
-      // Time-bucket key - validate and derive
-      if (!this.isBucketValid(bucketId)) {
-        throw new Error(`Bucket ${bucketId} is expired or invalid`);
+    // First, try static key lookup if provided (handles "article:xxx" keys)
+    if (staticKeyLookup) {
+      const staticKey = await Promise.resolve(staticKeyLookup(keyId));
+      if (staticKey) {
+        keyWrappingKey = staticKey;
+        // Static keys use current bucket expiration for client cache timing
+        const currentBucket = getCurrentBucket(this.bucketPeriodSeconds);
+        expiresAt = getBucketExpiration(currentBucket, this.bucketPeriodSeconds);
+        
+        // Unwrap and re-wrap
+        return this.unwrapAndRewrap(wrappedDekBuffer, keyWrappingKey, userPublicKeyB64, keyId, undefined, expiresAt);
       }
-      keyWrappingKey = deriveBucketKey(this.masterSecret, baseKeyId, bucketId);
-      expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
-    } else {
-      // Static key - look up
-      if (!staticKeyLookup) {
-        throw new Error(`Static key lookup required for keyId: ${keyId}`);
-      }
-      const staticKey = staticKeyLookup(keyId);
-      if (!staticKey) {
-        throw new Error(`Unknown static key: ${keyId}`);
-      }
-      keyWrappingKey = staticKey;
-      // Static keys use current bucket expiration for client cache timing
-      const currentBucket = getCurrentBucket(this.bucketPeriodSeconds);
-      expiresAt = getBucketExpiration(currentBucket, this.bucketPeriodSeconds);
     }
 
+    // Parse keyId as bucket key: "tier:bucketId"
+    const colonIndex = keyId.lastIndexOf(":");
+    if (colonIndex === -1) {
+      throw new Error(`Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`);
+    }
+
+    const baseKeyId = keyId.substring(0, colonIndex);
+    bucketId = keyId.substring(colonIndex + 1);
+
+    // Time-bucket key - validate and derive
+    if (!this.isBucketValid(bucketId)) {
+      throw new Error(`Bucket ${bucketId} is expired or invalid`);
+    }
+    keyWrappingKey = deriveBucketKey(this.masterSecret, baseKeyId, bucketId);
+    expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
+
+    return this.unwrapAndRewrap(wrappedDekBuffer, keyWrappingKey, userPublicKeyB64, keyId, bucketId, expiresAt);
+  }
+
+  /**
+   * Internal helper to unwrap DEK and re-wrap with user's public key.
+   */
+  private async unwrapAndRewrap(
+    wrappedDekBuffer: Buffer,
+    keyWrappingKey: Buffer,
+    userPublicKeyB64: string,
+    keyId: string,
+    bucketId: string | undefined,
+    expiresAt: Date
+  ): Promise<UnlockResponse> {
     // Unwrap the DEK
     const dek = unwrapDek(wrappedDekBuffer, keyWrappingKey);
 
@@ -145,7 +184,7 @@ export class SubscriptionServer {
     return {
       encryptedDek: encryptedDek.toString("base64"),
       keyId,
-      bucketId: bucketId ?? undefined,
+      bucketId,
       expiresAt: expiresAt.toISOString(),
     };
   }
@@ -191,6 +230,50 @@ export class SubscriptionServer {
   }
 
   /**
+   * Get the key-wrapping key for a tier, wrapped with user's RSA public key.
+   * 
+   * This enables "unlock once, access all" for tier content:
+   * - Client receives the AES-KW key (not the DEK)
+   * - Client can unwrap any article's DEK locally
+   * - No per-article unlock requests needed
+   * 
+   * @param tier - The tier name (e.g., "premium")
+   * @param bucketId - The bucket ID to get the key for
+   * @param userPublicKeyB64 - User's RSA public key (Base64 SPKI format)
+   */
+  getTierKeyForUser(
+    tier: string,
+    bucketId: string,
+    userPublicKeyB64: string
+  ): UnlockResponse {
+    if (!this.isBucketValid(bucketId)) {
+      throw new Error(`Bucket ${bucketId} is expired or invalid`);
+    }
+
+    const keyWrappingKey = deriveBucketKey(this.masterSecret, tier, bucketId);
+    const expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
+
+    const publicKeyPem = this.convertToPem(userPublicKeyB64);
+    const pubKey = createPublicKey(publicKeyPem);
+
+    const encryptedKey = publicEncrypt(
+      {
+        key: pubKey,
+        padding: constants.RSA_PKCS1_OAEP_PADDING,
+        oaepHash: "sha256",
+      },
+      keyWrappingKey
+    );
+
+    return {
+      encryptedDek: encryptedKey.toString("base64"), // Actually the KEK, not DEK
+      keyId: `${tier}:${bucketId}`,
+      bucketId,
+      expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  /**
    * Convert Base64 SPKI to PEM format for Node.js crypto.
    */
   private convertToPem(publicKeyB64: string): string {
@@ -207,15 +290,44 @@ export class SubscriptionServer {
 }
 
 /**
- * Create a subscription server instance.
+ * Create a subscription server for handling unlock requests.
+ * 
+ * @example
+ * ```typescript
+ * const server = createSubscriptionServer({
+ *   masterSecret: process.env.MASTER_SECRET,
+ *   bucketPeriodSeconds: 30,
+ * });
+ * 
+ * app.post('/api/unlock', async (req, res) => {
+ *   const { keyId, wrappedDek, publicKey } = req.body;
+ *   const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
+ *   res.json(result);
+ * });
+ * ```
+ */
+export function createSubscriptionServer(options: SubscriptionServerOptions): SubscriptionServer;
+/**
+ * Create a subscription server (legacy signature).
+ * @deprecated Use createSubscriptionServer({ masterSecret, bucketPeriodSeconds }) instead
  */
 export function createSubscriptionServer(
   masterSecret: string | Buffer,
+  bucketPeriodSeconds?: number
+): SubscriptionServer;
+export function createSubscriptionServer(
+  optionsOrSecret: SubscriptionServerOptions | string | Buffer,
   bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS
 ): SubscriptionServer {
-  const secret = typeof masterSecret === "string"
-    ? masterSecret
-    : masterSecret.toString("base64");
+  // Handle both signatures
+  if (typeof optionsOrSecret === 'object' && !Buffer.isBuffer(optionsOrSecret)) {
+    return new SubscriptionServer(optionsOrSecret);
+  }
+  
+  // Legacy signature
+  const secret = typeof optionsOrSecret === "string"
+    ? optionsOrSecret
+    : optionsOrSecret.toString("base64");
 
   return new SubscriptionServer({
     masterSecret: secret,
