@@ -10,6 +10,73 @@ export default function ServersPage() {
         This separation ensures strong security while keeping the CMS simple.
       </p>
 
+      <h2>Quick Start with @sesamy/capsule-server</h2>
+      <p>
+        The <code>@sesamy/capsule-server</code> package provides a high-level API for both 
+        CMS encryption and subscription server functionality.
+      </p>
+      <CodeBlock language="bash">{`npm install @sesamy/capsule-server`}</CodeBlock>
+
+      <h3>CMS: Encrypting Content</h3>
+      <CodeBlock>{`import { CapsuleServer } from '@sesamy/capsule-server';
+
+const capsule = new CapsuleServer({
+  masterSecret: process.env.MASTER_SECRET,  // Base64-encoded 256-bit secret
+});
+
+// Encrypt with tier-based subscription access
+const encrypted = await capsule.encrypt('article-123', premiumContent, {
+  tiers: ['premium'],           // Subscription tiers
+  includeArticleKey: true,      // Add per-article purchase key
+});
+
+// Result: { articleId, encryptedContent, iv, wrappedKeys: [...] }
+
+// Or get HTML ready for templates
+const html = await capsule.encrypt('article-123', content, {
+  tiers: ['premium'],
+  format: 'html',
+  placeholder: '<p>Subscribe to unlock...</p>',
+});`}</CodeBlock>
+
+      <h3>Subscription Server: Unlock Endpoint</h3>
+      <CodeBlock>{`import { createSubscriptionServer } from '@sesamy/capsule-server';
+
+const server = createSubscriptionServer(process.env.MASTER_SECRET, 30);
+
+// POST /api/unlock
+app.post('/api/unlock', async (req, res) => {
+  // 1. Validate user subscription here!
+  const { keyId, wrappedDek, publicKey } = req.body;
+  
+  // 2. Unwrap DEK and re-wrap with user's public key
+  const result = await server.unlockForUser(
+    { keyId, wrappedDek },
+    publicKey
+  );
+  
+  // 3. Return encrypted DEK for client
+  res.json(result);
+  // { encryptedDek, expiresAt, bucketId }
+});`}</CodeBlock>
+
+      <h3>Output Formats</h3>
+      <CodeBlock>{`// JSON (default) - for API responses
+const data = await capsule.encrypt(id, content, { tiers: ['premium'] });
+
+// HTML - ready to embed
+const html = await capsule.encrypt(id, content, {
+  format: 'html',
+  htmlClass: 'premium-content',
+  placeholder: 'Loading...',
+});
+// <div class="premium-content" data-capsule='{...}' data-capsule-id="...">Loading...</div>
+
+// Template helper - get all formats
+const { data, json, attribute, html } = await capsule.encryptForTemplate(id, content, {
+  tiers: ['premium'],
+});`}</CodeBlock>
+
       <h2>Architecture Overview</h2>
       
       <h3>CMS Server (Content Management)</h3>

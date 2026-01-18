@@ -1,145 +1,89 @@
 /**
- * Server-side encryption utilities.
+ * Server-side encryption utilities using @sesamy/capsule-server.
  * 
- * Pre-encrypts article content using subscription-tier DEKs and article-specific DEKs.
- * 
- * TIER KEYS: Time-bucket based. Content is encrypted with both current and next
- * bucket keys to handle clock drift between CMS and client. When the bucket
- * rotates, old keys become invalid - providing forward secrecy.
- * 
- * ARTICLE KEYS: Static. Once a user has an article key, they can always decrypt.
+ * This is a thin wrapper that provides the encrypted article data
+ * for the demo pages. The actual encryption is handled by CapsuleServer.
  */
 
-import { createCipheriv, randomBytes } from "crypto";
-import { getSubscriptionKeysForEncryption, getArticleKey, hasArticleKey } from "./encryption-keys";
+import { capsule } from "./capsule";
+import { hasArticleKey, getArticleKey } from "./encryption-keys";
+import type { EncryptedArticle } from "@sesamy/capsule-server";
 
-/** GCM IV size in bytes (96 bits as recommended by NIST) */
-const GCM_IV_SIZE = 12;
-
-/** GCM authentication tag length in bytes */
-const GCM_TAG_LENGTH = 16;
-
-export interface EncryptedArticleData {
-  /** Base64-encoded encrypted content (ciphertext + auth tag) */
-  encryptedContent: string;
-  /** Base64-encoded IV used for this specific article */
-  iv: string;
-  /** Key type: "tier" for subscription-based, "article" for per-article */
-  keyType: "tier" | "article";
-  /** Subscription tier (for tier keys) or article ID (for article keys) */
-  keyId: string;
-  /** Bucket ID for time-based keys (undefined for static article keys) */
-  bucketId?: string;
-}
-
-export interface MultiEncryptedArticle {
-  /** Tier-based encryption for current bucket (unlocks all articles in tier) */
-  tier: EncryptedArticleData;
-  /** Tier-based encryption for next bucket (handles clock drift) */
-  tierNext: EncryptedArticleData;
-  /** Article-specific encryption (unlocks only this article, static key) */
-  article: EncryptedArticleData | null;
-}
+// Re-export types for consumers
+export type { EncryptedArticle };
 
 /**
- * Encrypt content with a specific key.
- */
-function encryptWithKey(
-  content: string,
-  dek: Buffer,
-  keyType: "tier" | "article",
-  keyId: string,
-  bucketId?: string
-): EncryptedArticleData {
-  const iv = randomBytes(GCM_IV_SIZE);
-  
-  const cipher = createCipheriv("aes-256-gcm", dek, iv, {
-    authTagLength: GCM_TAG_LENGTH,
-  });
-  
-  const plaintext = Buffer.from(content, "utf-8");
-  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  
-  // Combine ciphertext and auth tag (same format as Web Crypto API)
-  const combined = Buffer.concat([encrypted, authTag]);
-  
-  return {
-    encryptedContent: combined.toString("base64"),
-    iv: iv.toString("base64"),
-    keyType,
-    keyId,
-    bucketId,
-  };
-}
-
-/**
- * Encrypt article content using both tier and article-specific keys.
+ * Get encrypted article for display.
  * 
- * For tier keys: encrypts with both current and next bucket keys.
- * For article keys: encrypts with static key (if available).
+ * Uses the high-level CapsuleServer API to encrypt content with:
+ * - Current and next bucket keys for the tier (handles clock drift)
+ * - Article-specific key if available (for per-article purchases)
  * 
- * Returns all encrypted versions so the client can try them.
- */
-export function encryptArticleContent(
-  articleId: string,
-  content: string,
-  tier: string
-): MultiEncryptedArticle {
-  // Get time-bucket based tier keys
-  const tierKeys = getSubscriptionKeysForEncryption(tier);
-  
-  // Encrypt with current bucket key
-  const tierEncrypted = encryptWithKey(
-    content, 
-    tierKeys.current.dek, 
-    "tier", 
-    tier, 
-    tierKeys.current.bucketId
-  );
-  
-  // Encrypt with next bucket key (for clock drift handling)
-  const tierNextEncrypted = encryptWithKey(
-    content, 
-    tierKeys.next.dek, 
-    "tier", 
-    tier, 
-    tierKeys.next.bucketId
-  );
-  
-  // Article-specific encryption (static key)
-  let articleEncrypted: EncryptedArticleData | null = null;
-  if (hasArticleKey(articleId)) {
-    const articleDek = getArticleKey(articleId);
-    articleEncrypted = encryptWithKey(content, articleDek, "article", articleId);
-  }
-  
-  return {
-    tier: tierEncrypted,
-    tierNext: tierNextEncrypted,
-    article: articleEncrypted,
-  };
-}
-
-/**
- * Get encrypted article content for a specific article.
- * 
- * NOTE: This re-encrypts on every request since bucket keys rotate.
+ * NOTE: Re-encrypts on every request since bucket keys rotate.
  * In production with longer bucket periods, you'd cache within the bucket window.
  */
-export function getEncryptedArticle(articleId: string): MultiEncryptedArticle | null {
+export async function getEncryptedArticle(articleId: string): Promise<EncryptedArticle | null> {
   // Import articles here to avoid circular dependency
-  const { articles } = require("./articles");
+  const { articles } = await import("./articles");
   
   const article = articles[articleId];
   if (!article) {
     return null;
   }
   
-  // Re-encrypt with current bucket keys (they rotate)
-  return encryptArticleContent(
-    articleId,
-    article.premiumContent,
-    "premium" // All demo articles use premium tier
-  );
+  // Build additional keys (per-article access)
+  const additionalKeys = [];
+  if (hasArticleKey(articleId)) {
+    additionalKeys.push({
+      keyId: `article:${articleId}`,
+      key: getArticleKey(articleId),
+    });
+  }
+
+  // Use CapsuleServer to encrypt with tier-based access
+  return capsule.encrypt(articleId, article.premiumContent, {
+    tiers: ["premium"],
+    additionalKeys,
+  });
+}
+
+/**
+ * Synchronous wrapper for getEncryptedArticle.
+ * Uses a cached promise to avoid re-encryption on subsequent calls.
+ */
+const encryptionCache = new Map<string, EncryptedArticle>();
+
+export function getEncryptedArticleSync(articleId: string): EncryptedArticle | null {
+  // Check cache first
+  if (encryptionCache.has(articleId)) {
+    return encryptionCache.get(articleId)!;
+  }
+  
+  // For SSR, we need synchronous access. The CapsuleServer encrypt is async
+  // but in TOTP mode it doesn't actually do any async operations.
+  // We'll pre-populate the cache in a build step or use the async version.
+  return null;
+}
+
+// Pre-encrypt all articles at module load time for SSR
+(async () => {
+  try {
+    const { articles } = await import("./articles");
+    for (const articleId of Object.keys(articles)) {
+      const encrypted = await getEncryptedArticle(articleId);
+      if (encrypted) {
+        encryptionCache.set(articleId, encrypted);
+      }
+    }
+  } catch (e) {
+    // Ignore errors during module initialization
+  }
+})();
+
+/**
+ * Get encrypted article (sync, from cache).
+ * Falls back to null if not cached yet.
+ */
+export function getEncryptedArticleCached(articleId: string): EncryptedArticle | null {
+  return encryptionCache.get(articleId) ?? null;
 }

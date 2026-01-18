@@ -1,0 +1,54 @@
+{
+  "name": "@sesamy/capsule-server",
+  "version": "0.1.0",
+  "description": "Server-side encryption library for Capsule - CMS content encryption and subscription server integration",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "encryption",
+    "envelope-encryption",
+    "aes",
+    "rsa",
+    "security",
+    "cms",
+    "totp",
+    "key-management",
+    "server"
+  ],
+  "author": "Sesamy",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sesamy/capsule",
+    "directory": "packages/capsule-server"
+  }
+}

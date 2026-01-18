@@ -1,0 +1,45 @@
+---
+import Layout from "../layouts/Layout.astro";
+import { articles } from "../lib/articles";
+---
+
+<Layout title="Capsule Demo - Clean HTML">
+  <main>
+    <h1>🔐 Capsule Demo</h1>
+    
+    <p>
+      This demo uses <strong>Astro</strong> to generate clean, readable HTML.
+      <br />
+      <strong>View Page Source</strong> to see the encrypted data embedded clearly!
+    </p>
+
+    <h2>Demo Articles</h2>
+    <p>Each article has encrypted premium content. Click to see the Capsule format in action.</p>
+
+    <div class="article-list">
+      {Object.values(articles).map((article) => (
+        <a href={`/article/${article.id}`} class="article-card">
+          <h3>{article.title}</h3>
+          <p>{article.previewContent.slice(0, 150)}...</p>
+          <span class="badge">🔒 Premium Content</span>
+        </a>
+      ))}
+    </div>
+
+    <h2 style="margin-top: 3rem;">Why Astro?</h2>
+    <p>
+      Unlike Next.js App Router which streams React Server Components in a 
+      minified format, Astro outputs exactly the HTML you write. This makes 
+      it perfect for demonstrating what Capsule expects in your HTML.
+    </p>
+    
+    <p>
+      <strong>View the source of any article page</strong> to see:
+    </p>
+    <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+      <li>Clean, indented HTML structure</li>
+      <li>Capsule encrypted data in a readable JSON block</li>
+      <li>Standard HTML elements the client can find</li>
+    </ul>
+  </main>
+</Layout>

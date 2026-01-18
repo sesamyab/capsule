@@ -2,7 +2,7 @@
 
 interface CodeBlockProps {
   children: string;
-  language?: "javascript" | "typescript" | "bash" | "json" | "php" | "python";
+  language?: "javascript" | "typescript" | "bash" | "json" | "php" | "python" | "html";
 }
 
 export function CodeBlock({ children, language = "typescript" }: CodeBlockProps) {
@@ -31,6 +31,8 @@ function highlightCode(code: string, language: string): string {
     html = highlightPhp(html);
   } else if (language === "python") {
     html = highlightPython(html);
+  } else if (language === "html") {
+    html = highlightHtml(html);
   } else {
     html = highlightJavaScript(html);
   }
@@ -215,6 +217,41 @@ function highlightPython(code: string): string {
 
   // Numbers
   code = code.replace(/\b(\d+)\b/g, '<span class="hljs-number">$1</span>');
+
+  // Restore placeholders
+  placeholders.forEach((content, index) => {
+    code = code.replace(`__PLACEHOLDER_${index}__`, content);
+  });
+
+  return code;
+}
+function highlightHtml(code: string): string {
+  // Use placeholder approach to prevent re-processing highlighted content
+  const placeholders: string[] = [];
+  
+  const placeholder = (content: string, className: string) => {
+    const index = placeholders.length;
+    placeholders.push(`<span class="hljs-${className}">${content}</span>`);
+    return `__PLACEHOLDER_${index}__`;
+  };
+  
+  // HTML comments
+  code = code.replace(/(&lt;!--[\s\S]*?--&gt;)/g, (match) => placeholder(match, 'comment'));
+  
+  // Attribute values (quoted strings)
+  code = code.replace(/=(&quot;[^&]*?&quot;)/g, (match, str) => '=' + placeholder(str, 'string'));
+  code = code.replace(/=('[^']*?')/g, (match, str) => '=' + placeholder(str, 'string'));
+  
+  // Tags and attributes
+  code = code.replace(/(&lt;\/?)([\w-]+)/g, (match, bracket, tagName) => {
+    return placeholder(bracket, 'punctuation') + placeholder(tagName, 'keyword');
+  });
+  
+  // Closing brackets
+  code = code.replace(/(\/?&gt;)/g, (match) => placeholder(match, 'punctuation'));
+  
+  // Attribute names
+  code = code.replace(/\s([\w-]+)=/g, (match, attr) => ' ' + placeholder(attr, 'attr') + '=');
 
   // Restore placeholders
   placeholders.forEach((content, index) => {

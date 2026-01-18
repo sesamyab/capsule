@@ -21,35 +21,51 @@ export default function SpecPage() {
 
       <h3>1. Server-Side Pre-Encryption</h3>
       <p>
-        Content is encrypted at build time or when published using a Data Encryption Key
-        (DEK) associated with a subscription tier or individual article.
+        Content is encrypted at build time or when published. A unique Data Encryption Key
+        (DEK) is generated for each article, then wrapped with one or more key-wrapping keys
+        to enable different unlock paths.
       </p>
-      <CodeBlock>{`// Generate or retrieve DEK for subscription tier
-const dek = getSubscriptionKey("premium"); // 256-bit AES key
+      <CodeBlock>{`// Generate unique DEK for this article
+const contentDek = randomBytes(32); // 256-bit AES key
 
 // Generate unique IV for this article
 const iv = randomBytes(12); // 96 bits for GCM
 
-// Encrypt content with AES-256-GCM
-const cipher = createCipheriv("aes-256-gcm", dek, iv);
+// Encrypt content ONCE with AES-256-GCM
+const cipher = createCipheriv("aes-256-gcm", contentDek, iv);
 const encrypted = Buffer.concat([
   cipher.update(content),
   cipher.final(),
   cipher.getAuthTag() // 128-bit authentication tag
 ]);
 
-// Result: { encryptedContent, iv, tier }`}</CodeBlock>
+// Wrap the DEK with multiple key-wrapping keys
+const wrappedKeys = {
+  // Time-bucket keys for subscription access (rotates every 15 min)
+  [\`premium:\${currentBucketId}\`]: wrapKey(contentDek, currentBucketKey),
+  [\`premium:\${nextBucketId}\`]: wrapKey(contentDek, nextBucketKey),
+  
+  // Static key for per-article purchase (permanent)
+  [\`article:\${articleId}\`]: wrapKey(contentDek, articleSpecificKey),
+};
+
+// Result: { encryptedContent, iv, wrappedKeys }`}</CodeBlock>
 
       <h3>2. HTML Embedding</h3>
       <p>
         Encrypted content is embedded directly in the server-rendered HTML, enabling
-        offline access and browser caching.
+        offline access and browser caching. Each article includes the ciphertext and
+        wrapped keys for the supported unlock paths.
       </p>
       <CodeBlock>{`<template
   id="encrypted-article-123"
   data-encrypted-content="base64-encoded-ciphertext"
   data-iv="base64-encoded-iv"
-  data-tier="premium"
+  data-wrapped-keys='{
+    "premium:123456": "base64-wrapped-dek",
+    "premium:123457": "base64-wrapped-dek",
+    "article:crypto-guide": "base64-wrapped-dek"
+  }'
 />`}</CodeBlock>
 
       <h3>3. Client Key Generation</h3>
@@ -150,29 +166,38 @@ await crypto.subtle.exportKey('jwk', keyPair.privateKey);
 
       <h3>4. Key Exchange Protocol</h3>
       <p>
-        When unlocking content, the client sends its public key to the server. The server
-        wraps the DEK with the client's public key and returns it.
+        When unlocking content, the client sends its public key and the key ID it wants to use.
+        The server validates access, unwraps the content DEK using the appropriate key-wrapping key,
+        then re-wraps it with the client's public key.
       </p>
       <CodeBlock language="json">{`// Client → Server
 POST /api/unlock
 {
-  "tier": "premium",
-  "publicKey": "base64-encoded-spki-public-key"
+  "keyId": "premium",           // or "article:crypto-guide"
+  "publicKey": "base64-encoded-spki-public-key",
+  "bucketId": "123456"          // optional, for time-bucket keys
 }
+
+// Server validates access, then:
+// 1. Gets key-wrapping key for this keyId (derived or looked up)
+// 2. Unwraps the content DEK from the article's wrappedKeys
+// 3. Re-wraps DEK with client's RSA public key
 
 // Server → Client
 {
   "encryptedDek": "base64-rsa-oaep-wrapped-dek",
-  "tier": "premium"
+  "keyId": "premium",
+  "bucketId": "123456",
+  "expiresAt": "2026-01-17T12:15:00Z"  // when client should re-request
 }`}</CodeBlock>
 
       <h3>5. Client-Side Decryption</h3>
       <p>
         The client unwraps the DEK using its private key, then decrypts the content using
-        AES-GCM. The unwrapped DEK is cached in memory for the session.
+        AES-GCM. The unwrapped DEK is cached in memory until expiration.
       </p>
-      <CodeBlock>{`// Unwrap DEK with private key
-const dek = await crypto.subtle.unwrapKey(
+      <CodeBlock>{`// Unwrap content DEK with private key
+const contentDek = await crypto.subtle.unwrapKey(
   "raw",
   encryptedDek,
   keyPair.privateKey,
@@ -182,84 +207,146 @@ const dek = await crypto.subtle.unwrapKey(
   ["decrypt"]
 );
 
-// Cache DEK for this tier
-dekCache.set(tier, dek);
+// Cache DEK for this keyId until expiration
+dekCache.set(keyId, { dek: contentDek, expiresAt });
 
 // Decrypt content
 const decrypted = await crypto.subtle.decrypt(
   { name: "AES-GCM", iv },
-  dek,
+  contentDek,
   encryptedContent
 );`}</CodeBlock>
 
-      <h2>Multiple DEK Models</h2>
+      <h2>Key Architecture</h2>
 
-      <h3>Time-Bucket Keys (Recommended)</h3>
+      <h3>Two-Layer Encryption</h3>
       <p>
-        Instead of static DEKs, use <strong>time-bucket keys</strong> that rotate every 15 minutes.
-        This enables automatic access revocation without re-encrypting content.
+        Each piece of content uses <strong>two-layer envelope encryption</strong>:
       </p>
-      <CodeBlock>{`// Article has stable DEK, wrapped with rotating time-bucket keys
+      <ol>
+        <li><strong>Content DEK</strong> - A unique AES-256 key generated for each article at encryption time. 
+        This encrypts the actual content (fast, efficient symmetric encryption).</li>
+        <li><strong>Key-wrapping keys</strong> - The content DEK is then <em>wrapped</em> (encrypted) with 
+        one or more key-wrapping keys. Each wrapped copy allows a different unlock path.</li>
+      </ol>
+
+      <CodeBlock>{`// Article encryption at build/publish time
 {
   articleId: "crypto-guide",
-  articleDek: "stable-256-bit-key",
-  wrappedDeks: {
-    "123456": wrapDek(articleDek, bucketKey_123456),  // Current
-    "123457": wrapDek(articleDek, bucketKey_123457)   // Next (15 min)
+  
+  // Content encrypted ONCE with unique DEK
+  encryptedContent: encrypt(content, contentDek),
+  iv: "unique-iv-for-this-article",
+  
+  // DEK wrapped with MULTIPLE keys for different unlock paths
+  wrappedKeys: {
+    // Tier access: wrapped with time-bucket keys
+    "premium:bucket-123456": wrap(contentDek, bucketKey_123456),
+    "premium:bucket-123457": wrap(contentDek, bucketKey_123457),
+    
+    // Article-specific access (permanent)
+    "article:crypto-guide": wrap(contentDek, articleSpecificKey),
+    
+    // Different subscription server
+    "partner:acme-corp": wrap(contentDek, partnerKey),
   }
-}
+}`}</CodeBlock>
 
-// Bucket keys derived from master secret
+      <h3>Multiple Unlock Paths</h3>
+      <p>
+        The same content can be unlocked through different key IDs. Each key ID represents 
+        a different access path:
+      </p>
+      
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '1rem', marginBottom: '1rem' }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Key ID Type</th>
+            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Example</th>
+            <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '2px solid #333' }}>Use Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Subscription tier</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>premium</code></td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>User has premium subscription</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Article ID</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>crypto-guide</code></td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>User purchased this specific article</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Partner/Server</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>partner:acme</code></td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Different subscription provider</td>
+          </tr>
+          <tr>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Time bucket</td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}><code>premium:123456</code></td>
+            <td style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>Current 15-minute window</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Example: Article with Multiple Access Paths</h3>
+      <p>
+        Consider an article that can be unlocked via subscription OR individual purchase, 
+        with 2 time buckets (current + next) for the subscription path:
+      </p>
+
+      <CodeBlock>{`// 4 wrapped keys for this article:
+wrappedKeys: {
+  // Subscription tier (with time buckets for revocation)
+  "premium:bucket-current": wrap(dek, currentBucketKey),  // Expires in ≤15 min
+  "premium:bucket-next": wrap(dek, nextBucketKey),        // Handles clock drift
+  
+  // Per-article purchase (permanent access)
+  "article:crypto-guide": wrap(dek, articleKey),
+  
+  // Note: Only ONE of these needs to succeed for decryption
+}`}</CodeBlock>
+
+      <h3>Time-Bucket Keys</h3>
+      <p>
+        For subscription-based access, <strong>time-bucket keys</strong> rotate every 15 minutes.
+        This enables automatic access revocation without re-encrypting content.
+      </p>
+      <CodeBlock>{`// Bucket keys derived deterministically from master secret
 function deriveBucketKey(tier, bucketId) {
   return hkdf(masterSecret, bucketId, \`capsule-bucket-\${tier}\`, 32);
 }
 
-// When user unlocks:
-// 1. Server validates subscription
-// 2. Unwraps DEK with current bucket key
-// 3. Re-wraps with user's RSA public key
-// 4. User caches unwrapped DEK until bucket expires
+// When user unlocks via subscription:
+// 1. Server validates active subscription
+// 2. Gets current bucket key (derived from master secret)
+// 3. Unwraps content DEK using bucket key
+// 4. Re-wraps DEK with user's RSA public key
+// 5. User caches unwrapped DEK until bucket expires
 
-// Access revocation:
-// - Cancelled user's cached DEK expires in ≤15 minutes
-// - Server refuses new bucket key requests
+// Access revocation (subscription cancelled):
+// - User's cached DEK expires in ≤15 minutes
+// - Server refuses new unlock requests
 // - No content re-encryption needed`}</CodeBlock>
 
-      <p><strong>Benefits:</strong></p>
+      <p><strong>Benefits of time buckets:</strong></p>
       <ul>
         <li>✅ Automatic access revocation (15-minute window)</li>
-        <li>✅ No content re-encryption needed</li>
+        <li>✅ No content re-encryption needed when subscriptions change</li>
         <li>✅ Deterministic keys (derived, not stored)</li>
         <li>✅ CMS gets time-limited keys (not master secret)</li>
       </ul>
 
-      <h3>Subscription-Based (Legacy)</h3>
+      <h3>Static Keys (Per-Article Purchases)</h3>
       <p>
-        One DEK per subscription tier. All articles in the tier use the same key.
-        One key exchange unlocks all content in that tier.
+        For permanent access (e.g., article purchases), static keys don't rotate:
       </p>
       <ul>
-        <li>✅ Minimal server requests</li>
-        <li>✅ Offline access after first unlock</li>
-        <li>✅ Fast subsequent article access</li>
-        <li>⚠️ Revoking access requires re-encrypting all articles</li>
+        <li>✅ Permanent access once unlocked</li>
+        <li>✅ No ongoing server requests needed</li>
+        <li>⚠️ Revocation requires re-encrypting the content</li>
       </ul>
-
-      <h3>Per-Article</h3>
-      <p>
-        Unique DEK for each article. Requires server request per article.
-      </p>
-      <ul>
-        <li>✅ Fine-grained access control</li>
-        <li>✅ Easy revocation (just delete the DEK)</li>
-        <li>⚠️ More server requests</li>
-        <li>⚠️ Less efficient for many articles</li>
-      </ul>
-
-      <h3>Hybrid</h3>
-      <p>
-        Combination of both. Some articles use tier-level DEKs, others use unique DEKs.
-      </p>
 
       <h2>Multi-Server Architecture</h2>
 

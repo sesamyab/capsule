@@ -1,27 +1,17 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-
-// Types that mirror the client library
-interface EncryptedPayload {
-  encryptedContent: string;
-  iv: string;
-  encryptedDek: string;
-}
-
-interface CapsuleClientInterface {
-  generateKeyPair(): Promise<string>;
-  getPublicKey(): Promise<string>;
-  decryptArticle(payload: EncryptedPayload): Promise<string>;
-  hasKeyPair(): Promise<boolean>;
-}
+import type { EncryptedPayload, CapsuleClient as CapsuleClientType } from "@sesamy/capsule";
 
 /**
  * React hook for using the Capsule client-side decryption library.
  * Handles key generation, storage, and decryption.
+ * 
+ * The new Capsule client auto-creates keys on first use, so no manual
+ * key generation is needed.
  */
 export function useCapsule() {
-  const [client, setClient] = useState<CapsuleClientInterface | null>(null);
+  const [client, setClient] = useState<CapsuleClientType | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,18 +32,15 @@ export function useCapsule() {
         const { CapsuleClient } = await import("@sesamy/capsule");
 
         const capsuleClient = new CapsuleClient({
-          keyId: "demo-key",
           keySize: 2048,
         });
 
-        // Check if keys exist, if not generate them
-        const hasKeys = await capsuleClient.hasKeyPair();
-        if (!hasKeys) {
-          await capsuleClient.generateKeyPair();
-        }
+        // Keys are auto-created on first getPublicKey() call
+        // Just verify we can access them
+        await capsuleClient.getPublicKey();
 
         if (mounted) {
-          setClient(capsuleClient as CapsuleClientInterface);
+          setClient(capsuleClient);
           setIsReady(true);
         }
       } catch (err) {
@@ -86,7 +73,7 @@ export function useCapsule() {
     }
   }, [client]);
 
-  // Decrypt content
+  // Decrypt content using the low-level decryptPayload method
   const decrypt = useCallback(
     async (payload: EncryptedPayload): Promise<string | null> => {
       if (!client) {
@@ -94,7 +81,7 @@ export function useCapsule() {
         return null;
       }
       try {
-        return await client.decryptArticle(payload);
+        return await client.decryptPayload(payload);
       } catch (err) {
         console.error("Decryption failed:", err);
         setError(err instanceof Error ? err.message : "Decryption failed");
@@ -110,5 +97,6 @@ export function useCapsule() {
     error,
     getPublicKey,
     decrypt,
+    client, // Also expose the client for advanced usage
   };
 }
