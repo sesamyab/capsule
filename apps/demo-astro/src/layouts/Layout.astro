@@ -1,0 +1,468 @@
+---
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Capsule Demo - Clean HTML output with Astro" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title}</title>
+    <style is:global>
+      :root {
+        --foreground: #171717;
+        --background: #ffffff;
+        --accent: #0070f3;
+        --accent-hover: #0060df;
+        --muted: #666;
+        --border: #eaeaea;
+        --success: #10b981;
+        --error: #ef4444;
+        --warning: #f59e0b;
+        --code-bg: #f5f5f5;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --foreground: #ededed;
+          --background: #0a0a0a;
+          --accent: #3291ff;
+          --accent-hover: #5ba4ff;
+          --muted: #888;
+          --border: #333;
+          --success: #34d399;
+          --error: #f87171;
+          --warning: #fbbf24;
+          --code-bg: #1a1a1a;
+        }
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html, body {
+        max-width: 100vw;
+        overflow-x: hidden;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+          Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+        background: var(--background);
+        color: var(--foreground);
+        line-height: 1.6;
+        min-height: 100vh;
+        padding-bottom: 220px; /* Space for console */
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      /* Navigation */
+      nav {
+        background: var(--background);
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        backdrop-filter: blur(10px);
+      }
+
+      .nav-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .nav-logo {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--foreground);
+        text-decoration: none;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 2rem;
+      }
+
+      .nav-links a {
+        color: var(--muted);
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.2s;
+      }
+
+      .nav-links a:hover {
+        color: var(--foreground);
+        text-decoration: none;
+      }
+
+      /* Main content */
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 2rem 2rem 2rem 2rem;
+      }
+
+      main.article-page {
+        max-width: 800px;
+        padding: 2rem;
+      }
+
+      @media (min-width: 768px) {
+        main {
+          padding: 3rem 4rem;
+        }
+        main.article-page {
+          padding: 2rem 3rem;
+        }
+      }
+
+      h1 {
+        font-size: 2.5rem;
+        margin-bottom: 1rem;
+      }
+
+      h2 {
+        font-size: 1.5rem;
+        margin: 2rem 0 1rem;
+      }
+
+      h3 {
+        font-size: 1.25rem;
+        margin: 1.25rem 0 0.5rem;
+      }
+
+      p {
+        margin-bottom: 1rem;
+      }
+
+      ul, ol {
+        margin: 1rem 0 1rem 1.5rem;
+      }
+
+      li {
+        margin-bottom: 0.5rem;
+      }
+
+      /* Article header */
+      .article-header {
+        margin-bottom: 2rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .article-meta {
+        display: flex;
+        gap: 0.5rem;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      /* Preview content */
+      .preview-content {
+        margin-bottom: 2rem;
+      }
+
+      .preview-content p {
+        color: var(--muted);
+        font-size: 1.1rem;
+        line-height: 1.7;
+        margin-bottom: 1rem;
+      }
+
+      /* Encrypted section */
+      .encrypted-section {
+        position: relative;
+        min-height: 300px;
+        border: 2px dashed var(--border);
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(
+          135deg,
+          rgba(0, 112, 243, 0.05) 0%,
+          rgba(0, 112, 243, 0.1) 100%
+        );
+        margin-top: 2rem;
+      }
+
+      .locked-overlay {
+        text-align: center;
+        padding: 2rem;
+      }
+
+      .lock-icon {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+      }
+
+      .locked-overlay h3 {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .locked-overlay p {
+        color: var(--muted);
+        margin-bottom: 1rem;
+      }
+
+      .unlock-button {
+        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: all 0.2s;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+      }
+
+      .unlock-button:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+      }
+
+      .unlock-button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      /* Unlocked content */
+      .encrypted-section.unlocked {
+        border: 2px solid var(--success);
+        background: none;
+        display: block;
+      }
+
+      .unlock-banner {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem;
+        background: var(--success);
+        color: white;
+        font-size: 0.9rem;
+        font-weight: 500;
+        border-radius: 10px 10px 0 0;
+      }
+
+      .decrypted-content {
+        display: none;
+        padding: 1.5rem;
+      }
+
+      .decrypted-content.visible {
+        display: block;
+      }
+
+      .decrypted-content h2 {
+        color: var(--accent);
+        margin-top: 1.5rem;
+      }
+
+      .decrypted-content h3 {
+        margin-top: 1.25rem;
+      }
+
+      .decrypted-content strong {
+        color: var(--accent);
+      }
+
+      .decrypted-content hr {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 2rem 0;
+      }
+
+      /* Article list */
+      .article-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        margin-top: 2rem;
+      }
+
+      .article-card {
+        display: block;
+        padding: 1.5rem;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        color: var(--foreground);
+        transition: all 0.2s;
+      }
+
+      .article-card:hover {
+        border-color: var(--accent);
+        text-decoration: none;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      }
+
+      .article-card h3 {
+        color: var(--accent);
+        margin-bottom: 0.5rem;
+        margin-top: 0;
+      }
+
+      .article-card p {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        background: #fef3c7;
+        color: #92400e;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-top: 0.5rem;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .badge {
+          background: rgba(251, 191, 36, 0.2);
+          color: #fbbf24;
+        }
+      }
+
+      /* Console */
+      .console {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--code-bg);
+        border-top: 1px solid var(--border);
+        font-family: "SF Mono", Monaco, "Andale Mono", "Ubuntu Mono", monospace;
+        font-size: 0.85rem;
+        max-height: 200px;
+        overflow-y: auto;
+        z-index: 1000;
+      }
+
+      .console-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 1rem;
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        background: var(--code-bg);
+      }
+
+      .console-header span {
+        font-weight: 600;
+      }
+
+      .console-header button {
+        background: var(--border);
+        border: none;
+        padding: 0.25rem 0.75rem;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .console-header button:hover {
+        background: var(--muted);
+        color: var(--background);
+      }
+
+      .console-body {
+        padding: 0.5rem 1rem;
+      }
+
+      .console-line {
+        padding: 0.25rem 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .console-line:last-child {
+        border-bottom: none;
+      }
+
+      .console-line.success {
+        color: var(--success);
+      }
+
+      .console-line.error {
+        color: var(--error);
+      }
+
+      .console-line.crypto {
+        color: #a855f7;
+      }
+
+      .console-line.info {
+        color: var(--accent);
+      }
+
+      /* Loading spinner */
+      .loading-spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 1rem auto;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <div class="nav-container">
+        <a href="/" class="nav-logo">🔐 Capsule Demo</a>
+        <div class="nav-links">
+          <a href="/">Home</a>
+          <a href="/article/premium-guide">Article 1</a>
+          <a href="/article/crypto-basics">Article 2</a>
+        </div>
+      </div>
+    </nav>
+
+    <slot />
+
+    <div class="console" id="console">
+      <div class="console-header">
+        <span>🔐 Capsule Console</span>
+        <button onclick="document.getElementById('console-body').innerHTML = ''">Clear</button>
+      </div>
+      <div class="console-body" id="console-body"></div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,431 @@
+# @sesamy/capsule-server
+
+Server-side encryption library for Capsule - provides envelope encryption for content and subscription server utilities.
+
+## Installation
+
+```bash
+npm install @sesamy/capsule-server
+# or
+pnpm add @sesamy/capsule-server
+```
+
+## Quick Start
+
+The CMS server just needs a way to get keys - it doesn't care about tiers or how keys are derived.
+
+```typescript
+import {
+  createCmsServer,
+  createTotpKeyProvider,
+  createSubscriptionServer,
+} from "@sesamy/capsule-server";
+
+// Create a TOTP key provider (derives keys from master secret)
+const totp = createTotpKeyProvider({
+  masterSecret: process.env.MASTER_SECRET, // Base64-encoded 256-bit secret
+});
+
+// CMS side: encrypt content
+const cms = createCmsServer({
+  getKeys: (keyIds) => totp.getKeys(keyIds),
+});
+
+const encrypted = await cms.encrypt("article-123", premiumContent, {
+  keyIds: ["premium", "enterprise"], // Just key IDs - CMS doesn't know what they mean
+});
+
+// Subscription side: handle unlock requests
+const server = createSubscriptionServer({
+  masterSecret: process.env.MASTER_SECRET,
+});
+
+// In your unlock endpoint
+const result = await server.unlockForUser(wrappedKey, publicKey);
+```
+
+## CMS Server
+
+The CMS server encrypts content with envelope encryption. It doesn't know or care about subscription tiers - it just works with key IDs and calls your `getKeys` function to get the actual keys.
+
+### Creating the Server
+
+```typescript
+import { createCmsServer } from "@sesamy/capsule-server";
+
+// Option 1: Fetch keys from subscription server
+const cms = createCmsServer({
+  getKeys: async (keyIds) => {
+    const response = await fetch("/api/keys", {
+      method: "POST",
+      body: JSON.stringify({ keyIds }),
+    });
+    return response.json();
+    // Returns: [{ keyId: 'premium:123', key: 'base64...', expiresAt?: '...' }]
+  },
+});
+
+// Option 2: Use TOTP key provider (derive keys locally)
+const totp = createTotpKeyProvider({ masterSecret: process.env.MASTER_SECRET });
+const cms = createCmsServer({
+  getKeys: (keyIds) => totp.getKeys(keyIds),
+});
+```
+
+### Encrypting Content
+
+```typescript
+const encrypted = await cms.encrypt("article-123", content, {
+  keyIds: ["premium", "enterprise"], // Key IDs to encrypt with
+});
+```
+
+**Returns (JSON format):**
+
+```json
+{
+  "articleId": "article-123",
+  "encryptedContent": "base64...", // AES-256-GCM encrypted content
+  "iv": "base64...", // 12-byte initialization vector
+  "wrappedKeys": [
+    {
+      "keyId": "premium:1737158400",
+      "wrappedDek": "base64...", // DEK wrapped with this key
+      "expiresAt": "2025-01-18T01:00:00.000Z"
+    },
+    {
+      "keyId": "premium:1737158430",
+      "wrappedDek": "base64...",
+      "expiresAt": "2025-01-18T01:00:30.000Z"
+    }
+  ]
+}
+```
+
+### Output Formats
+
+```typescript
+// JSON (default) - for API responses
+const data = await cms.encrypt(id, content, { keyIds: ["premium"] });
+
+// HTML - ready to embed in your page
+const html = await cms.encrypt(id, content, {
+  keyIds: ["premium"],
+  format: "html",
+  htmlClass: "premium-content",
+  placeholder: "<p>Subscribe to unlock...</p>",
+});
+// Result: <div class="premium-content" data-capsule='{"articleId":...}' data-capsule-id="article-123">
+//           <p>Subscribe to unlock...</p>
+//         </div>
+
+// Template helper - get all formats at once
+const { data, json, attribute, html } = await cms.encryptForTemplate(
+  id,
+  content,
+  {
+    keyIds: ["premium"],
+  }
+);
+```
+
+## TOTP Key Provider
+
+For deriving time-bucket keys locally from a shared master secret:
+
+```typescript
+import { createTotpKeyProvider } from "@sesamy/capsule-server";
+
+const totp = createTotpKeyProvider({
+  masterSecret: process.env.MASTER_SECRET,
+  bucketPeriodSeconds: 30, // Optional, default 30
+});
+
+// Get keys for given IDs (returns current + next bucket for each)
+const keys = await totp.getKeys(["premium", "enterprise"]);
+// Returns: [
+//   { keyId: 'premium:1737158400', key: Buffer, expiresAt: Date },
+//   { keyId: 'premium:1737158430', key: Buffer, expiresAt: Date },
+//   { keyId: 'enterprise:1737158400', key: Buffer, expiresAt: Date },
+//   { keyId: 'enterprise:1737158430', key: Buffer, expiresAt: Date },
+// ]
+
+// For per-article purchase keys (static, no expiration)
+const articleKey = await totp.getArticleKey("article-123");
+// Returns: { keyId: 'article:article-123', key: Buffer }
+```
+
+### Combining with Article Keys
+
+```typescript
+const cms = createCmsServer({
+  getKeys: async (keyIds) => {
+    const keys = await totp.getKeys(
+      keyIds.filter((id) => !id.startsWith("article:"))
+    );
+
+    // Add article keys if requested
+    for (const id of keyIds.filter((id) => id.startsWith("article:"))) {
+      const articleId = id.slice(8);
+      keys.push(await totp.getArticleKey(articleId));
+    }
+
+    return keys;
+  },
+});
+
+// Now you can mix time-bucket and article keys
+await cms.encrypt("article-123", content, {
+  keyIds: ["premium", "article:article-123"],
+});
+```
+
+## Subscription Server
+
+Handles unlock requests from users.
+
+### Creating the Server
+
+```typescript
+import { createSubscriptionServer } from "@sesamy/capsule-server";
+
+const server = createSubscriptionServer({
+  masterSecret: process.env.MASTER_SECRET,
+  bucketPeriodSeconds: 30,
+});
+```
+
+### Unlock Endpoint
+
+```typescript
+app.post("/api/unlock", async (req) => {
+  // Validate user subscription here!
+  const { keyId, wrappedDek, publicKey } = req.body;
+
+  return server.unlockForUser(
+    { keyId, wrappedDek },
+    publicKey,
+    // Optional: lookup for static keys (per-article purchase)
+    (keyId) => staticKeyStore.get(keyId)
+  );
+});
+```
+
+## How It Works
+
+### Envelope Encryption
+
+Capsule uses envelope encryption for efficient multi-recipient encryption:
+
+```
+Content → [AES-256-GCM] → Encrypted Content
+              ↓
+           DEK (unique per article)
+              ↓
+    ┌─────────┼─────────┐
+    ↓         ↓         ↓
+  Key #1    Key #2    Key #3
+    ↓         ↓         ↓
+ Wrapped   Wrapped   Wrapped
+ DEK #1    DEK #2    DEK #3
+```
+
+- Content is encrypted ONCE with a unique DEK (Data Encryption Key)
+- The DEK is wrapped with MULTIPLE key-wrapping keys
+- Different users can unlock using different wrapped keys
+- No need to re-encrypt content when adding access paths
+
+### Time-Bucket Keys (TOTP)
+
+When using `TotpKeyProvider`, keys rotate automatically:
+
+- Keys are derived from `masterSecret + keyId + bucketId` using HKDF
+- Bucket ID changes every `bucketPeriodSeconds` (default: 30s)
+- Provider returns current AND next bucket (handles clock drift)
+- When bucket expires, old wrapped keys become invalid (forward secrecy)
+
+## Framework Examples
+
+### Next.js
+
+```typescript
+// lib/capsule.ts
+import { createCmsServer, createTotpKeyProvider } from "@sesamy/capsule-server";
+
+const totp = createTotpKeyProvider({
+  masterSecret: process.env.MASTER_SECRET!,
+});
+
+export const cms = createCmsServer({
+  getKeys: (keyIds) => totp.getKeys(keyIds),
+});
+
+// app/article/[slug]/page.tsx
+export default async function ArticlePage({ params }) {
+  const article = await getArticle(params.slug);
+
+  const encryptedHtml = await cms.encrypt(article.id, article.premiumContent, {
+    keyIds: ["premium"],
+    format: "html",
+  });
+
+  return (
+    <article>
+      <h1>{article.title}</h1>
+      <div>{article.preview}</div>
+      <div dangerouslySetInnerHTML={{ __html: encryptedHtml }} />
+    </article>
+  );
+}
+```
+
+### Astro
+
+```astro
+---
+// src/pages/article/[slug].astro
+import { createCmsServer, createTotpKeyProvider } from '@sesamy/capsule-server';
+
+const totp = createTotpKeyProvider({
+  masterSecret: import.meta.env.MASTER_SECRET,
+});
+
+const cms = createCmsServer({
+  getKeys: (keyIds) => totp.getKeys(keyIds),
+});
+
+const article = await getArticle(Astro.params.slug);
+const { attribute } = await cms.encryptForTemplate(
+  article.id,
+  article.premiumContent,
+  { keyIds: ['premium'] }
+);
+---
+<article>
+  <h1>{article.title}</h1>
+  <div set:html={article.preview} />
+  <div
+    data-capsule={attribute}
+    data-capsule-id={article.id}
+  >
+    <p>Subscribe to unlock...</p>
+  </div>
+</article>
+```
+
+### Express
+
+```typescript
+import express from "express";
+import {
+  createCmsServer,
+  createTotpKeyProvider,
+  createSubscriptionServer,
+} from "@sesamy/capsule-server";
+
+const app = express();
+
+const totp = createTotpKeyProvider({
+  masterSecret: process.env.MASTER_SECRET!,
+});
+const cms = createCmsServer({ getKeys: (keyIds) => totp.getKeys(keyIds) });
+const server = createSubscriptionServer({
+  masterSecret: process.env.MASTER_SECRET!,
+});
+
+// Encrypt content
+app.get("/api/article/:id", async (req, res) => {
+  const article = await db.getArticle(req.params.id);
+  const encrypted = await cms.encrypt(article.id, article.content, {
+    keyIds: ["premium"],
+  });
+  res.json({ ...article, encrypted });
+});
+
+// Unlock endpoint
+app.post("/api/unlock", async (req, res) => {
+  // Validate user subscription first!
+  const { keyId, wrappedDek, publicKey } = req.body;
+  const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
+  res.json(result);
+});
+```
+
+## Security Notes
+
+- **Master secret**: Store in KMS (AWS Secrets Manager, HashiCorp Vault, etc.)
+- **Bucket period**: Determines maximum revocation delay (shorter = faster revocation, more wrapped keys)
+- **Per-article keys**: Are static (no automatic revocation) - use for permanent purchases
+- **Key isolation**: CMS only needs key IDs, not the master secret (if using external key provider)
+- **User validation**: Always validate subscription before calling `unlockForUser()`
+
+## API Reference
+
+### CmsServer
+
+```typescript
+import { createCmsServer, CmsServer } from '@sesamy/capsule-server';
+
+const cms = createCmsServer(options: CmsServerOptions);
+
+interface CmsServerOptions {
+  getKeys: (keyIds: string[]) => Promise<KeyEntry[]>;  // Required
+  logger?: (msg: string, level: 'info' | 'warn' | 'error') => void;
+}
+
+interface KeyEntry {
+  keyId: string;              // Key identifier
+  key: Buffer | string;       // 256-bit AES key
+  expiresAt?: Date | string;  // Optional expiration
+}
+
+// Encrypt content
+cms.encrypt(articleId, content, { keyIds, format?, ... }): Promise<EncryptedArticle | string>;
+
+// Get all formats for templates
+cms.encryptForTemplate(articleId, content, { keyIds }): Promise<{ data, json, attribute, html }>;
+```
+
+### TotpKeyProvider
+
+```typescript
+import { createTotpKeyProvider, TotpKeyProvider } from '@sesamy/capsule-server';
+
+const totp = createTotpKeyProvider(options: TotpKeyProviderOptions);
+
+interface TotpKeyProviderOptions {
+  masterSecret: Buffer | string;   // Required
+  bucketPeriodSeconds?: number;    // Default: 30
+}
+
+// Get time-bucket keys (current + next for each keyId)
+totp.getKeys(keyIds: string[]): Promise<KeyEntry[]>;
+
+// Get static article key
+totp.getArticleKey(articleId: string): Promise<KeyEntry>;
+```
+
+### SubscriptionServer
+
+```typescript
+import { createSubscriptionServer, SubscriptionServer } from '@sesamy/capsule-server';
+
+const server = createSubscriptionServer(options: SubscriptionServerOptions);
+
+interface SubscriptionServerOptions {
+  masterSecret: string | Buffer;   // Required
+  bucketPeriodSeconds?: number;    // Default: 30
+}
+
+// For CMS key fetching (if not using TOTP locally)
+server.getBucketKeysResponse(keyId: string): BucketKeysResponse;
+
+// For user unlock
+server.unlockForUser(
+  wrappedKey: { keyId, wrappedDek },
+  userPublicKey: string,
+  staticKeyLookup?: (keyId: string) => Buffer | null
+): Promise<UnlockResponse>;
+```
+
+See [TypeScript definitions](./src/types.ts) for full type documentation.

@@ -1,15 +1,20 @@
 /**
- * Time-bucket key derivation using HKDF.
+ * Time-bucket utilities for the demo app.
  * 
- * Derives deterministic AES-256 keys from a master secret and time bucket ID.
- * Bucket keys rotate based on configured interval.
- * 
- * Supports two modes:
- * - TOTP: Keys derived locally (no API calls)
- * - API: Keys fetched from subscription server
+ * Re-exports from @sesamy/capsule-server with some demo-specific wrappers.
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { timingSafeEqual } from "crypto";
+import {
+  deriveBucketKey as deriveBucketKeyBase,
+  getCurrentBucket as getCurrentBucketBase,
+  getNextBucket as getNextBucketBase,
+  getPreviousBucket as getPreviousBucketBase,
+  getBucketExpiration as getBucketExpirationBase,
+  getBucketId,
+  isBucketValid as isBucketValidBase,
+  DEFAULT_BUCKET_PERIOD_SECONDS,
+} from "@sesamy/capsule-server";
 
 /**
  * Configuration from environment variables
@@ -33,9 +38,10 @@ export const BUCKET_DURATION_MS = BUCKET_PERIOD_SECONDS * 1000;
  * Master/shared secret for deriving bucket keys.
  * In production, store this in KMS (AWS Secrets Manager, Google Secret Manager, etc.)
  */
-const MASTER_SECRET = process.env.CAPSULE_MASTER_SECRET 
+export const MASTER_SECRET = process.env.CAPSULE_MASTER_SECRET 
   ? Buffer.from(process.env.CAPSULE_MASTER_SECRET, "base64")
   : (() => {
+      const { randomBytes } = require("crypto");
       const secret = randomBytes(32);
       console.log("[Capsule] Generated demo secret:", secret.toString("base64"));
       console.log("[Capsule] Key method:", KEY_EXCHANGE_METHOD);
@@ -57,85 +63,35 @@ export function getConfig() {
  * Uses seconds-based calculation (TOTP standard).
  */
 export function getCurrentBucket(): string {
-  const now = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
-  const bucketNum = Math.floor(now / BUCKET_PERIOD_SECONDS);
-  return bucketNum.toString();
+  return getCurrentBucketBase(BUCKET_PERIOD_SECONDS);
 }
 
 /**
  * Get the next time bucket ID.
  */
 export function getNextBucket(): string {
-  const current = parseInt(getCurrentBucket());
-  return (current + 1).toString();
+  return getNextBucketBase(BUCKET_PERIOD_SECONDS);
 }
 
 /**
  * Get the previous time bucket ID.
  */
 export function getPreviousBucket(): string {
-  const current = parseInt(getCurrentBucket());
-  return (current - 1).toString();
+  return getPreviousBucketBase(BUCKET_PERIOD_SECONDS);
 }
 
 /**
  * Get when a bucket expires.
  */
 export function getBucketExpiration(bucketId: string): Date {
-  const bucketNum = parseInt(bucketId);
-  const expiresAt = (bucketNum + 1) * BUCKET_PERIOD_SECONDS * 1000;
-  return new Date(expiresAt);
+  return getBucketExpirationBase(bucketId, BUCKET_PERIOD_SECONDS);
 }
 
 /**
  * Check if a bucket is still valid (current, next, or previous for grace period).
  */
 export function isBucketValid(bucketId: string): boolean {
-  const current = getCurrentBucket();
-  const next = getNextBucket();
-  const previous = getPreviousBucket();
-  return bucketId === current || bucketId === next || bucketId === previous;
-}
-
-/**
- * HKDF (HMAC-based Key Derivation Function) implementation.
- * 
- * @param ikm - Input key material (master secret)
- * @param salt - Salt value (bucket ID)
- * @param info - Context information
- * @param length - Output length in bytes
- */
-function hkdf(
-  ikm: Buffer,
-  salt: Buffer,
-  info: Buffer,
-  length: number
-): Buffer {
-  // HKDF-Extract: PRK = HMAC-Hash(salt, IKM)
-  const prk = createHmac("sha256", salt).update(ikm).digest();
-  
-  // HKDF-Expand: OKM = HMAC-Hash(PRK, T(0) | info | 0x01)
-  const okm = Buffer.alloc(length);
-  let previousBlock = Buffer.alloc(0);
-  let counter = 1;
-  let offset = 0;
-  
-  while (offset < length) {
-    const hmac = createHmac("sha256", prk);
-    hmac.update(previousBlock);
-    hmac.update(info);
-    hmac.update(Buffer.from([counter]));
-    
-    previousBlock = hmac.digest();
-    const remaining = length - offset;
-    const toCopy = Math.min(remaining, previousBlock.length);
-    
-    previousBlock.copy(okm, offset, 0, toCopy);
-    offset += toCopy;
-    counter++;
-  }
-  
-  return okm;
+  return isBucketValidBase(bucketId, BUCKET_PERIOD_SECONDS);
 }
 
 /**
@@ -146,10 +102,7 @@ function hkdf(
  * @returns 256-bit AES key material
  */
 export function deriveBucketKey(tier: string, bucketId: string): Buffer {
-  const salt = Buffer.from(bucketId, "utf8");
-  const info = Buffer.from(`capsule-bucket-${tier}`, "utf8");
-  
-  return hkdf(MASTER_SECRET, salt, info, 32); // 32 bytes = 256 bits
+  return deriveBucketKeyBase(MASTER_SECRET, tier, bucketId);
 }
 
 /**
@@ -177,46 +130,6 @@ export function getCurrentBucketKeys(tier: string): {
 }
 
 /**
- * Wrap (encrypt) a DEK with a bucket key using AES-256-GCM.
- */
-export function wrapDekWithBucketKey(dek: Buffer, bucketKey: Buffer): Buffer {
-  const { createCipheriv } = require("crypto");
-  
-  const iv = randomBytes(12); // 96-bit IV for GCM
-  const cipher = createCipheriv("aes-256-gcm", bucketKey, iv);
-  
-  const encrypted = Buffer.concat([
-    cipher.update(dek),
-    cipher.final()
-  ]);
-  
-  const authTag = cipher.getAuthTag();
-  
-  // Format: [IV (12 bytes) | Ciphertext | Auth Tag (16 bytes)]
-  return Buffer.concat([iv, encrypted, authTag]);
-}
-
-/**
- * Unwrap (decrypt) a DEK with a bucket key using AES-256-GCM.
- */
-export function unwrapDekWithBucketKey(wrappedDek: Buffer, bucketKey: Buffer): Buffer {
-  const { createDecipheriv } = require("crypto");
-  
-  // Parse format: [IV (12 bytes) | Ciphertext | Auth Tag (16 bytes)]
-  const iv = wrappedDek.subarray(0, 12);
-  const authTag = wrappedDek.subarray(wrappedDek.length - 16);
-  const ciphertext = wrappedDek.subarray(12, wrappedDek.length - 16);
-  
-  const decipher = createDecipheriv("aes-256-gcm", bucketKey, iv);
-  decipher.setAuthTag(authTag);
-  
-  return Buffer.concat([
-    decipher.update(ciphertext),
-    decipher.final()
-  ]);
-}
-
-/**
  * Constant-time string comparison to prevent timing attacks.
  */
 export function constantTimeCompare(a: string, b: string): boolean {
@@ -226,3 +139,6 @@ export function constantTimeCompare(a: string, b: string): boolean {
   
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
+
+// Re-export defaults
+export { DEFAULT_BUCKET_PERIOD_SECONDS, getBucketId };

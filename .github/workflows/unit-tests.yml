@@ -25,8 +25,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build client package
-        run: pnpm client build
+      - name: Build packages
+        run: pnpm client build && pnpm js-server build
 
       - name: Build demo
         run: pnpm demo build

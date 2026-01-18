@@ -17,16 +17,43 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
     notFound();
   }
 
-  // Get the pre-encrypted content for SSR embedding
-  const encryptedData = getEncryptedArticle(slug);
+  // Get the pre-encrypted content for SSR embedding (now async)
+  const encryptedData = await getEncryptedArticle(slug);
+
+  // Format encrypted data as readable JSON for view-source
+  const formattedEncryptedData = encryptedData
+    ? JSON.stringify(encryptedData, null, 2)
+    : null;
 
   return (
     <DemoLayout>
+      {/* 
+        ============================================================
+        CAPSULE ENCRYPTED ARTICLE
+        ============================================================
+        This page demonstrates the Capsule encryption standard.
+        The encrypted content below is embedded at build/request time.
+        Decryption happens client-side using Web Crypto API.
+        ============================================================
+      */}
+
+      {/* Encrypted data embedded as readable JSON for demonstration */}
+      {formattedEncryptedData && (
+        <script
+          id="capsule-encrypted-data"
+          type="application/json"
+          data-article-id={article.id}
+          dangerouslySetInnerHTML={{
+            __html: `\n${formattedEncryptedData}\n`,
+          }}
+        />
+      )}
+
       <main className="article-page">
         <div className="key-manager-container">
           <KeyManager />
         </div>
-        
+
         <article>
           <header className="article-header">
             <h1>{article.title}</h1>
@@ -51,7 +78,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
 
           <section className="premium-section">
             {/* Encrypted content embedded in the page for offline/cached decryption */}
-            <EncryptedSection 
+            <EncryptedSection
               articleId={article.id}
               encryptedData={encryptedData}
             />

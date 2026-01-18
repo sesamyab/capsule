@@ -83,6 +83,68 @@ benefits of asymmetric encryption.
 **Congratulations!** You've just decrypted this content using envelope encryption.
 Your private key never left your browser, and this specific content was encrypted
 just for you with a unique key.
+
+<div id="confetti-container"></div>
+<script>
+(function() {
+  const confetti = ['🎊', '✨', '🌟', '💫', '🎉', '🔐', '🔑'];
+  const container = document.getElementById('confetti-container');
+  
+  // Add keyframe animation if not exists
+  if (!document.getElementById('confetti-style')) {
+    const style = document.createElement('style');
+    style.id = 'confetti-style';
+    style.textContent = \`
+      @keyframes confetti-fall {
+        0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+        100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+      }
+      .confetti-piece {
+        position: fixed;
+        font-size: 24px;
+        z-index: 1000;
+        pointer-events: none;
+        animation: confetti-fall 3s ease-in forwards;
+      }
+      .unlock-celebration {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-top: 1rem;
+        text-align: center;
+      }
+      .unlock-celebration .time {
+        font-size: 0.9em;
+        opacity: 0.9;
+      }
+    \`;
+    document.head.appendChild(style);
+  }
+  
+  // Spawn confetti
+  for (let i = 0; i < 30; i++) {
+    setTimeout(() => {
+      const span = document.createElement('span');
+      span.className = 'confetti-piece';
+      span.textContent = confetti[Math.floor(Math.random() * confetti.length)];
+      span.style.left = Math.random() * 100 + 'vw';
+      span.style.top = '-30px';
+      document.body.appendChild(span);
+      setTimeout(() => span.remove(), 3000);
+    }, i * 50);
+  }
+  
+  // Add celebration message
+  const celebration = document.createElement('div');
+  celebration.className = 'unlock-celebration';
+  celebration.innerHTML = \`
+    <strong>🎉 Content Unlocked!</strong><br>
+    <span class="time">Decrypted at \${new Date().toLocaleTimeString()} using your browser's cryptographic keys</span>
+  \`;
+  container.appendChild(celebration);
+})();
+</script>
     `.trim(),
   },
   "crypto-basics": {

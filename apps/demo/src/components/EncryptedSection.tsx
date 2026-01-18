@@ -1,516 +1,358 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+/**
+ * EncryptedSection - Demo component showing Capsule client-side decryption.
+ *
+ * Uses the @sesamy/capsule client library for all cryptographic operations.
+ * This version provides verbose logging for demonstration purposes.
+ */
+
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useConsole } from "./ConsoleContext";
-import { 
-  getStoredDek, 
-  getCachedDek, 
-  cacheDek,
-  storeDek, 
-  getTimeUntilExpiry, 
-  type StoredDek, 
-  type SecurityMode 
-} from "@/lib/dek-storage";
-
-interface EncryptedArticleData {
-  encryptedContent: string;
-  iv: string;
-  keyType: "tier" | "article";
-  keyId: string;
-  /** Bucket ID for time-based keys (undefined for static article keys) */
-  bucketId?: string;
-}
-
-interface MultiEncryptedArticle {
-  /** Tier-based encryption for current bucket */
-  tier: EncryptedArticleData;
-  /** Tier-based encryption for next bucket (handles clock drift) */
-  tierNext: EncryptedArticleData;
-  /** Article-specific encryption (static key) */
-  article: EncryptedArticleData | null;
-}
+import type {
+  CapsuleClient as CapsuleClientType,
+  EncryptedArticle,
+  UnlockFunction,
+  WrappedKey,
+  DekStorageMode,
+} from "@sesamy/capsule";
 
 interface EncryptedSectionProps {
   articleId: string;
-  encryptedData: MultiEncryptedArticle | null;
-  /**
-   * Security mode for DEK storage:
-   * - "persist" (default): Store encrypted DEK in IndexedDB, unwrap with RSA key on page load.
-   * - "session": Keep DEK in memory only. Requires network request each page load.
-   */
-  securityMode?: SecurityMode;
+  encryptedData: EncryptedArticle | null;
+  securityMode?: DekStorageMode;
 }
 
 type UnlockState = "locked" | "unlocking" | "decrypting" | "unlocked" | "error";
 
-// RSA public exponent (65537)
-const RSA_PUBLIC_EXPONENT = new Uint8Array([0x01, 0x00, 0x01]);
-
-export function EncryptedSection({ articleId, encryptedData, securityMode = "persist" }: EncryptedSectionProps) {
+export function EncryptedSection({
+  articleId,
+  encryptedData,
+  securityMode = "persist",
+}: EncryptedSectionProps) {
   const [state, setState] = useState<UnlockState>("locked");
   const [decryptedContent, setDecryptedContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [keyPair, setKeyPair] = useState<CryptoKeyPair | null>(null);
-  const [usedKey, setUsedKey] = useState<{ type: "tier" | "article"; id: string } | null>(null);
-  const [cachedDekInfo, setCachedDekInfo] = useState<{ tier: StoredDek | null; article: StoredDek | null }>({ tier: null, article: null });
+  const [usedKeyId, setUsedKeyId] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<Date | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const clientRef = useRef<CapsuleClientType | null>(null);
   const { log } = useConsole();
 
-  // Decrypt content with a DEK
-  const decryptContent = useCallback(async (
-    encrypted: EncryptedArticleData,
-    dek: CryptoKey,
-    keyType: "tier" | "article",
+  // Parse keyId to get type and base info
+  const parseKeyId = (
     keyId: string
-  ) => {
-    try {
-      setState("decrypting");
-      log("Decoding Base64 IV and ciphertext...", "crypto");
-      const iv = base64ToArrayBuffer(encrypted.iv);
-      const ciphertext = base64ToArrayBuffer(encrypted.encryptedContent);
-      log(`Ciphertext: ${ciphertext.byteLength} bytes, IV: ${iv.byteLength} bytes`, "info");
-
-      log("Decrypting content with AES-256-GCM...", "crypto");
-      const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv },
-        dek,
-        ciphertext
-      );
-
-      const content = new TextDecoder().decode(decrypted);
-      log(`Content decrypted successfully (${content.length} chars)`, "success");
-      log("✨ Article unlocked!", "success");
-      setDecryptedContent(content);
-      setUsedKey({ type: keyType, id: keyId });
-      setState("unlocked");
-      return true;
-    } catch (err) {
-      console.error("Decryption failed:", err);
-      log(`Decryption failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
-      return false;
+  ): { type: "tier" | "article"; baseId: string; bucketId?: string } => {
+    const [first, second] = keyId.split(":", 2);
+    if (first === "article") {
+      return { type: "article", baseId: second ?? "" };
     }
-  }, [log]);
+    // tier:bucketId format
+    return { type: "tier", baseId: first ?? "", bucketId: second };
+  };
 
-  // Try to decrypt, falling back to next bucket if current fails
-  const tryDecryptWithFallback = useCallback(async (
-    current: EncryptedArticleData,
-    next: EncryptedArticleData,
-    dek: CryptoKey,
-    keyType: "tier" | "article",
-    keyId: string
-  ): Promise<boolean> => {
-    // Try current bucket first
-    log(`Trying decryption with current bucket (${current.bucketId})...`, "crypto");
-    const success = await decryptContent(current, dek, keyType, keyId);
-    if (success) {
-      log(`Decrypted with current bucket ${current.bucketId}`, "success");
-      return true;
-    }
-    
-    // Try next bucket (clock drift)
-    log(`Current bucket failed, trying next bucket (${next.bucketId})...`, "crypto");
-    const successNext = await decryptContent(next, dek, keyType, keyId);
-    if (successNext) {
-      log(`Decrypted with next bucket ${next.bucketId} (clock drift handled)`, "success");
-      return true;
-    }
-    
-    // Both failed - key may have rotated
-    log("Both buckets failed - key may have expired/rotated", "error");
-    setError("Decryption failed - key may have expired");
-    setState("error");
-    return false;
-  }, [decryptContent, log]);
+  // Get available key options from wrapped keys
+  const getKeyOptions = useCallback(() => {
+    if (!encryptedData) return { tierKeys: [], articleKeys: [] };
 
-  // Check for cached DEKs
-  const checkCachedDeks = useCallback(async (data: MultiEncryptedArticle) => {
-    const tierDek = await getStoredDek("tier", data.tier.keyId);
-    const articleDek = data.article ? await getStoredDek("article", data.article.keyId) : null;
-    setCachedDekInfo({ tier: tierDek, article: articleDek });
-    return { tierDek, articleDek };
-  }, []);
+    const tierKeys: WrappedKey[] = [];
+    const articleKeys: WrappedKey[] = [];
 
-  // Unwrap DEK from encrypted bytes using RSA private key
-  const unwrapDek = useCallback(async (
-    privateKey: CryptoKey,
-    encryptedDekB64: string
-  ): Promise<CryptoKey> => {
-    const encryptedDekBuffer = base64ToArrayBuffer(encryptedDekB64);
-    return await crypto.subtle.unwrapKey(
-      "raw",
-      encryptedDekBuffer,
-      privateKey,
-      { name: "RSA-OAEP" },
-      { name: "AES-GCM", length: 256 },
-      false, // non-extractable
-      ["decrypt"]
-    );
-  }, []);
-
-  // Try to auto-decrypt with cached DEK (unwrap from IndexedDB in persist mode)
-  const tryAutoDecrypt = useCallback(async (data: MultiEncryptedArticle, keys: CryptoKeyPair) => {
-    // Check for cached tier DEK first (more valuable - unlocks all tier content)
-    let cachedDek = getCachedDek("tier", data.tier.keyId);
-    let storedDek = await getStoredDek("tier", data.tier.keyId);
-    
-    if (cachedDek && storedDek) {
-      // Have unwrapped DEK in memory - try current bucket first
-      log(`Using in-memory DEK for tier "${data.tier.keyId}" (${getTimeUntilExpiry(storedDek)})`, "crypto");
-      setState("decrypting");
-      
-      // Try current bucket first
-      const success = await tryDecryptWithFallback(data.tier, data.tierNext, cachedDek, "tier", data.tier.keyId);
-      if (success) return true;
-    }
-    
-    if (storedDek) {
-      // Have encrypted DEK in IndexedDB - unwrap locally
-      log(`Found stored DEK for tier "${data.tier.keyId}" (valid for ${getTimeUntilExpiry(storedDek)})`, "info");
-      log("Unwrapping DEK locally with RSA key (no network!)...", "crypto");
-      setState("decrypting");
-      
-      try {
-        const dek = await unwrapDek(keys.privateKey, storedDek.encryptedDek);
-        cacheDek("tier", data.tier.keyId, dek, storedDek);
-        log("DEK unwrapped successfully", "success");
-        
-        // Try current bucket first, fall back to next bucket
-        const success = await tryDecryptWithFallback(data.tier, data.tierNext, dek, "tier", data.tier.keyId);
-        if (success) return true;
-      } catch (err) {
-        log(`Failed to unwrap stored DEK: ${err}`, "error");
+    for (const wk of encryptedData.wrappedKeys) {
+      const parsed = parseKeyId(wk.keyId);
+      if (parsed.type === "article") {
+        articleKeys.push(wk);
+      } else {
+        tierKeys.push(wk);
       }
     }
-    
-    // Check for cached article DEK
-    if (data.article) {
-      cachedDek = getCachedDek("article", data.article.keyId);
-      storedDek = await getStoredDek("article", data.article.keyId);
-      
-      if (cachedDek && storedDek) {
-        log(`Using in-memory DEK for article "${data.article.keyId}" (${getTimeUntilExpiry(storedDek)})`, "crypto");
-        setState("decrypting");
-        await decryptContent(data.article, cachedDek, "article", data.article.keyId);
-        return true;
-      }
-      
-      if (storedDek) {
-        log(`Found stored DEK for article "${data.article.keyId}" (valid for ${getTimeUntilExpiry(storedDek)})`, "info");
-        log("Unwrapping DEK locally with RSA key (no network!)...", "crypto");
-        setState("decrypting");
-        
-        try {
-          const dek = await unwrapDek(keys.privateKey, storedDek.encryptedDek);
-          cacheDek("article", data.article.keyId, dek, storedDek);
-          log("DEK unwrapped successfully", "success");
-          await decryptContent(data.article, dek, "article", data.article.keyId);
-          return true;
-        } catch (err) {
-          log(`Failed to unwrap stored DEK: ${err}`, "error");
-        }
-      }
-    }
-    
-    return false;
-  }, [log, decryptContent, unwrapDek, tryDecryptWithFallback]);
 
-  // Fetch and unwrap DEK from server
-  const fetchAndUnwrapDek = useCallback(async (
-    keys: CryptoKeyPair,
-    keyType: "tier" | "article",
-    keyId: string
-  ): Promise<{ dek: CryptoKey; encryptedDek: string; expiresAt: string; bucketId: string } | null> => {
-    try {
-      // Export public key as SPKI
-      log("Exporting public key as SPKI format...", "key");
-      const publicKeySpki = await crypto.subtle.exportKey("spki", keys.publicKey);
-      const publicKeyB64 = arrayBufferToBase64(publicKeySpki);
-      log(`Public key exported (${publicKeyB64.length} chars, Base64)`, "success");
+    return { tierKeys, articleKeys };
+  }, [encryptedData]);
 
-      // Request wrapped DEK from server
-      log(`POST /api/unlock { keyType: "${keyType}", keyId: "${keyId}", publicKey: "..." }`, "network");
-      const response = await fetch("/api/unlock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          keyType,
-          keyId,
-          publicKey: publicKeyB64,
-        }),
+  // Execute scripts and dispatch event after content is decrypted
+  useEffect(() => {
+    if (state === "unlocked" && contentRef.current) {
+      const contentElement = contentRef.current;
+
+      // Execute any scripts in the decrypted content
+      const scripts = contentElement.querySelectorAll("script");
+      scripts.forEach((oldScript) => {
+        const newScript = document.createElement("script");
+        Array.from(oldScript.attributes).forEach((attr) => {
+          newScript.setAttribute(attr.name, attr.value);
+        });
+        newScript.textContent = oldScript.textContent;
+        oldScript.parentNode?.replaceChild(newScript, oldScript);
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        log(`Server error: ${errorData.error}`, "error");
-        return null;
+      if (scripts.length > 0) {
+        log(`Executed ${scripts.length} embedded script(s)`, "info");
       }
 
-      const { encryptedDek, expiresAt, bucketId } = await response.json();
-      log(`Received encrypted DEK (${encryptedDek.length} chars)`, "success");
-
-      // Unwrap the DEK using our private key (non-extractable)
-      log("Unwrapping DEK using RSA-OAEP with private key...", "crypto");
-      const dek = await unwrapDek(keys.privateKey, encryptedDek);
-      log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
-      
-      return { dek, encryptedDek, expiresAt, bucketId };
-    } catch (err) {
-      console.error("Failed to fetch DEK:", err);
-      log(`Failed to fetch DEK: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
-      return null;
+      // Dispatch custom event for external scripts to react to unlocked content
+      const event = new CustomEvent("capsule:unlocked", {
+        bubbles: true,
+        detail: {
+          articleId,
+          element: contentElement,
+          keyId: usedKeyId,
+        },
+      });
+      contentElement.dispatchEvent(event);
+      log(
+        `Dispatched 'capsule:unlocked' event for article "${articleId}"`,
+        "info"
+      );
     }
-  }, [log, unwrapDek]);
+  }, [state, decryptedContent, log, articleId, usedKeyId]);
 
-  // Initialize key pair on mount
+  // Initialize the Capsule client
   useEffect(() => {
     let mounted = true;
 
-    async function initKeys() {
+    async function init() {
       try {
         log(`Loading article "${articleId}"...`, "info");
-        
-        // Try to load existing keys from IndexedDB
-        log("Checking IndexedDB for existing RSA key pair...", "key");
-        let keys = await loadKeysFromStorage();
-        
-        if (!keys) {
-          log("No existing keys found. Generating new RSA-2048 key pair...", "key");
-          // Generate new key pair
-          keys = await crypto.subtle.generateKey(
-            {
-              name: "RSA-OAEP",
-              modulusLength: 2048,
-              publicExponent: RSA_PUBLIC_EXPONENT,
-              hash: "SHA-256",
-            },
-            true, // extractable for public key export
-            ["wrapKey", "unwrapKey"]
+        log("Initializing @sesamy/capsule client...", "key");
+
+        // Dynamic import for client-side only
+        const { CapsuleClient } = await import("@sesamy/capsule");
+
+        // Create unlock function with verbose logging
+        const unlock: UnlockFunction = async ({
+          keyId,
+          wrappedDek,
+          publicKey,
+        }) => {
+          const parsed = parseKeyId(keyId);
+          const isTierKey = parsed.type === "tier";
+
+          if (isTierKey) {
+            log(
+              `POST /api/unlock { keyId: "${keyId}", publicKey: "..." } (tier mode - getting KEK)`,
+              "network"
+            );
+          } else {
+            log(
+              `POST /api/unlock { keyId: "${keyId}", wrappedDek: "...", publicKey: "..." }`,
+              "network"
+            );
+          }
+
+          const response = await fetch("/api/unlock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              keyId,
+              wrappedDek,
+              publicKey,
+              mode: isTierKey ? "tier" : undefined,
+            }),
+          });
+
+          if (!response.ok) {
+            const data = await response.json();
+            log(`Server error: ${data.error}`, "error");
+            throw new Error(data.error || `Server returned ${response.status}`);
+          }
+
+          const result = await response.json();
+          log(
+            `Received encrypted ${
+              result.keyType?.toUpperCase() || "DEK"
+            } (${result.encryptedDek.length} chars)`,
+            "success"
           );
-          
-          log("RSA key pair generated successfully", "success");
-          log("Storing keys in IndexedDB with extractable: false...", "key");
-          // Store the keys
-          await saveKeysToStorage(keys);
-          log("Keys stored securely in IndexedDB", "success");
-        } else {
+          log(
+            `Key valid until: ${new Date(
+              result.expiresAt
+            ).toLocaleTimeString()} (bucket ${
+              result.bucketId || "static"
+            }, ${result.bucketPeriodSeconds}s period)`,
+            "info"
+          );
+
+          // Store expiry for display
+          if (mounted) {
+            setExpiresAt(new Date(result.expiresAt));
+          }
+
+          return result;
+        };
+
+        // Create client with logging
+        const client = new CapsuleClient({
+          unlock,
+          dekStorage: securityMode,
+          renewBuffer: 5000,
+          executeScripts: true,
+          logger: (message, level) => {
+            // Map client log levels to console log types
+            const typeMap: Record<string, "info" | "success" | "error" | "crypto" | "key"> = {
+              info: "info",
+              debug: "crypto",
+              error: "error",
+            };
+            log(message, typeMap[level] || "info");
+          },
+        });
+
+        // Initialize keys
+        log("Checking for existing RSA key pair...", "key");
+        const hasKeys = await client.hasKeyPair();
+
+        if (hasKeys) {
           log("Found existing RSA key pair in IndexedDB", "success");
+          const keyInfo = await client.getKeyInfo();
+          if (keyInfo) {
+            log(
+              `Key size: RSA-${keyInfo.keySize}, created: ${new Date(
+                keyInfo.createdAt
+              ).toLocaleDateString()}`,
+              "info"
+            );
+          }
+        } else {
+          log(
+            "No existing keys found. Generating new RSA-2048 key pair...",
+            "key"
+          );
+        }
+
+        // Get public key (creates if needed)
+        const publicKey = await client.getPublicKey();
+        log(`Public key ready (${publicKey.length} chars, Base64 SPKI)`, "success");
+
+        if (!hasKeys) {
+          log("RSA key pair generated and stored securely", "success");
+          log("Private key is non-extractable (cannot be exported)", "crypto");
         }
 
         if (mounted) {
-          setKeyPair(keys);
+          clientRef.current = client;
           setIsInitializing(false);
-          
-          // Check if we already have a cached DEK for auto-unlock (persist mode only)
+
           if (encryptedData) {
-            // Update cached DEK info for UI
-            await checkCachedDeks(encryptedData);
-            
-            // Try to auto-decrypt with stored CryptoKey (no network needed!)
-            const autoDecrypted = await tryAutoDecrypt(encryptedData, keys);
-            if (!autoDecrypted) {
+            // Try auto-decryption with cached keys
+            log("Checking for cached decryption keys...", "info");
+
+            try {
+              // Attempt to unlock using cached DEK
+              setState("decrypting");
+              const content = await client.unlock(encryptedData, "tier");
+
+              // Find which key was used
+              const tierKey = encryptedData.wrappedKeys.find(
+                (k) => !k.keyId.startsWith("article:")
+              );
+
+              setDecryptedContent(content);
+              setUsedKeyId(tierKey?.keyId || "unknown");
+              setState("unlocked");
+              log("✨ Article unlocked using cached key!", "success");
+            } catch {
+              // No cached key or decryption failed
+              const { tierKeys, articleKeys } = getKeyOptions();
               log(`Encrypted content ready (${securityMode} mode)`, "info");
-              if (encryptedData.article) {
-                log(`Available keys: tier "${encryptedData.tier.keyId}" or article "${encryptedData.article.keyId}"`, "info");
-              } else {
-                log(`Available key: tier "${encryptedData.tier.keyId}"`, "info");
-              }
+              log(
+                `Available keys: ${tierKeys.length} tier, ${articleKeys.length} article`,
+                "info"
+              );
               log("Click 'Unlock' to request decryption key", "info");
+              setState("locked");
             }
           }
         }
       } catch (err) {
-        console.error("Failed to initialize keys:", err);
-        log(`Error: ${err instanceof Error ? err.message : "Failed to initialize"}`, "error");
+        console.error("Failed to initialize Capsule client:", err);
+        log(
+          `Error: ${
+            err instanceof Error ? err.message : "Failed to initialize"
+          }`,
+          "error"
+        );
         if (mounted) {
           setError(err instanceof Error ? err.message : "Failed to initialize");
+          setState("error");
           setIsInitializing(false);
         }
       }
     }
 
-    initKeys();
-    return () => { mounted = false; };
-  }, [encryptedData, articleId, log, tryAutoDecrypt, checkCachedDeks, securityMode]);
-
-  // Auto-renew DEK before it expires (when content is unlocked)
-  useEffect(() => {
-    if (state !== "unlocked" || !keyPair || !usedKey || !encryptedData) {
-      return;
-    }
-
-    const RENEW_BUFFER_MS = 5000; // Renew 5 seconds before expiry
-    let lastKnownExpiresAt: number | null = null;
-    
-    const checkAndRenew = async () => {
-      const stored = await getStoredDek(usedKey.type, usedKey.id);
-      
-      if (!stored) {
-        // DEK is gone - check if it naturally expired vs manually deleted
-        if (lastKnownExpiresAt !== null && Date.now() >= lastKnownExpiresAt) {
-          // Key expired naturally - renew it
-          log(`DEK for ${usedKey.type} "${usedKey.id}" expired, auto-renewing...`, "info");
-          await renewDek();
-        }
-        // If lastKnownExpiresAt is null or in the future, it was manually deleted - don't renew
-        return;
-      }
-      
-      // Track the expiry time so we can detect natural expiration
-      lastKnownExpiresAt = stored.expiresAt;
-      
-      const timeUntilExpiry = stored.expiresAt - Date.now();
-      
-      if (timeUntilExpiry <= RENEW_BUFFER_MS) {
-        // About to expire - renew proactively
-        log(`DEK expires in ${Math.round(timeUntilExpiry / 1000)}s, auto-renewing...`, "info");
-        await renewDek();
-      }
+    init();
+    return () => {
+      mounted = false;
     };
-    
-    const renewDek = async () => {
-      const result = await fetchAndUnwrapDek(keyPair, usedKey.type, usedKey.id);
-      if (result) {
-        await storeDek(usedKey.type, usedKey.id, result.encryptedDek, result.dek, new Date(result.expiresAt), result.bucketId, securityMode);
-        log(`DEK renewed successfully (new bucket: ${result.bucketId})`, "success");
-        lastKnownExpiresAt = new Date(result.expiresAt).getTime();
-        
-        // Update cached DEK info for UI
-        if (encryptedData) {
-          await checkCachedDeks(encryptedData);
-        }
-      } else {
-        log("Failed to renew DEK - content may become inaccessible", "error");
-      }
-    };
-    
-    // Check immediately and then every second
-    checkAndRenew();
-    const interval = setInterval(checkAndRenew, 1000);
-    
-    return () => clearInterval(interval);
-  }, [state, keyPair, usedKey, encryptedData, fetchAndUnwrapDek, checkCachedDeks, log, securityMode]);
+  }, [articleId, encryptedData, getKeyOptions, log, securityMode]);
 
+  // Handle unlock button click
   const handleUnlock = async (keyType: "tier" | "article") => {
-    if (!keyPair || !encryptedData) {
+    if (!clientRef.current || !encryptedData) {
       setError("Not ready");
       return;
     }
 
-    const encrypted = keyType === "tier" ? encryptedData.tier : encryptedData.article;
-    if (!encrypted) {
-      setError("No article-specific key available");
+    const { tierKeys, articleKeys } = getKeyOptions();
+    const keys = keyType === "tier" ? tierKeys : articleKeys;
+
+    if (keys.length === 0) {
+      setError(`No ${keyType} keys available`);
       return;
     }
 
     setError(null);
     setState("unlocking");
-    log(`Starting unlock with ${keyType} key "${encrypted.keyId}"...`, "info");
 
     try {
-      // Check if we already have the DEK cached in memory
-      let dek = getCachedDek(keyType, encrypted.keyId);
+      log(`Trying to unlock with ${keyType} key...`, "info");
+      log("Exporting public key as SPKI format...", "key");
 
-      if (!dek) {
-        // Export public key as SPKI
-        log("Exporting public key as SPKI format...", "key");
-        const publicKeySpki = await crypto.subtle.exportKey("spki", keyPair.publicKey);
-        const publicKeyB64 = arrayBufferToBase64(publicKeySpki);
-        log(`Public key exported (${publicKeyB64.length} chars, Base64)`, "success");
+      const content = await clientRef.current.unlock(encryptedData, keyType);
 
-        // Request wrapped DEK from server
-        log(`POST /api/unlock { keyType: "${keyType}", keyId: "${encrypted.keyId}", publicKey: "..." }`, "network");
-        
-        let response: Response;
-        try {
-          response = await fetch("/api/unlock", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              keyType,
-              keyId: encrypted.keyId,
-              publicKey: publicKeyB64,
-            }),
-          });
-        } catch (fetchErr) {
-          log(`Network error: ${fetchErr}`, "error");
-          throw new Error(`Network error: ${fetchErr}`);
-        }
+      // Find which key was used
+      const usedKey =
+        keyType === "tier"
+          ? encryptedData.wrappedKeys.find(
+              (k) => !k.keyId.startsWith("article:")
+            )
+          : encryptedData.wrappedKeys.find((k) =>
+              k.keyId.startsWith("article:")
+            );
 
-        log(`Response status: ${response.status}`, "info");
+      log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
+      log("Decrypting content with AES-256-GCM...", "crypto");
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          log(`Server error: ${errorData.error}`, "error");
-          throw new Error(errorData.error || "Failed to get decryption key");
-        }
-
-        const data = await response.json();
-        const { encryptedDek, expiresAt, bucketId, bucketPeriodSeconds } = data;
-        log(`Received encrypted DEK (${encryptedDek?.length || 0} chars)`, "success");
-        log(`DEK valid until: ${new Date(expiresAt).toLocaleTimeString()} (bucket ${bucketId}, ${bucketPeriodSeconds}s period)`, "info");
-
-        // Unwrap the DEK using our private key (non-extractable for security)
-        log("Unwrapping DEK using RSA-OAEP with private key...", "crypto");
-        dek = await unwrapDek(keyPair.privateKey, encryptedDek);
-        log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
-
-        // Store DEK based on security mode
-        log(`Storing DEK in ${securityMode} mode...`, "info");
-        try {
-          await storeDek(keyType, encrypted.keyId, encryptedDek, dek, new Date(expiresAt), bucketId, securityMode);
-          log("DEK stored successfully", "success");
-        } catch (storeErr) {
-          log(`Failed to store DEK: ${storeErr}`, "error");
-          // Continue anyway - we have it in memory
-        }
-        
-        if (securityMode === "persist") {
-          if (keyType === "tier") {
-            log(`DEK persisted for tier "${encrypted.keyId}" (survives page refresh!)`, "crypto");
-          } else {
-            log(`DEK persisted for article "${encrypted.keyId}"`, "crypto");
-          }
-        } else {
-          log(`DEK cached in memory only (session mode - more secure)`, "crypto");
-        }
-        
-        // Update cached DEK info for UI
-        if (encryptedData) {
-          await checkCachedDeks(encryptedData);
-        }
-      } else {
-        log(`Using cached DEK for ${keyType} "${encrypted.keyId}"`, "crypto");
-      }
-
-      // Decrypt the content - for tier keys, try both current and next bucket
-      if (keyType === "tier") {
-        const success = await tryDecryptWithFallback(
-          encryptedData.tier, 
-          encryptedData.tierNext, 
-          dek, 
-          keyType, 
-          encrypted.keyId
-        );
-        if (!success) {
-          throw new Error("Failed to decrypt with tier key");
-        }
-      } else {
-        // Article keys are static, no fallback needed
-        const success = await decryptContent(encrypted, dek, keyType, encrypted.keyId);
-        if (!success) {
-          setError("Decryption failed");
-          setState("error");
-        }
-      }
-
+      setDecryptedContent(content);
+      setUsedKeyId(usedKey?.keyId || "unknown");
+      setState("unlocked");
+      log(`Content decrypted successfully (${content.length} chars)`, "success");
+      log("✨ Article unlocked!", "success");
     } catch (err) {
       console.error("Unlock failed:", err);
-      log(`Unlock failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+      log(
+        `Unlock failed: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`,
+        "error"
+      );
       setError(err instanceof Error ? err.message : "Unlock failed");
       setState("error");
     }
   };
 
+  // Get time until expiry display
+  const getExpiryDisplay = () => {
+    if (!expiresAt) return null;
+    const ms = expiresAt.getTime() - Date.now();
+    if (ms <= 0) return "expired";
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${seconds % 60}s`;
+  };
+
+  // Render states
   if (!encryptedData) {
     return (
       <div className="locked-section">
@@ -534,25 +376,31 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     );
   }
 
-  if (state === "unlocked" && decryptedContent && usedKey) {
-    const keyLabel = usedKey.type === "tier" 
-      ? `tier "${usedKey.id}"` 
-      : `article "${usedKey.id}"`;
-    const dekInfo = usedKey.type === "tier" ? cachedDekInfo.tier : cachedDekInfo.article;
-    const expiryDisplay = dekInfo ? getTimeUntilExpiry(dekInfo) : null;
-    
+  if (state === "unlocked" && decryptedContent && usedKeyId) {
+    const parsed = parseKeyId(usedKeyId);
+    const keyLabel =
+      parsed.type === "tier"
+        ? `tier "${parsed.baseId}"`
+        : `article "${parsed.baseId}"`;
+    const expiryDisplay = getExpiryDisplay();
+
     return (
       <div className="unlocked-section">
         <div className="unlock-banner">
           <span>🔓</span>
           <span>Content decrypted locally (using {keyLabel} key)</span>
           {expiryDisplay && (
-            <span className="key-expiry-badge" title="DEK auto-renews before expiry" suppressHydrationWarning>
+            <span
+              className="key-expiry-badge"
+              title="DEK auto-renews before expiry"
+              suppressHydrationWarning
+            >
               ⏱️ {expiryDisplay}
             </span>
           )}
         </div>
         <div
+          ref={contentRef}
           className="premium-content"
           dangerouslySetInnerHTML={{
             __html: formatMarkdown(decryptedContent),
@@ -562,29 +410,31 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
     );
   }
 
-  const hasTierKey = !!cachedDekInfo.tier;
-  const hasArticleKey = !!cachedDekInfo.article;
+  const { tierKeys, articleKeys } = getKeyOptions();
 
   return (
     <div className="locked-section">
-      {/* Encrypted content embedded in template tag for offline access */}
       <template
         id={`encrypted-${articleId}`}
-        data-encrypted-tier={JSON.stringify(encryptedData.tier)}
-        data-encrypted-article={encryptedData.article ? JSON.stringify(encryptedData.article) : ""}
+        data-encrypted-article={JSON.stringify(encryptedData)}
       />
-      
+
       <div className="locked-overlay">
         {state === "error" ? (
           <>
             <div className="lock-icon">⚠️</div>
             <p className="error-message">{error}</p>
             <div className="unlock-buttons">
-              <button onClick={() => handleUnlock("tier")}>
-                Try Tier Key
-              </button>
-              {encryptedData.article && (
-                <button onClick={() => handleUnlock("article")} className="secondary">
+              {tierKeys.length > 0 && (
+                <button onClick={() => handleUnlock("tier")}>
+                  Try Tier Key
+                </button>
+              )}
+              {articleKeys.length > 0 && (
+                <button
+                  onClick={() => handleUnlock("article")}
+                  className="secondary"
+                >
                   Try Article Key
                 </button>
               )}
@@ -592,7 +442,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
           </>
         ) : state === "unlocking" ? (
           <>
-            <div className="lock-icon">🔐</div>
+            <div className="lock-icon">��</div>
             <p>Getting decryption key...</p>
             <div className="loading-spinner" />
             <p className="status-detail">
@@ -605,7 +455,7 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
             <p>Decrypting content...</p>
             <div className="loading-spinner" />
             <p className="status-detail">
-              Using cached DEK (works offline!)
+              Using @sesamy/capsule for AES-256-GCM decryption
             </p>
           </>
         ) : (
@@ -614,101 +464,40 @@ export function EncryptedSection({ articleId, encryptedData, securityMode = "per
             <h3>Premium Content</h3>
             <p>Choose how to unlock this encrypted content:</p>
             <div className="unlock-buttons">
-              <button onClick={() => handleUnlock("tier")} className="primary">
-                <span className="button-icon">🎫</span>
-                <span className="button-text">
-                  <strong>Premium Tier</strong>
-                  <small>{hasTierKey ? "Key cached ✓" : "Unlocks all premium articles"}</small>
-                </span>
-              </button>
-              {encryptedData.article && (
-                <button onClick={() => handleUnlock("article")} className="secondary">
+              {tierKeys.length > 0 && (
+                <button onClick={() => handleUnlock("tier")} className="primary">
+                  <span className="button-icon">🎫</span>
+                  <span className="button-text">
+                    <strong>Premium Tier</strong>
+                    <small>
+                      Unlocks all premium articles ({tierKeys.length} keys)
+                    </small>
+                  </span>
+                </button>
+              )}
+              {articleKeys.length > 0 && (
+                <button
+                  onClick={() => handleUnlock("article")}
+                  className="secondary"
+                >
                   <span className="button-icon">📄</span>
                   <span className="button-text">
                     <strong>Article Only</strong>
-                    <small>{hasArticleKey ? "Key cached ✓" : "Unlocks just this article"}</small>
+                    <small>Unlocks just this article</small>
                   </span>
                 </button>
               )}
             </div>
             <p className="hint">
-              <strong>Tier keys</strong> unlock all articles in the subscription tier.{" "}
-              <strong>Article keys</strong> are specific to this article only.
+              <strong>Tier keys</strong> unlock all articles in the subscription
+              tier. <strong>Article keys</strong> are specific to this article
+              only.
             </p>
           </>
         )}
       </div>
     </div>
   );
-}
-
-// IndexedDB helpers for key storage
-const DB_NAME = "capsule-demo-keys";
-const STORE_NAME = "keypair";
-
-async function loadKeysFromStorage(): Promise<CryptoKeyPair | null> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    
-    request.onerror = () => reject(request.error);
-    
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore(STORE_NAME);
-    };
-    
-    request.onsuccess = () => {
-      const db = request.result;
-      const tx = db.transaction(STORE_NAME, "readonly");
-      const store = tx.objectStore(STORE_NAME);
-      const getRequest = store.get("default");
-      
-      getRequest.onsuccess = () => {
-        resolve(getRequest.result || null);
-      };
-      getRequest.onerror = () => reject(getRequest.error);
-    };
-  });
-}
-
-async function saveKeysToStorage(keyPair: CryptoKeyPair): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    
-    request.onerror = () => reject(request.error);
-    
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore(STORE_NAME);
-    };
-    
-    request.onsuccess = () => {
-      const db = request.result;
-      const tx = db.transaction(STORE_NAME, "readwrite");
-      const store = tx.objectStore(STORE_NAME);
-      store.put(keyPair, "default");
-      
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    };
-  });
-}
-
-// Base64 helpers
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
 }
 
 // Simple markdown-to-HTML converter
