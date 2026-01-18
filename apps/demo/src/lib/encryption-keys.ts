@@ -1,14 +1,20 @@
 /**
  * Server-side encryption keys for different subscription tiers and articles.
  * 
- * TIER KEYS: Derived from master secret + time bucket using HKDF.
+ * TIER KEYS: Derived from master secret + time bucket using HKDF via @sesamy/capsule-server.
  * This provides forward secrecy - old bucket keys can't decrypt new content.
  * 
  * ARTICLE KEYS: Static per-article DEKs (for permanent article-specific access).
  * In production, these would be stored in a KMS.
  */
 
-import { deriveBucketKey, getCurrentBucket, getNextBucket, getBucketExpiration } from "./time-buckets";
+import { 
+  deriveBucketKey as deriveBucketKeyFromServer,
+  getCurrentBucket,
+  getNextBucket,
+  getBucketExpiration,
+} from "@sesamy/capsule-server";
+import { MASTER_SECRET, BUCKET_PERIOD_SECONDS } from "./time-buckets";
 
 /** Valid subscription tiers */
 export const VALID_TIERS = ["premium", "basic"] as const;
@@ -40,8 +46,8 @@ export function getSubscriptionKey(tier: string, bucketId?: string): Buffer {
   if (!isValidTier(tier)) {
     throw new Error(`Unknown subscription tier: ${tier}`);
   }
-  const bucket = bucketId ?? getCurrentBucket();
-  return deriveBucketKey(tier, bucket);
+  const bucket = bucketId ?? getCurrentBucket(BUCKET_PERIOD_SECONDS);
+  return deriveBucketKeyFromServer(MASTER_SECRET, tier, bucket);
 }
 
 /**
@@ -56,19 +62,19 @@ export function getSubscriptionKeysForEncryption(tier: string): {
     throw new Error(`Unknown subscription tier: ${tier}`);
   }
   
-  const currentBucket = getCurrentBucket();
-  const nextBucket = getNextBucket();
+  const currentBucket = getCurrentBucket(BUCKET_PERIOD_SECONDS);
+  const nextBucket = getNextBucket(BUCKET_PERIOD_SECONDS);
   
   return {
     current: {
       bucketId: currentBucket,
-      dek: deriveBucketKey(tier, currentBucket),
-      expiresAt: getBucketExpiration(currentBucket),
+      dek: deriveBucketKeyFromServer(MASTER_SECRET, tier, currentBucket),
+      expiresAt: getBucketExpiration(currentBucket, BUCKET_PERIOD_SECONDS),
     },
     next: {
       bucketId: nextBucket,
-      dek: deriveBucketKey(tier, nextBucket),
-      expiresAt: getBucketExpiration(nextBucket),
+      dek: deriveBucketKeyFromServer(MASTER_SECRET, tier, nextBucket),
+      expiresAt: getBucketExpiration(nextBucket, BUCKET_PERIOD_SECONDS),
     },
   };
 }

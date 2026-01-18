@@ -58,7 +58,7 @@ export class CmsEncryptor {
    * Get bucket keys for a key ID.
    *
    * In TOTP mode: derives from master secret locally.
-   * In API mode: fetches from subscription server.
+   * In API mode: fetches from subscription server (with 10s timeout).
    */
   async getBucketKeys(
     keyId: string
@@ -73,36 +73,53 @@ export class CmsEncryptor {
       throw new Error("API mode requires subscriptionServerUrl and apiKey");
     }
 
-    const response = await fetch(
-      `${this.subscriptionServerUrl}/api/cms/bucket-keys`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({ keyId }),
+    // Set up timeout to prevent hanging on slow/unresponsive servers
+    const TIMEOUT_MS = 10000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    try {
+      const response = await fetch(
+        `${this.subscriptionServerUrl}/api/cms/bucket-keys`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify({ keyId }),
+          signal: controller.signal,
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Failed to fetch bucket keys: ${error}`);
       }
-    );
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Failed to fetch bucket keys: ${error}`);
+      const data = (await response.json()) as BucketKeysApiResponse;
+      return {
+        current: {
+          bucketId: data.current.bucketId,
+          key: Buffer.from(data.current.key, "base64"),
+          expiresAt: new Date(data.current.expiresAt),
+        },
+        next: {
+          bucketId: data.next.bucketId,
+          key: Buffer.from(data.next.key, "base64"),
+          expiresAt: new Date(data.next.expiresAt),
+        },
+      };
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(
+          `Subscription server request timed out after ${TIMEOUT_MS}ms`
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    const data = (await response.json()) as BucketKeysApiResponse;
-    return {
-      current: {
-        bucketId: data.current.bucketId,
-        key: Buffer.from(data.current.key, "base64"),
-        expiresAt: new Date(data.current.expiresAt),
-      },
-      next: {
-        bucketId: data.next.bucketId,
-        key: Buffer.from(data.next.key, "base64"),
-        expiresAt: new Date(data.next.expiresAt),
-      },
-    };
   }
 
   /**

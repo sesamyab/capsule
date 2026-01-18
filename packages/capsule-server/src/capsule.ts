@@ -323,27 +323,39 @@ export class CmsServer {
   async encryptForTemplate(
     articleId: string,
     content: string,
-    options: Omit<EncryptOptions, "format">
+    options: Omit<EncryptOptions, "format"> & {
+      htmlTag?: string;
+      htmlClass?: string;
+      placeholder?: string;
+    }
   ): Promise<{
     data: EncryptedArticle;
     json: string;
     attribute: string;
     html: string;
   }> {
+    // Encrypt ONCE to get the data
     const data = await this.encrypt(articleId, content, {
       ...options,
       format: "json",
     });
     const json = JSON.stringify(data);
+    const attribute = this.escapeHtml(json);
+
+    // Build HTML from the same encrypted data (not a second encryption!)
+    const {
+      htmlTag = "div",
+      htmlClass,
+      placeholder = "Loading encrypted content...",
+    } = options;
+    const classAttr = htmlClass ? ` class="${htmlClass}"` : "";
+    const html = `<${htmlTag}${classAttr} data-capsule='${attribute}' data-capsule-id="${articleId}">${placeholder}</${htmlTag}>`;
 
     return {
       data,
       json,
-      attribute: this.escapeHtml(json),
-      html: (await this.encrypt(articleId, content, {
-        ...options,
-        format: "html",
-      })) as string,
+      attribute,
+      html,
     };
   }
 
