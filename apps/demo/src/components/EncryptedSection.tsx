@@ -21,6 +21,8 @@ interface EncryptedSectionProps {
   articleId: string;
   encryptedData: EncryptedArticle | null;
   securityMode?: DekStorageMode;
+  /** Optional: pre-signed token for share link unlock */
+  token?: string;
 }
 
 type UnlockState = "locked" | "unlocking" | "decrypting" | "unlocked" | "error";
@@ -29,6 +31,7 @@ export function EncryptedSection({
   articleId,
   encryptedData,
   securityMode = "persist",
+  token: propToken,
 }: EncryptedSectionProps) {
   const [state, setState] = useState<UnlockState>("locked");
   const [decryptedContent, setDecryptedContent] = useState<string | null>(null);
@@ -36,6 +39,7 @@ export function EncryptedSection({
   const [isInitializing, setIsInitializing] = useState(true);
   const [usedKeyId, setUsedKeyId] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
+  const [tokenId, setTokenId] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<CapsuleClientType | null>(null);
   const { log } = useConsole();
@@ -124,10 +128,54 @@ export function EncryptedSection({
           keyId,
           wrappedDek,
           publicKey,
+          token,
         }) => {
           const parsed = parseKeyId(keyId);
           const isTierKey = parsed.type === "tier";
 
+          // Token-based unlock
+          if (token) {
+            log(
+              `POST /api/unlock { token: "...", wrappedDek: "...", publicKey: "..." } (share link mode)`,
+              "network"
+            );
+
+            const response = await fetch("/api/unlock", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                token,
+                wrappedDek,
+                publicKey,
+                articleId,
+              }),
+            });
+
+            if (!response.ok) {
+              const data = await response.json();
+              log(`Server error: ${data.error}`, "error");
+              throw new Error(data.error || `Server returned ${response.status}`);
+            }
+
+            const result = await response.json();
+            log(
+              `Share link unlocked! Token ID: ${result.tokenId || "unknown"}`,
+              "success"
+            );
+            log(
+              `Received encrypted DEK (${result.encryptedDek.length} chars)`,
+              "success"
+            );
+
+            if (mounted) {
+              setExpiresAt(new Date(result.expiresAt));
+              setTokenId(result.tokenId || null);
+            }
+
+            return result;
+          }
+
+          // Regular unlock (tier or article key)
           if (isTierKey) {
             log(
               `POST /api/unlock { keyId: "${keyId}", publicKey: "..." } (tier mode - getting KEK)`,
@@ -234,6 +282,46 @@ export function EncryptedSection({
           setIsInitializing(false);
 
           if (encryptedData) {
+            // Check for token in URL or props
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = propToken || urlParams.get("token");
+
+            if (token) {
+              // Auto-unlock with share token
+              log("🔗 Share link token detected! Auto-unlocking...", "info");
+              setState("unlocking");
+
+              try {
+                const content = await client.unlockWithToken(encryptedData, token);
+
+                const tierKey = encryptedData.wrappedKeys.find(
+                  (k) => !k.keyId.startsWith("article:")
+                );
+
+                setDecryptedContent(content);
+                setUsedKeyId(tierKey?.keyId || "token");
+                setState("unlocked");
+                log("✨ Article unlocked via share link!", "success");
+
+                // Clean up token from URL (optional, prevents re-use on refresh)
+                if (urlParams.has("token")) {
+                  const newUrl = new URL(window.location.href);
+                  newUrl.searchParams.delete("token");
+                  window.history.replaceState({}, "", newUrl.toString());
+                  log("Token removed from URL for security", "info");
+                }
+                return;
+              } catch (err) {
+                log(
+                  `Share link unlock failed: ${
+                    err instanceof Error ? err.message : "Unknown error"
+                  }`,
+                  "error"
+                );
+                // Fall through to regular unlock flow
+              }
+            }
+
             // Try auto-decryption with cached keys
             log("Checking for cached decryption keys...", "info");
 
@@ -378,8 +466,9 @@ export function EncryptedSection({
 
   if (state === "unlocked" && decryptedContent && usedKeyId) {
     const parsed = parseKeyId(usedKeyId);
-    const keyLabel =
-      parsed.type === "tier"
+    const keyLabel = tokenId
+      ? `share link`
+      : parsed.type === "tier"
         ? `tier "${parsed.baseId}"`
         : `article "${parsed.baseId}"`;
     const expiryDisplay = getExpiryDisplay();
@@ -387,8 +476,8 @@ export function EncryptedSection({
     return (
       <div className="unlocked-section">
         <div className="unlock-banner">
-          <span>🔓</span>
-          <span>Content decrypted locally (using {keyLabel} key)</span>
+          <span>{tokenId ? "🔗" : "🔓"}</span>
+          <span>Content decrypted locally (using {keyLabel}{tokenId ? ` • token: ${tokenId.slice(0, 8)}...` : ""} key)</span>
           {expiryDisplay && (
             <span
               className="key-expiry-badge"

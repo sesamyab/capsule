@@ -62,6 +62,8 @@ export interface UnlockParams {
   publicKey: string;
   /** Article ID being unlocked */
   articleId: string;
+  /** Optional: pre-signed token for share link unlock */
+  token?: string;
 }
 
 /**
@@ -76,6 +78,8 @@ export interface UnlockResponse {
   bucketId?: string;
   /** Bucket period in seconds */
   bucketPeriodSeconds?: number;
+  /** Token ID (for share link unlocks) */
+  tokenId?: string;
 }
 
 /**

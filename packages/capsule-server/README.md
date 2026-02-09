@@ -211,6 +211,146 @@ app.post("/api/unlock", async (req) => {
 });
 ```
 
+## Share Links & Pre-signed Tokens
+
+Capsule supports pre-signed tokens for sharing content without requiring user authentication. This is perfect for:
+
+- Sharing articles on social media (Facebook, Twitter, LinkedIn)
+- Email campaigns with direct unlock links
+- "Gift this article" features
+- Time-limited promotional access
+
+### Creating Tokens
+
+```typescript
+import { createTokenManager } from "@sesamy/capsule-server";
+
+const tokens = createTokenManager({
+  secret: process.env.TOKEN_SECRET, // Separate from master secret
+});
+
+// Generate a share token
+const token = tokens.generate({
+  tier: "premium",               // Required: which tier to grant access to
+  expiresIn: "7d",              // Required: "1h", "24h", "7d", "30d"
+  articleId: "crypto-guide",    // Optional: restrict to specific article
+  maxUses: 1000,                // Optional: limit total uses
+  userId: "publisher-123",      // Optional: for attribution
+  meta: { campaign: "twitter" }, // Optional: custom metadata
+});
+
+// Create share URL
+const shareUrl = `https://example.com/article/crypto-guide?token=${token}`;
+```
+
+### Validating Tokens
+
+```typescript
+app.post("/api/unlock", async (req) => {
+  const { token, wrappedDek, publicKey, articleId } = req.body;
+
+  // Validate the token
+  const validation = tokens.validate(token);
+  if (!validation.valid) {
+    return res.status(401).json({ error: validation.message });
+  }
+
+  // Log for analytics
+  console.log("Unlock via share link", {
+    tokenId: validation.payload.tid,
+    tier: validation.payload.tier,
+    articleId,
+  });
+
+  // Optional: check usage count from Redis/DB
+  // if (validation.payload.maxUses) {
+  //   const uses = await redis.incr(`token:${validation.payload.tid}:uses`);
+  //   if (uses > validation.payload.maxUses) {
+  //     return res.status(403).json({ error: "Token usage limit exceeded" });
+  //   }
+  // }
+
+  // Unlock using the token
+  const result = server.unlockWithToken(
+    validation.payload,
+    wrappedDek,
+    publicKey,
+    articleId
+  );
+
+  return res.json({ ...result, tokenId: validation.payload.tid });
+});
+```
+
+### Token Structure
+
+Tokens are URL-safe, signed payloads:
+
+```typescript
+interface UnlockTokenPayload {
+  v: 1;                          // Version
+  tid: string;                   // Unique token ID (for tracking/revocation)
+  tier: string;                  // Tier this grants access to
+  articleId?: string;            // Specific article (if restricted)
+  userId?: string;               // Creator attribution
+  maxUses?: number;              // Usage limit
+  iat: number;                   // Issued at (Unix timestamp)
+  exp: number;                   // Expires at (Unix timestamp)
+  meta?: Record<string, any>;    // Custom metadata
+}
+```
+
+### Full Example: Share Link Flow
+
+```typescript
+// 1. Publisher generates share link
+app.post("/api/share", async (req, res) => {
+  const { tier, articleId, expiresIn, maxUses } = req.body;
+  
+  const token = tokens.generate({ tier, articleId, expiresIn, maxUses });
+  const payload = tokens.peek(token);
+  
+  res.json({
+    token,
+    tokenId: payload.tid,
+    shareUrl: `https://example.com/article/${articleId}?token=${token}`,
+    expiresAt: new Date(payload.exp * 1000).toISOString(),
+  });
+});
+
+// 2. Reader clicks link, client unlocks
+// (Client extracts token from URL, sends with unlock request)
+
+// 3. Server validates and unlocks
+app.post("/api/unlock", async (req, res) => {
+  const { token, wrappedDek, publicKey, articleId } = req.body;
+  
+  if (token) {
+    const validation = tokens.validate(token);
+    if (!validation.valid) {
+      return res.status(401).json({ error: validation.message });
+    }
+    
+    // Full audit trail
+    await analytics.log("share_link_unlock", {
+      tokenId: validation.payload.tid,
+      tier: validation.payload.tier,
+      articleId,
+      ip: req.ip,
+    });
+    
+    const result = server.unlockWithToken(
+      validation.payload,
+      wrappedDek,
+      publicKey
+    );
+    return res.json(result);
+  }
+  
+  // Regular unlock flow...
+});
+```
+
 ## How It Works
 
 ### Envelope Encryption
@@ -426,6 +566,44 @@ server.unlockForUser(
   userPublicKey: string,
   staticKeyLookup?: (keyId: string) => Buffer | null
 ): Promise<UnlockResponse>;
+
+// For token-based unlock (share links)
+server.unlockWithToken(
+  tokenPayload: UnlockTokenPayload,
+  wrappedDekB64: string,
+  userPublicKey: string,
+  articleId?: string
+): UnlockResponse;
+```
+
+### TokenManager
+
+```typescript
+import { createTokenManager, TokenManager } from '@sesamy/capsule-server';
+
+const tokens = createTokenManager(options: TokenManagerOptions);
+
+interface TokenManagerOptions {
+  secret: string | Buffer;  // Required, min 32 bytes recommended
+}
+
+// Generate a signed token
+tokens.generate(options: GenerateTokenOptions): string;
+
+interface GenerateTokenOptions {
+  tier: string;              // Required: tier to grant access to
+  expiresIn: string | number; // Required: "1h", "24h", "7d", or seconds
+  articleId?: string;         // Optional: restrict to article
+  maxUses?: number;           // Optional: usage limit
+  userId?: string;            // Optional: creator attribution
+  meta?: Record<string, any>; // Optional: custom metadata
+}
+
+// Validate a token
+tokens.validate(token: string): TokenValidationResult | TokenValidationError;
+
+// Peek at payload without validating (for logging)
+tokens.peek(token: string): UnlockTokenPayload | null;
 ```
 
 See [TypeScript definitions](./src/types.ts) for full type documentation.

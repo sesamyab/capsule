@@ -238,6 +238,70 @@ export class CapsuleClient {
   }
 
   /**
+   * Unlock content using a pre-signed share token.
+   *
+   * This is used for share links (social media, email, etc.) where
+   * the user doesn't need to be authenticated. The token proves
+   * access was granted by the publisher.
+   *
+   * @param article - The encrypted article data
+   * @param token - Pre-signed share token from the URL
+   * @returns Decrypted content string
+   *
+   * @example
+   * ```ts
+   * // Get token from URL
+   * const params = new URLSearchParams(window.location.search);
+   * const token = params.get('token');
+   *
+   * if (token) {
+   *   const content = await capsule.unlockWithToken(article, token);
+   * }
+   * ```
+   */
+  async unlockWithToken(
+    article: EncryptedArticle,
+    token: string
+  ): Promise<string> {
+    if (!this.unlockFn) {
+      throw new Error(
+        "No unlock function provided. Pass an unlock function to the constructor."
+      );
+    }
+
+    const keyPair = await this.ensureKeyPair();
+    const publicKey = await this.getPublicKey();
+
+    // Use the first tier key's wrappedDek (token-based unlock doesn't need keyId)
+    const tierKey = article.wrappedKeys.find(
+      (k) => !k.keyId.startsWith("article:")
+    );
+    if (!tierKey) {
+      throw new Error("No tier key found in article for token-based unlock");
+    }
+
+    const response = await this.unlockFn({
+      keyId: tierKey.keyId,
+      wrappedDek: tierKey.wrappedDek,
+      publicKey,
+      articleId: article.articleId,
+      token,
+    });
+
+    const dek = await this.unwrapDek(keyPair.privateKey, response.encryptedDek);
+
+    // Cache the DEK for future use
+    await this.cacheDek(tierKey.keyId, dek, response);
+
+    this.log(
+      `Unlocked ${article.articleId} with token ${response.tokenId || "unknown"}`,
+      "info"
+    );
+
+    return await this.decryptWithDek(article, dek);
+  }
+
+  /**
    * Decrypt content using cached DEK or by fetching a new one.
    * This is the main decryption method that handles the full flow.
    *

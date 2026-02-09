@@ -185,6 +185,40 @@ Capsule supports two security modes for storing Data Encryption Keys (DEKs), con
 - Time-limited DEKs with bucket rotation
 - Server-side entitlement checks as the primary gate
 
+## Share Links & Pre-signed Tokens
+
+Capsule supports pre-signed tokens for sharing content without user authentication:
+
+```typescript
+import { createTokenManager, createSubscriptionServer } from "@sesamy/capsule-server";
+
+// Generate share tokens
+const tokens = createTokenManager({ secret: process.env.TOKEN_SECRET });
+
+const token = tokens.generate({
+  tier: "premium",
+  expiresIn: "7d",
+  maxUses: 1000,
+});
+
+const shareUrl = `https://example.com/article/my-article?token=${token}`;
+// → Share on Facebook, Twitter, email, etc.
+```
+
+**Use cases:**
+- Social media sharing with full unlock access
+- Email campaigns with direct article access
+- "Gift this article" features
+- Time-limited promotional access
+
+**Benefits:**
+- Full audit trail of every share link unlock
+- No user authentication required for readers
+- Usage limits and expiration controls
+- Works with time-bucketed encryption
+
+See [@sesamy/capsule-server README](./packages/capsule-server/README.md#share-links--pre-signed-tokens) for full documentation.
+
 ## Client Library Usage
 
 ### Installation

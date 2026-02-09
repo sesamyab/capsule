@@ -87,6 +87,18 @@ export {
   createSubscriptionServer,
 } from "./subscription-server";
 
+// Token utilities for pre-signed unlock links
+export {
+  TokenManager,
+  createTokenManager,
+  type TokenManagerOptions,
+  type UnlockTokenPayload,
+  type GenerateTokenOptions,
+  type TokenValidationResult,
+  type TokenValidationError,
+  type UsageTracker,
+} from "./tokens";
+
 // Low-level encryption utilities
 export {
   encryptContent,

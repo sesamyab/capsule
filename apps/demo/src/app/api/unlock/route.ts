@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSubscriptionServer } from "@sesamy/capsule-server";
-import { MASTER_SECRET, BUCKET_PERIOD_SECONDS, totp } from "@/lib/capsule";
+import { createSubscriptionServer, createTokenManager } from "@sesamy/capsule-server";
+import { MASTER_SECRET, BUCKET_PERIOD_SECONDS, totp, TOKEN_SECRET } from "@/lib/capsule";
 
 /**
  * Create subscription server with the same master secret as the CMS.
@@ -11,21 +11,40 @@ const server = createSubscriptionServer({
 });
 
 /**
+ * Token manager for validating pre-signed share tokens.
+ */
+const tokens = createTokenManager({
+  secret: TOKEN_SECRET,
+});
+
+/**
  * POST /api/unlock
  *
- * Two modes of operation:
+ * Three modes of operation:
  *
- * 1. TIER KEY MODE (mode: "tier" or default for tier keys)
+ * 1. TOKEN MODE (when `token` is provided)
+ *    Validates a pre-signed token and unlocks content.
+ *    Used for share links (social media, email, etc.)
+ *    → Full audit trail, no user auth needed
+ *
+ * 2. TIER KEY MODE (mode: "tier" or default for tier keys)
  *    Returns the key-wrapping key (KEK) for a tier.
  *    Client can then unwrap any article's DEK locally.
  *    → "Unlock once, access all premium content"
  *
- * 2. ARTICLE KEY MODE (for article:xxx keys)
+ * 3. ARTICLE KEY MODE (for article:xxx keys)
  *    Returns the unwrapped DEK for a specific article.
  *    → Single article access
  *
  * Request body:
  * {
+ *   // For token mode:
+ *   token?: string (pre-signed share token),
+ *   wrappedDek: string (required for token mode),
+ *   publicKey: string (Base64 SPKI format),
+ *   articleId?: string (optional, for logging),
+ *
+ *   // For tier/article mode:
  *   keyId: string (e.g., "premium:123456" or "article:crypto-guide"),
  *   wrappedDek?: string (required for article keys, optional for tier keys),
  *   publicKey: string (Base64 SPKI format),
@@ -38,25 +57,78 @@ const server = createSubscriptionServer({
  *   keyId: string,
  *   bucketId?: string,
  *   expiresAt: string (ISO 8601),
- *   keyType: "kek" | "dek" (indicates what encryptedDek contains)
+ *   keyType: "kek" | "dek" (indicates what encryptedDek contains),
+ *   tokenId?: string (for token mode, useful for tracking)
  * }
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { keyId, wrappedDek, publicKey, mode } = body;
+    const { token, keyId, wrappedDek, publicKey, mode, articleId } = body;
 
-    // Validate required fields
-    if (!keyId || typeof keyId !== "string") {
+    // Validate public key (required for all modes)
+    if (!publicKey || typeof publicKey !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid keyId" },
+        { error: "Missing or invalid publicKey" },
         { status: 400 }
       );
     }
 
-    if (!publicKey || typeof publicKey !== "string") {
+    // TOKEN MODE: Pre-signed share link unlock
+    if (token) {
+      if (!wrappedDek || typeof wrappedDek !== "string") {
+        return NextResponse.json(
+          { error: "Missing wrappedDek (required for token mode)" },
+          { status: 400 }
+        );
+      }
+
+      // Validate the token
+      const validation = tokens.validate(token);
+      if (!validation.valid) {
+        console.log(`Token validation failed: ${validation.error} - ${validation.message}`);
+        return NextResponse.json(
+          { error: validation.message },
+          { status: 401 }
+        );
+      }
+
+      const payload = validation.payload;
+
+      // Log the unlock for analytics
+      console.log(`[UNLOCK] Token ${payload.tid} used for tier '${payload.tier}'`, {
+        tokenId: payload.tid,
+        tier: payload.tier,
+        articleId: articleId || payload.articleId,
+        userId: payload.userId,
+        maxUses: payload.maxUses,
+        ip: request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip"),
+        timestamp: new Date().toISOString(),
+      });
+
+      // TODO: Check usage count if payload.maxUses is set
+      // This would require a Redis/DB lookup to track usage
+
+      // Unlock using the token
+      const result = server.unlockWithToken(
+        payload,
+        wrappedDek,
+        publicKey,
+        articleId
+      );
+
+      return NextResponse.json({
+        ...result,
+        keyType: "dek",
+        tokenId: payload.tid,
+        bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+      });
+    }
+
+    // TIER/ARTICLE MODE: Requires keyId
+    if (!keyId || typeof keyId !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid publicKey" },
+        { error: "Missing or invalid keyId (or provide a token)" },
         { status: 400 }
       );
     }
