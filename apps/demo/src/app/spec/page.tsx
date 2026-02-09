@@ -640,6 +640,215 @@ plaintext = AES-GCM-Decrypt(DEK, article.ciphertext, article.iv)
 
 // 6. Subsequent articles use cached KEK - "unlock once, access all"`}</CodeBlock>
 
+      <h2>Share Link Tokens</h2>
+      <p>
+        Share links allow pre-authenticated access to premium content without
+        requiring the recipient to have a subscription. This enables social
+        media sharing, email distribution, and promotional campaigns.
+      </p>
+
+      <h3>The Share Link Problem</h3>
+      <p>
+        When creating a shareable link, you need to grant access to content that
+        the link creator doesn't have access to yet. The solution: <strong>
+        signed tokens</strong> that encode the access tier, enabling any holder
+        to unlock content.
+      </p>
+
+      <CodeBlock>{`// Share Link Flow
+Publisher → creates token → shares URL → Recipient clicks → content unlocks
+
+// Key Insight: Token contains TIER, not DEK
+// The DEK comes from the encrypted article at unlock time`}</CodeBlock>
+
+      <h3>Token Structure</h3>
+      <p>
+        Tokens are HMAC-SHA256 signed, base64url-encoded payloads containing:
+      </p>
+
+      <CodeBlock>{`{
+  "tier": "premium",           // Required: access tier
+  "expiresIn": "7d",           // Optional: TTL (default: 7 days)
+  "articleId": "crypto-guide", // Optional: restrict to specific article
+  "maxUses": 100,              // Optional: usage limit
+  "userId": "publisher-123",   // Optional: for analytics
+  "meta": { "campaign": "fb" } // Optional: custom metadata
+}`}</CodeBlock>
+
+      <h3>Token Generation</h3>
+      <CodeBlock>{`import { createTokenManager } from '@sesamy/capsule-server';
+
+// Create manager with signing secret
+const tokens = createTokenManager({ secret: process.env.TOKEN_SECRET });
+
+// Generate a share token
+const token = await tokens.generate({
+  tier: 'premium',
+  expiresIn: '24h',
+  articleId: 'crypto-guide',
+  maxUses: 50,
+  userId: 'publisher-123',
+  meta: { campaign: 'twitter-launch' }
+});
+
+// Create shareable URL
+const shareUrl = \`https://example.com/article/crypto-guide?token=\${token}\`;`}</CodeBlock>
+
+      <h3>Token-Based Unlock Flow</h3>
+      <p>
+        When a user clicks a share link with a token, the unlock flow differs
+        from the standard subscription flow:
+      </p>
+
+      <CodeBlock>{`// Standard Subscription Flow:
+Client → /api/unlock { keyId, publicKey } → validates subscription → returns KEK
+
+// Token-Based Flow:
+Client → /api/unlock { keyId, publicKey, token, wrappedDek } → validates token → returns DEK
+
+// Key difference: token flow returns DEK directly, not KEK`}</CodeBlock>
+
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          marginTop: "1rem",
+          marginBottom: "1rem",
+        }}
+      >
+        <thead>
+          <tr>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Step
+            </th>
+            <th
+              style={{
+                textAlign: "left",
+                padding: "0.5rem",
+                borderBottom: "2px solid #333",
+              }}
+            >
+              Action
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              1. Client extracts token
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Parses <code>?token=...</code> from URL
+            </td>
+          </tr>
+          <tr>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              2. Client sends unlock request
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Includes token + wrapped DEK from article
+            </td>
+          </tr>
+          <tr>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              3. Server validates token
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Verifies signature, expiry, usage limits
+            </td>
+          </tr>
+          <tr>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              4. Server unwraps DEK
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Uses bucket key from token's tier to unwrap
+            </td>
+          </tr>
+          <tr>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              5. Server re-wraps for client
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Encrypts DEK with client's public key
+            </td>
+          </tr>
+          <tr>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              6. Client decrypts content
+            </td>
+            <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
+              Uses DEK to decrypt article
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Server-Side Token Validation</h3>
+      <CodeBlock>{`// Using SubscriptionServer.unlockWithToken()
+const result = await subscriptionServer.unlockWithToken({
+  token,                    // The share token
+  wrappedDek,              // From article.wrappedKeys[keyId]
+  keyId,                   // e.g., "premium:57906340"
+  userPublicKey,           // Client's RSA public key (PEM)
+  articleId,               // For articleId validation
+});
+
+if (result.success) {
+  // result.encryptedDek - DEK wrapped with user's public key
+  // result.tokenPayload - decoded token info (tier, userId, meta)
+  return result.encryptedDek;
+} else {
+  // result.error - "TOKEN_EXPIRED", "TOKEN_INVALID", etc.
+  throw new Error(result.error);
+}`}</CodeBlock>
+
+      <h3>Analytics & Audit Trail</h3>
+      <p>
+        Token-based unlocks provide full audit trail capability:
+      </p>
+      <ul>
+        <li>
+          <strong>Who created the link:</strong> <code>userId</code> in token
+        </li>
+        <li>
+          <strong>What article:</strong> <code>articleId</code> constraint
+        </li>
+        <li>
+          <strong>Campaign tracking:</strong> <code>meta</code> field
+        </li>
+        <li>
+          <strong>Usage counting:</strong> <code>maxUses</code> limit
+        </li>
+      </ul>
+
+      <CodeBlock>{`// Analytics callback in unlock handler
+subscriptionServer.on('tokenUnlock', (event) => {
+  analytics.track('share_link_used', {
+    articleId: event.articleId,
+    publisherId: event.tokenPayload.userId,
+    campaign: event.tokenPayload.meta?.campaign,
+    tier: event.tokenPayload.tier,
+  });
+});`}</CodeBlock>
+
+      <h3>Security Considerations for Share Links</h3>
+      <ul>
+        <li>✅ Tokens are cryptographically signed (HMAC-SHA256)</li>
+        <li>✅ Expiration limits exposure window</li>
+        <li>✅ Usage limits prevent unlimited sharing</li>
+        <li>✅ Article ID restriction prevents token reuse across content</li>
+        <li>✅ Full audit trail for analytics and abuse detection</li>
+        <li>⚠️ Token secret must be kept secure (like master secret)</li>
+        <li>⚠️ Tokens are bearer credentials - anyone with the URL has access</li>
+      </ul>
+
       <h2>Security Considerations</h2>
 
       <h3>Master Secret Protection</h3>

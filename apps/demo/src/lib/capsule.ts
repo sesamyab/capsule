@@ -19,6 +19,14 @@ const MASTER_SECRET =
   );
 
 /**
+ * Secret for signing share tokens.
+ * In production, use a separate secret from the master secret.
+ */
+const TOKEN_SECRET =
+  process.env.CAPSULE_TOKEN_SECRET ||
+  "demo-token-secret-do-not-use-in-production!!";
+
+/**
  * TOTP key provider for deriving time-bucket keys.
  */
 const totp = createTotpKeyProvider({
@@ -56,4 +64,4 @@ export const cms = createCmsServer({
 export const capsule = cms;
 
 // Re-export for convenience
-export { BUCKET_PERIOD_SECONDS, MASTER_SECRET, totp };
+export { BUCKET_PERIOD_SECONDS, MASTER_SECRET, TOKEN_SECRET, totp };

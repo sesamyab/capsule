@@ -149,6 +149,21 @@ const article = JSON.parse(element.dataset.capsule);
 const content = await capsule.unlock(article, "tier");
 ```
 
+#### `unlockWithToken(article: EncryptedArticle, token: string): Promise<string>`
+
+Decrypt content using a pre-signed share token. Use this for share links where the token is passed in the URL.
+
+```typescript
+// Get token from URL (e.g., ?token=eyJhbGc...)
+const params = new URLSearchParams(window.location.search);
+const token = params.get("token");
+
+if (token) {
+  const content = await capsule.unlockWithToken(article, token);
+  console.log("Unlocked via share link!");
+}
+```
+
 ### Low-Level Methods
 
 #### `decrypt(article: EncryptedArticle, encryptedDek: string): Promise<string>`
@@ -278,6 +293,88 @@ const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey }) => {
   return response.json();
 };
 ```
+
+## Share Link Unlock
+
+Capsule supports pre-signed share tokens for unlocking content without user authentication. This enables sharing articles on social media, via email, or as "gift article" links.
+
+### How It Works
+
+1. **Publisher generates a token** on the server (see `@sesamy/capsule-server`)
+2. **Share URL is created**: `https://example.com/article/xyz?token=eyJhbGc...`
+3. **Reader clicks link** - no login required
+4. **Client detects token** and calls `unlockWithToken()`
+5. **Server validates token** and returns DEK wrapped for the client
+6. **Content is decrypted** just like a normal unlock
+
+### Implementation
+
+```typescript
+import { CapsuleClient } from "@sesamy/capsule";
+
+// Create client with token-aware unlock function
+const capsule = new CapsuleClient({
+  unlock: async ({ keyId, wrappedDek, publicKey, token, articleId }) => {
+    // Token is automatically passed if using unlockWithToken()
+    const response = await fetch("/api/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token,        // Pre-signed share token (if present)
+        wrappedDek,
+        publicKey,
+        articleId,
+        keyId,        // Fallback for non-token unlock
+      }),
+    });
+    return response.json();
+  },
+});
+
+// Check for token in URL and auto-unlock
+async function initPage() {
+  const article = JSON.parse(
+    document.querySelector("[data-capsule]")?.dataset.capsule ?? "{}"
+  );
+  
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token");
+
+  if (token && article.articleId) {
+    try {
+      const content = await capsule.unlockWithToken(article, token);
+      renderContent(content);
+      
+      // Optional: remove token from URL for cleaner sharing
+      const url = new URL(window.location.href);
+      url.searchParams.delete("token");
+      history.replaceState({}, "", url);
+    } catch (err) {
+      console.error("Share link unlock failed:", err);
+      // Fall back to normal unlock flow or show paywall
+    }
+  }
+}
+```
+
+### Token Properties
+
+Tokens can include:
+
+| Property | Description |
+|----------|-------------|
+| `tier` | Required. Which tier this grants access to |
+| `expiresIn` | Required. Token validity: "1h", "24h", "7d", "30d" |
+| `articleId` | Optional. Restrict to specific article |
+| `maxUses` | Optional. Limit total uses across all readers |
+| `userId` | Optional. Track which user/publisher created the link |
+
+### Server-Side Token Handling
+
+See [@sesamy/capsule-server](https://github.com/user/capsule/tree/main/packages/capsule-server#share-links--pre-signed-tokens) for:
+- Token generation with `createTokenManager()`
+- Token validation in your unlock endpoint
+- The `unlockWithToken()` server method
 
 ## DEK Storage Modes
 
