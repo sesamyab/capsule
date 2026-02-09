@@ -9,6 +9,128 @@ Capsule provides a complete solution for encrypting and decrypting premium conte
 1. **Server-side**: Encrypts articles using AES-256-GCM with unique Data Encryption Keys (DEKs), then wraps DEKs with the recipient's RSA public key
 2. **Client-side**: Decrypts wrapped DEKs using a non-extractable private RSA key stored in IndexedDB, then decrypts the article content
 
+### Two Unlock Flows
+
+Capsule supports two ways to unlock content:
+
+| Flow | Use Case | User Auth Required |
+|------|----------|-------------------|
+| **Subscription Flow** | Logged-in subscribers unlock content | ✅ Yes |
+| **Share Link Flow** | Anyone with a link can unlock | ❌ No |
+
+## Share Links (Pre-signed Tokens)
+
+Publishers can generate shareable links that unlock content without requiring user authentication. Perfect for:
+
+- 📱 **Social Media** - Share articles on Facebook, Twitter, LinkedIn
+- 📧 **Email Campaigns** - Direct article access in newsletters  
+- 🎁 **Gift Articles** - "Send this article to a friend"
+- ⏰ **Promotions** - Time-limited free access
+
+### How Share Links Work
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SHARE LINK FLOW                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. PUBLISHER GENERATES TOKEN                                               │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │  POST /api/share { tier: "premium", expiresIn: "7d" }           │     │
+│     │                          ↓                                       │     │
+│     │  Token: eyJhbGc... (signed with server secret)                  │     │
+│     │  URL: https://example.com/article/xyz?token=eyJhbGc...          │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  2. READER CLICKS LINK (no login required)                                  │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │  Browser loads page with encrypted content                       │     │
+│     │  Client generates ephemeral RSA key pair                         │     │
+│     │  Client extracts token from URL                                  │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  3. CLIENT REQUESTS UNLOCK                                                  │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │  POST /api/unlock {                                              │     │
+│     │    token: "eyJhbGc...",      // Proves access                   │     │
+│     │    wrappedDek: "...",        // From encrypted article          │     │
+│     │    publicKey: "..."          // Client's ephemeral key          │     │
+│     │  }                                                               │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  4. SERVER VALIDATES & UNLOCKS                                              │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │  ✓ Validate token signature                                      │     │
+│     │  ✓ Check expiration                                              │     │
+│     │  ✓ Log unlock for analytics (article, token, timestamp, IP)     │     │
+│     │  → Derive KEK from tier + bucket                                 │     │
+│     │  → Unwrap DEK, re-wrap for client's public key                  │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+│  5. CLIENT DECRYPTS                                                         │
+│     ┌─────────────────────────────────────────────────────────────────┐     │
+│     │  Unwrap DEK with private key → Decrypt content with AES-GCM     │     │
+│     │  ✨ Article displayed!                                           │     │
+│     └─────────────────────────────────────────────────────────────────┘     │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Quick Example
+
+```typescript
+// Server: Generate share link
+import { createTokenManager } from "@sesamy/capsule-server";
+
+const tokens = createTokenManager({ secret: process.env.TOKEN_SECRET });
+
+const token = tokens.generate({
+  tier: "premium",
+  expiresIn: "7d",
+  maxUses: 1000,        // Optional: limit uses
+  articleId: "my-article", // Optional: restrict to article
+});
+
+const shareUrl = `https://example.com/article/my-article?token=${token}`;
+// → Share this URL on social media!
+```
+
+```typescript
+// Client: Auto-unlock when token in URL
+const capsule = new CapsuleClient({
+  unlock: async (params) => {
+    // Token is automatically included if present in URL
+    return fetch("/api/unlock", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }).then(r => r.json());
+  },
+});
+
+// Check for token and unlock
+const urlParams = new URLSearchParams(window.location.search);
+const token = urlParams.get("token");
+
+if (token) {
+  await capsule.unlockWithToken(article, token);
+}
+```
+
+### Analytics & Tracking
+
+Every share link unlock is logged with:
+- **Token ID** - Unique identifier for the token
+- **Tier** - Which tier was accessed
+- **Article ID** - Which article was unlocked
+- **Timestamp** - When the unlock occurred
+- **IP Address** - Reader's location (for geo analytics)
+
+This gives publishers full visibility: *"Share link X was used 847 times, peaked at 3pm when the Twitter post went viral."*
+
+See detailed documentation:
+- [@sesamy/capsule-server](./packages/capsule-server/README.md#share-links--pre-signed-tokens) - Token generation and validation
+- [@sesamy/capsule](./packages/capsule-client/README.md#share-link-unlock) - Client-side token handling
+
 ## Monorepo Structure
 
 This is a pnpm workspace monorepo containing:
@@ -18,16 +140,18 @@ capsule/
 ├── apps/
 │   └── demo/              # Next.js demo application
 ├── packages/
-│   └── capsule-client/    # Browser decryption library (publishable npm package)
+│   ├── capsule-client/    # Browser decryption library
+│   └── capsule-server/    # Server-side encryption & token management
 ├── package.json           # Workspace root
 └── pnpm-workspace.yaml
 ```
 
 ### Packages
 
-| Package           | Description                            | Location                                             |
-| ----------------- | -------------------------------------- | ---------------------------------------------------- |
-| `@sesamy/capsule` | Browser client-side decryption library | [packages/capsule-client](./packages/capsule-client) |
+| Package                  | Description                              | Location                                               |
+| ------------------------ | ---------------------------------------- | ------------------------------------------------------ |
+| `@sesamy/capsule`        | Browser client-side decryption library   | [packages/capsule-client](./packages/capsule-client)   |
+| `@sesamy/capsule-server` | Server encryption, tokens & unlock       | [packages/capsule-server](./packages/capsule-server)   |
 
 ### Apps
 
@@ -184,40 +308,6 @@ Capsule supports two security modes for storing Data Encryption Keys (DEKs), con
 - Subresource Integrity (SRI) for all scripts
 - Time-limited DEKs with bucket rotation
 - Server-side entitlement checks as the primary gate
-
-## Share Links & Pre-signed Tokens
-
-Capsule supports pre-signed tokens for sharing content without user authentication:
-
-```typescript
-import { createTokenManager, createSubscriptionServer } from "@sesamy/capsule-server";
-
-// Generate share tokens
-const tokens = createTokenManager({ secret: process.env.TOKEN_SECRET });
-
-const token = tokens.generate({
-  tier: "premium",
-  expiresIn: "7d",
-  maxUses: 1000,
-});
-
-const shareUrl = `https://example.com/article/my-article?token=${token}`;
-// → Share on Facebook, Twitter, email, etc.
-```
-
-**Use cases:**
-- Social media sharing with full unlock access
-- Email campaigns with direct article access
-- "Gift this article" features
-- Time-limited promotional access
-
-**Benefits:**
-- Full audit trail of every share link unlock
-- No user authentication required for readers
-- Usage limits and expiration controls
-- Works with time-bucketed encryption
-
-See [@sesamy/capsule-server README](./packages/capsule-server/README.md#share-links--pre-signed-tokens) for full documentation.
 
 ## Client Library Usage
 

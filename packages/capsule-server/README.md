@@ -215,10 +215,54 @@ app.post("/api/unlock", async (req) => {
 
 Capsule supports pre-signed tokens for sharing content without requiring user authentication. This is perfect for:
 
-- Sharing articles on social media (Facebook, Twitter, LinkedIn)
-- Email campaigns with direct unlock links
-- "Gift this article" features
-- Time-limited promotional access
+- 📱 Sharing articles on social media (Facebook, Twitter, LinkedIn)
+- 📧 Email campaigns with direct unlock links
+- 🎁 "Gift this article" features
+- ⏰ Time-limited promotional access
+
+### How Share Links Work
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SHARE LINK FLOW                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  PUBLISHER                         READER                    SERVER         │
+│  ─────────                         ──────                    ──────         │
+│      │                                │                          │          │
+│      │ 1. Generate token              │                          │          │
+│      │    (tier, expiry, maxUses)     │                          │          │
+│      │─────────────────────────────►  │                          │          │
+│      │                                │                          │          │
+│      │ 2. Create share URL            │                          │          │
+│      │    ?token=eyJhbGc...           │                          │          │
+│      │                                │                          │          │
+│  ════╪════════════════════════════════╪══════════════════════════╪════════  │
+│      │     (Share on social media)    │                          │          │
+│  ════╪════════════════════════════════╪══════════════════════════╪════════  │
+│                                       │                          │          │
+│                     3. Click link ───►│                          │          │
+│                                       │                          │          │
+│                                       │ 4. Extract token from URL│          │
+│                                       │    Generate RSA keypair  │          │
+│                                       │                          │          │
+│                                       │ 5. POST /api/unlock ────►│          │
+│                                       │    { token, wrappedDek,  │          │
+│                                       │      publicKey }         │          │
+│                                       │                          │          │
+│                                       │                 6. Validate token   │
+│                                       │                    Check expiry     │
+│                                       │                    Log analytics    │
+│                                       │                          │          │
+│                                       │◄─────────────── 7. Return DEK       │
+│                                       │                    (wrapped for     │
+│                                       │                     client key)     │
+│                                       │                          │          │
+│                                       │ 8. Decrypt content       │          │
+│                                       │    Display article ✨    │          │
+│                                       │                          │          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ### Creating Tokens
 
