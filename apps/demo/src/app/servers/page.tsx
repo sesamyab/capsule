@@ -1,7 +1,9 @@
 import { CodeBlock } from "@/components/CodeBlock";
+import { PageWithToc } from "@/components/PageWithToc";
 
 export default function ServersPage() {
   return (
+    <PageWithToc>
     <main className="content-page">
       <h1>Server Implementations</h1>
       <p>
@@ -788,6 +790,140 @@ curl -X POST http://localhost:3000/api/unlock \\
         </li>
       </ul>
 
+      <h2>Share Link Tokens</h2>
+      <p>
+        Share links allow pre-authenticated access to premium content. Tokens can
+        be signed with <strong>HMAC-SHA256</strong> (symmetric) or{" "}
+        <strong>Ed25519</strong> (asymmetric with JWKS).
+      </p>
+
+      <h3>HMAC Token Generation</h3>
+      <p>
+        Simple shared-secret signing for first-party tokens:
+      </p>
+      <CodeBlock>{`import { createTokenManager } from '@sesamy/capsule-server';
+
+const tokens = createTokenManager({
+  secret: process.env.TOKEN_SECRET,
+  issuer: 'my-publisher',
+  keyId: 'key-2026-01',
+});
+
+// Generate a share token
+const token = tokens.generate({
+  tier: 'premium',
+  contentId: 'article-123',
+  expiresIn: '7d',
+  maxUses: 100,
+});
+
+// Create shareable URL
+const url = \`https://example.com/article/123?token=\${token}\`;`}</CodeBlock>
+
+      <h3>Ed25519 Token Generation (Asymmetric)</h3>
+      <p>
+        For cross-domain validation without sharing secrets, use Ed25519 signing
+        with JWKS public key discovery:
+      </p>
+      <CodeBlock>{`import { 
+  AsymmetricTokenManager, 
+  generateSigningKeyPair 
+} from '@sesamy/capsule-server';
+
+// Generate or load a key pair (store the private key securely!)
+const keyPair = await generateSigningKeyPair();
+
+const tokenManager = new AsymmetricTokenManager({
+  issuer: 'https://api.example.com',  // URL used for JWKS discovery
+  keyId: 'key-2026-01',
+  keyPair,
+});
+
+// Generate an Ed25519-signed token
+const token = await tokenManager.generate({
+  tier: 'premium',
+  contentId: 'article-123',
+  expiresIn: '30d',  // Tokens can be long-lived
+});`}</CodeBlock>
+
+      <h3>Exposing JWKS Endpoint</h3>
+      <p>
+        Expose your public keys at <code>/.well-known/jwks.json</code> so clients
+        can validate tokens without needing your secret:
+      </p>
+      <CodeBlock>{`// Next.js: app/.well-known/jwks.json/route.ts
+import { tokenManager } from '@/lib/tokens';
+
+export async function GET() {
+  return Response.json(tokenManager.getJwks());
+}
+
+// Returns:
+// {
+//   "keys": [{
+//     "kty": "OKP",
+//     "crv": "Ed25519",
+//     "kid": "key-2026-01",
+//     "x": "base64url-public-key",
+//     "use": "sig",
+//     "alg": "EdDSA"
+//   }]
+// }`}</CodeBlock>
+
+      <h3>Key Rotation with JWKS</h3>
+      <p>
+        Token signing keys are <strong>separate from time bucket keys</strong>.
+        Signing keys should be long-lived (months/years) since tokens may be valid
+        for 30+ days. For rotation, add new keys to JWKS before using them:
+      </p>
+      <CodeBlock>{`// Support multiple signing keys during rotation
+const currentKeyPair = await generateSigningKeyPair();
+const previousKeyPair = loadPreviousKeyPair();
+
+// Create managers for both keys
+const currentManager = new AsymmetricTokenManager({
+  issuer: 'https://api.example.com',
+  keyId: 'key-2026-01',
+  keyPair: currentKeyPair,
+});
+
+const previousManager = new AsymmetricTokenManager({
+  issuer: 'https://api.example.com',
+  keyId: 'key-2025-01',
+  keyPair: previousKeyPair,
+});
+
+// Expose both public keys in JWKS
+export async function GET() {
+  return Response.json({
+    keys: [
+      ...currentManager.getJwks().keys,   // Current signing key
+      ...previousManager.getJwks().keys,  // Previous (still validating old tokens)
+    ]
+  });
+}
+
+// Sign new tokens with current key only
+const token = await currentManager.generate({ ... });`}</CodeBlock>
+
+      <h3>Token Validation (Server-Side)</h3>
+      <CodeBlock>{`import { createTokenManager } from '@sesamy/capsule-server';
+
+const tokens = createTokenManager({
+  secret: process.env.TOKEN_SECRET,
+  issuer: 'my-publisher',
+  keyId: 'key-2026-01',
+});
+
+// Validate HMAC token
+const result = tokens.validate(token);
+if (!result.valid) {
+  throw new Error(result.message);
+}
+
+// Use validated payload
+const { tier, contentId, exp, userId } = result.payload;`}</CodeBlock>
+
       <h2>Node.js</h2>
       <p>
         The Node.js implementation uses the built-in <code>crypto</code> module
@@ -1001,5 +1137,6 @@ def wrap_dek(dek: bytes, public_key_spki: str) -> str:
         .
       </p>
     </main>
+    </PageWithToc>
   );
 }

@@ -356,21 +356,21 @@ export class SubscriptionServer {
    * @param tokenPayload - Validated token payload (from TokenManager.validate())
    * @param wrappedDekB64 - Base64 wrapped DEK from the article
    * @param userPublicKeyB64 - Reader's RSA public key (Base64 SPKI)
-   * @param articleId - Optional article ID for logging/validation
+   * @param contentId - Optional content ID for validation (compared against token.contentId)
    * @returns Unlock response with DEK wrapped for the reader
    */
   unlockWithToken(
     tokenPayload: UnlockTokenPayload,
     wrappedDekB64: string,
     userPublicKeyB64: string,
-    articleId?: string
+    contentId?: string
   ): UnlockResponse {
     const { tier } = tokenPayload;
 
-    // If token specifies an articleId, validate it matches
-    if (tokenPayload.articleId && articleId && tokenPayload.articleId !== articleId) {
+    // Validate contentId matches (token always has contentId)
+    if (contentId && tokenPayload.contentId !== contentId) {
       throw new Error(
-        `Token is for article '${tokenPayload.articleId}', not '${articleId}'`
+        `Token is for content '${tokenPayload.contentId}', not '${contentId}'`
       );
     }
 

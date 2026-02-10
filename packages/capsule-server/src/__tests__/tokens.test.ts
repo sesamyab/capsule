@@ -6,7 +6,11 @@ describe("TokenManager", () => {
   const testSecret = "test-secret-key-that-is-at-least-32-bytes-long";
 
   beforeEach(() => {
-    tokens = createTokenManager({ secret: testSecret });
+    tokens = createTokenManager({
+      secret: testSecret,
+      issuer: "test-issuer",
+      keyId: "key-2026-01",
+    });
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-09T12:00:00Z"));
   });
@@ -19,6 +23,7 @@ describe("TokenManager", () => {
     it("should generate a valid token", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "24h",
       });
 
@@ -30,8 +35,9 @@ describe("TokenManager", () => {
     it("should include all specified options in the payload", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "test-article",
         expiresIn: "7d",
-        articleId: "test-article",
+        url: "https://example.com/article/test-article",
         userId: "user-123",
         maxUses: 100,
         meta: { campaign: "twitter" },
@@ -41,7 +47,10 @@ describe("TokenManager", () => {
       expect(result.valid).toBe(true);
       if (result.valid) {
         expect(result.payload.tier).toBe("premium");
-        expect(result.payload.articleId).toBe("test-article");
+        expect(result.payload.iss).toBe("test-issuer");
+        expect(result.payload.kid).toBe("key-2026-01");
+        expect(result.payload.contentId).toBe("test-article");
+        expect(result.payload.url).toBe("https://example.com/article/test-article");
         expect(result.payload.userId).toBe("user-123");
         expect(result.payload.maxUses).toBe(100);
         expect(result.payload.meta).toEqual({ campaign: "twitter" });
@@ -49,8 +58,8 @@ describe("TokenManager", () => {
     });
 
     it("should generate unique token IDs", () => {
-      const token1 = tokens.generate({ tier: "premium", expiresIn: "1h" });
-      const token2 = tokens.generate({ tier: "premium", expiresIn: "1h" });
+      const token1 = tokens.generate({ tier: "premium", contentId: "article-1", expiresIn: "1h" });
+      const token2 = tokens.generate({ tier: "premium", contentId: "article-2", expiresIn: "1h" });
 
       const payload1 = tokens.peek(token1);
       const payload2 = tokens.peek(token2);
@@ -61,32 +70,32 @@ describe("TokenManager", () => {
     it("should set correct expiration for various duration formats", () => {
       const now = Math.floor(Date.now() / 1000);
 
-      const token1h = tokens.generate({ tier: "test", expiresIn: "1h" });
+      const token1h = tokens.generate({ tier: "test", contentId: "art-1", expiresIn: "1h" });
       expect(tokens.peek(token1h)?.exp).toBe(now + 3600);
 
-      const token24h = tokens.generate({ tier: "test", expiresIn: "24h" });
+      const token24h = tokens.generate({ tier: "test", contentId: "art-2", expiresIn: "24h" });
       expect(tokens.peek(token24h)?.exp).toBe(now + 86400);
 
-      const token7d = tokens.generate({ tier: "test", expiresIn: "7d" });
+      const token7d = tokens.generate({ tier: "test", contentId: "art-3", expiresIn: "7d" });
       expect(tokens.peek(token7d)?.exp).toBe(now + 604800);
 
-      const token30s = tokens.generate({ tier: "test", expiresIn: "30s" });
+      const token30s = tokens.generate({ tier: "test", contentId: "art-4", expiresIn: "30s" });
       expect(tokens.peek(token30s)?.exp).toBe(now + 30);
 
-      const token5m = tokens.generate({ tier: "test", expiresIn: "5m" });
+      const token5m = tokens.generate({ tier: "test", contentId: "art-5", expiresIn: "5m" });
       expect(tokens.peek(token5m)?.exp).toBe(now + 300);
 
-      const tokenNumeric = tokens.generate({ tier: "test", expiresIn: 3600 });
+      const tokenNumeric = tokens.generate({ tier: "test", contentId: "art-6", expiresIn: 3600 });
       expect(tokens.peek(tokenNumeric)?.exp).toBe(now + 3600);
     });
 
     it("should throw for invalid duration format", () => {
       expect(() =>
-        tokens.generate({ tier: "test", expiresIn: "invalid" })
+        tokens.generate({ tier: "test", contentId: "art", expiresIn: "invalid" })
       ).toThrow("Invalid duration format");
 
       expect(() =>
-        tokens.generate({ tier: "test", expiresIn: "1w" })
+        tokens.generate({ tier: "test", contentId: "art", expiresIn: "1w" })
       ).toThrow("Invalid duration format");
     });
   });
@@ -95,6 +104,7 @@ describe("TokenManager", () => {
     it("should validate a valid token", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "24h",
       });
 
@@ -102,6 +112,8 @@ describe("TokenManager", () => {
       expect(result.valid).toBe(true);
       if (result.valid) {
         expect(result.payload.tier).toBe("premium");
+        expect(result.payload.iss).toBe("test-issuer");
+        expect(result.payload.kid).toBe("key-2026-01");
         expect(result.payload.v).toBe(1);
       }
     });
@@ -109,6 +121,7 @@ describe("TokenManager", () => {
     it("should reject an expired token", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "1h",
       });
 
@@ -126,6 +139,7 @@ describe("TokenManager", () => {
     it("should reject a token with invalid signature", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "24h",
       });
 
@@ -144,10 +158,13 @@ describe("TokenManager", () => {
     it("should reject a token signed with a different secret", () => {
       const otherTokens = createTokenManager({
         secret: "different-secret-that-is-also-32-bytes",
+        issuer: "other-issuer",
+        keyId: "other-key",
       });
 
       const token = otherTokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "24h",
       });
 
@@ -175,6 +192,7 @@ describe("TokenManager", () => {
     it("should reject a token with tampered payload", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "24h",
       });
 
@@ -198,7 +216,7 @@ describe("TokenManager", () => {
       const token = tokens.generate({
         tier: "premium",
         expiresIn: "1h",
-        articleId: "test",
+        contentId: "test-article",
       });
 
       // Advance time past expiration
@@ -211,7 +229,7 @@ describe("TokenManager", () => {
       const payload = tokens.peek(token);
       expect(payload).not.toBeNull();
       expect(payload?.tier).toBe("premium");
-      expect(payload?.articleId).toBe("test");
+      expect(payload?.contentId).toBe("test-article");
     });
 
     it("should return null for invalid tokens", () => {
@@ -229,7 +247,7 @@ describe("TokenManager", () => {
     it("should warn about short secrets", () => {
       const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      createTokenManager({ secret: "short" });
+      createTokenManager({ secret: "short", issuer: "test", keyId: "key-1" });
 
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("should be at least 32 bytes")
@@ -241,10 +259,13 @@ describe("TokenManager", () => {
     it("should accept Buffer as secret", () => {
       const bufferTokens = createTokenManager({
         secret: Buffer.from(testSecret, "utf-8"),
+        issuer: "buffer-issuer",
+        keyId: "buffer-key",
       });
 
       const token = bufferTokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "1h",
       });
 
@@ -255,6 +276,7 @@ describe("TokenManager", () => {
     it("should generate URL-safe tokens", () => {
       const token = tokens.generate({
         tier: "premium",
+        contentId: "article-123",
         expiresIn: "24h",
         meta: { special: "chars+/=" },
       });

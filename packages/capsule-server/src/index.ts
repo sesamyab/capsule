@@ -99,6 +99,21 @@ export {
   type UsageTracker,
 } from "./tokens";
 
+// Asymmetric token signing (Ed25519 with JWKS support)
+export {
+  AsymmetricTokenManager,
+  createAsymmetricTokenManager,
+  generateSigningKeyPair,
+  type SigningKeyPair,
+  type Jwks,
+  type JwkKey,
+  type AsymmetricTokenPayload,
+  type AsymmetricGenerateOptions,
+  type AsymmetricTokenManagerOptions,
+  type AsymmetricValidationResult,
+  type AsymmetricValidationError,
+} from "./asymmetric-tokens";
+
 // Low-level encryption utilities
 export {
   encryptContent,

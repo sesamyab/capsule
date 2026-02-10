@@ -1,7 +1,9 @@
 import { CodeBlock } from "@/components/CodeBlock";
+import { PageWithToc } from "@/components/PageWithToc";
 
 export default function ClientPage() {
   return (
+    <PageWithToc>
     <main className="content-page">
       <h1>Client Integration</h1>
       <p>
@@ -359,6 +361,158 @@ function Article({ encryptedData }) {
         leaves the browser's crypto subsystem).
       </p>
 
+      <h2>Share Link Token Validation</h2>
+      <p>
+        The client library includes utilities for validating share link tokens
+        without server round-trips. This enables quick expiry checks, content
+        routing, and full signature verification.
+      </p>
+
+      <h3>Basic Token Parsing</h3>
+      <p>
+        Parse tokens without signature verification (for routing/display):
+      </p>
+      <CodeBlock>{`import { parseShareToken, getShareTokenFromUrl } from '@sesamy/capsule';
+
+// Parse from URL parameter
+const token = new URLSearchParams(window.location.search).get('token');
+if (token) {
+  const result = parseShareToken(token);
+  
+  if (result.valid && !result.expired) {
+    console.log(\`Content: \${result.payload.contentId}\`);
+    console.log(\`Issuer: \${result.payload.iss}\`);
+    console.log(\`Expires in: \${result.expiresIn}s\`);
+  }
+}
+
+// Or use the helper
+const urlToken = getShareTokenFromUrl();
+if (urlToken?.valid) {
+  // Redirect to correct content if needed
+  if (urlToken.payload.contentId !== currentArticleId) {
+    window.location.href = urlToken.payload.url || \`/article/\${urlToken.payload.contentId}\`;
+  }
+}`}</CodeBlock>
+
+      <h3>HMAC Signature Validation</h3>
+      <p>
+        For first-party tokens with shared secrets:
+      </p>
+      <CodeBlock>{`import { TokenValidator } from '@sesamy/capsule';
+
+const validator = new TokenValidator({
+  trustedKeys: {
+    'my-publisher:key-2026-01': 'shared-secret',
+    'partner:key-v1': 'partner-secret',
+  },
+  requireTrustedIssuer: true,
+});
+
+const result = await validator.validate(token);
+
+if (result.valid && !result.expired) {
+  console.log(\`Verified! Issuer: \${result.payload.iss}\`);
+  await capsule.unlockWithToken(article, token);
+}`}</CodeBlock>
+
+      <h3>JWKS Validation (Ed25519)</h3>
+      <p>
+        For tokens signed with Ed25519, the client fetches public keys from
+        the issuer's <code>/.well-known/jwks.json</code> endpoint:
+      </p>
+      <CodeBlock>{`import { JwksTokenValidator } from '@sesamy/capsule';
+
+// Whitelist trusted issuers by URL
+const validator = new JwksTokenValidator({
+  trustedIssuers: [
+    'https://api.example.com',
+    'https://partner.example.org',
+  ],
+});
+
+// Validate - fetches JWKS automatically
+const result = await validator.validate(token);
+
+if (result.valid && !result.expired) {
+  console.log(\`Verified from \${result.issuer}\`);
+  console.log(\`Key ID: \${result.keyId}\`);
+  await capsule.unlockWithToken(article, token);
+}
+
+// JWKS Discovery Flow:
+// 1. Token contains iss = "https://api.example.com"
+// 2. Client checks iss is in trustedIssuers (security!)
+// 3. Fetches https://api.example.com/.well-known/jwks.json
+// 4. Finds key with matching kid
+// 5. Verifies Ed25519 signature`}</CodeBlock>
+
+      <h3>Issuer Whitelist Security</h3>
+      <p>
+        The <code>trustedIssuers</code> whitelist is critical - without it,
+        anyone could create their own signing key and generate valid tokens.
+        Only fetch JWKS from issuers you explicitly trust:
+      </p>
+      <CodeBlock>{`// Good: explicit whitelist
+const validator = new JwksTokenValidator({
+  trustedIssuers: ['https://api.yoursite.com'],
+});
+
+// Add partners at runtime
+validator.addTrustedIssuer('https://api.partner.com');
+
+// Check trust status
+validator.isTrustedIssuer('https://api.yoursite.com');  // true
+validator.isTrustedIssuer('https://evil.com');          // false
+
+// Tokens from untrusted issuers are rejected
+// BEFORE any network request is made`}</CodeBlock>
+
+      <h3>Complete Share Link Flow</h3>
+      <CodeBlock>{`import { CapsuleClient, JwksTokenValidator, getShareTokenFromUrl } from '@sesamy/capsule';
+
+const validator = new JwksTokenValidator({
+  trustedIssuers: ['https://api.yoursite.com'],
+});
+
+const capsule = new CapsuleClient({
+  unlock: async (params) => {
+    const res = await fetch('/api/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return res.json();
+  },
+});
+
+async function handleShareLink() {
+  const tokenInfo = getShareTokenFromUrl();
+  if (!tokenInfo?.valid) return;
+
+  // Full signature validation via JWKS
+  const validation = await validator.validateFromUrl();
+  if (!validation?.valid) {
+    showError(\`Invalid share link: \${validation.message}\`);
+    return;
+  }
+
+  if (validation.expired) {
+    showError('This share link has expired');
+    return;
+  }
+
+  // Unlock content
+  const article = getArticleData(validation.payload.contentId);
+  const content = await capsule.unlockWithToken(article, tokenInfo.token);
+  renderContent(content);
+
+  // Clean URL
+  const url = new URL(window.location.href);
+  url.searchParams.delete('token');
+  history.replaceState({}, '', url);
+}`}</CodeBlock>
+
       <h2>Security Model</h2>
 
       <h3>Private Key Protection: The Core Guarantee</h3>
@@ -640,5 +794,6 @@ await fetch('https://attacker.com', {
         localhost).
       </p>
     </main>
+    </PageWithToc>
   );
 }

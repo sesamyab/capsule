@@ -91,7 +91,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
               Generate a pre-signed link to share this article on social media or via email.
               Recipients can unlock the content without logging in.
             </p>
-            <ShareButton articleId={article.id} tier="premium" />
+            <ShareButton contentId={article.id} tier="premium" />
           </section>
         </article>
       </main>

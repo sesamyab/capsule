@@ -3,8 +3,8 @@
 import { useState } from "react";
 
 interface ShareButtonProps {
-  /** Article ID to share (optional, if not set, token works for any article in tier) */
-  articleId?: string;
+  /** Content ID to share (required) */
+  contentId: string;
   /** Tier for the share token */
   tier?: string;
 }
@@ -12,6 +12,9 @@ interface ShareButtonProps {
 interface ShareResult {
   token: string;
   tokenId: string;
+  issuer: string;
+  keyId: string;
+  contentId: string;
   expiresAt: string;
   shareUrl: string;
 }
@@ -22,7 +25,7 @@ interface ShareResult {
  * Publishers can use this to create pre-signed links that allow
  * readers to unlock content without authentication.
  */
-export function ShareButton({ articleId, tier = "premium" }: ShareButtonProps) {
+export function ShareButton({ contentId, tier = "premium" }: ShareButtonProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [shareResult, setShareResult] = useState<ShareResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export function ShareButton({ articleId, tier = "premium" }: ShareButtonProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           tier,
-          articleId,
+          contentId,
           expiresIn,
           maxUses: maxUses ? parseInt(maxUses, 10) : undefined,
         }),

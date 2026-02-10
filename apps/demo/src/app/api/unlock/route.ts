@@ -15,6 +15,8 @@ const server = createSubscriptionServer({
  */
 const tokens = createTokenManager({
   secret: TOKEN_SECRET,
+  issuer: "capsule-demo",
+  keyId: "demo-key-2026",
 });
 
 /**
@@ -64,7 +66,7 @@ const tokens = createTokenManager({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { token, keyId, wrappedDek, publicKey, mode, articleId } = body;
+    const { token, keyId, wrappedDek, publicKey, mode, contentId } = body;
 
     // Validate public key (required for all modes)
     if (!publicKey || typeof publicKey !== "string") {
@@ -98,8 +100,10 @@ export async function POST(request: NextRequest) {
       // Log the unlock for analytics
       console.log(`[UNLOCK] Token ${payload.tid} used for tier '${payload.tier}'`, {
         tokenId: payload.tid,
+        issuer: payload.iss,
+        keyId: payload.kid,
         tier: payload.tier,
-        articleId: articleId || payload.articleId,
+        contentId: contentId || payload.contentId,
         userId: payload.userId,
         maxUses: payload.maxUses,
         ip: request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip"),
@@ -109,18 +113,20 @@ export async function POST(request: NextRequest) {
       // TODO: Check usage count if payload.maxUses is set
       // This would require a Redis/DB lookup to track usage
 
-      // Unlock using the token
+      // Unlock using the token (validates contentId matches)
       const result = server.unlockWithToken(
         payload,
         wrappedDek,
         publicKey,
-        articleId
+        contentId
       );
 
       return NextResponse.json({
         ...result,
         keyType: "dek",
         tokenId: payload.tid,
+        issuer: payload.iss,
+        contentId: payload.contentId,
         bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
       });
     }
