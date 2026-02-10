@@ -203,16 +203,20 @@ export function generateSigningKeyPair(customKeyId?: string): SigningKeyPair {
  */
 export class AsymmetricTokenManager {
   private privateKey: KeyObject;
-  private publicKey: KeyObject;
   private keyId: string;
   private issuer: string;
   private jwks: Jwks;
+  /** Map of keyId → public key for signature verification */
+  private publicKeys: Map<string, KeyObject>;
 
   constructor(options: AsymmetricTokenManagerOptions) {
     this.privateKey = createPrivateKey(options.privateKey);
-    this.publicKey = createPublicKey(options.publicKey);
     this.keyId = options.keyId;
     this.issuer = options.issuer;
+
+    // Build public key map for verification
+    this.publicKeys = new Map();
+    this.publicKeys.set(options.keyId, createPublicKey(options.publicKey));
 
     // Build JWKS with current key and any additional keys
     const keys: JwkKey[] = [publicKeyToJwk(options.publicKey, options.keyId)];
@@ -220,6 +224,7 @@ export class AsymmetricTokenManager {
     if (options.additionalPublicKeys) {
       for (const { publicKey, keyId } of options.additionalPublicKeys) {
         keys.push(publicKeyToJwk(publicKey, keyId));
+        this.publicKeys.set(keyId, createPublicKey(publicKey));
       }
     }
 
@@ -274,18 +279,15 @@ export class AsymmetricTokenManager {
       return { valid: false, error: "malformed", message: "Invalid payload encoding" };
     }
 
-    // Check if we have this key
-    if (payload.kid !== this.keyId) {
-      // Check additional keys in JWKS
-      const hasKey = this.jwks.keys.some(k => k.kid === payload.kid);
-      if (!hasKey) {
-        return { valid: false, error: "unknown_key", message: `Unknown key ID: ${payload.kid}` };
-      }
+    // Look up the public key for this kid
+    const publicKey = this.publicKeys.get(payload.kid);
+    if (!publicKey) {
+      return { valid: false, error: "unknown_key", message: `Unknown key ID: ${payload.kid}` };
     }
 
-    // Verify signature
+    // Verify signature using the correct key
     const signatureBuffer = Buffer.from(signatureB64, "base64url");
-    const isValid = verify(null, Buffer.from(payloadB64), this.publicKey, signatureBuffer);
+    const isValid = verify(null, Buffer.from(payloadB64), publicKey, signatureBuffer);
 
     if (!isValid) {
       return { valid: false, error: "invalid", message: "Invalid signature" };

@@ -747,53 +747,45 @@ if (token) {
   console.log(\`Shared by \${result.payload.iss}, expires in \${result.expiresIn}s\`);
 }`}</CodeBlock>
 
-      <h3>Full Signature Validation (TokenValidator)</h3>
+      <h3>HMAC Signature Validation (Server-Side Only)</h3>
       <p>
-        For trusted first-party tokens, you can validate signatures client-side
-        using <code>TokenValidator</code>. This enables offline validation and
-        whitelisting of known publishers:
+        <strong>⚠️ Security Warning:</strong> HMAC uses symmetric secrets - anyone
+        with the secret can <em>forge</em> tokens. Never expose the signing secret
+        in client-side code (no <code>NEXT_PUBLIC_</code> env vars). Use{" "}
+        <code>TokenValidator</code> only in server-side code (API routes, middleware).
+        For client-side validation, use <code>JwksTokenValidator</code> with Ed25519.
       </p>
 
-      <CodeBlock>{`import { TokenValidator, createTokenValidator } from '@sesamy/capsule';
+      <CodeBlock>{`// ⚠️ SERVER-SIDE ONLY - app/api/validate-token/route.ts
+import { TokenValidator } from '@sesamy/capsule';
 
-// Option 1: Whitelist trusted publishers
 const validator = new TokenValidator({
   trustedKeys: {
-    'my-publisher:key-2026-01': 'shared-secret-here',
-    'partner:key-v1': 'partner-secret',
+    'my-publisher:key-2026-01': process.env.TOKEN_SECRET, // Server-only env var!
   },
-  requireTrustedIssuer: true, // Reject unknown issuers
+  requireTrustedIssuer: true,
 });
 
-// Validate token with full signature verification
-const result = await validator.validate(token);
+export async function POST(request: Request) {
+  const { token } = await request.json();
+  const result = await validator.validate(token);
 
-if (result.valid) {
-  console.log(\`Verified! Trusted: \${result.trusted}\`);
-  console.log(\`Issuer: \${result.payload.iss}\`);
-  console.log(\`Key ID: \${result.payload.kid}\`);
-  console.log(\`Expires in: \${result.expiresIn}s\`);
-}
+  if (!result.valid) {
+    return Response.json({ error: result.message }, { status: 401 });
+  }
 
-// Option 2: Accept any token with provided secret
-const openValidator = new TokenValidator();
-const result2 = await openValidator.validate(token, {
-  secret: mySecret,
-  contentId: 'article-123', // Optional: validate content binding
-});
+  if (result.expired) {
+    return Response.json({ error: 'Token expired' }, { status: 401 });
+  }
 
-// Option 3: Add/remove trusted keys at runtime
-validator.addTrustedKey('new-partner', 'key-v1', 'new-secret');
-validator.removeTrustedKey('old-partner', 'key-v1');
-
-// Option 4: Validate directly from URL
-const urlResult = await validator.validateFromUrl();
-if (urlResult?.valid && !urlResult.expired) {
-  // Token from ?token=... is valid
-  await capsule.unlockWithToken(urlResult.payload.contentId, urlResult.token);
+  return Response.json({ 
+    valid: true, 
+    issuer: result.payload.iss,
+    contentId: result.payload.contentId,
+  });
 }`}</CodeBlock>
 
-      <h3>JWKS-Based Validation (Ed25519)</h3>
+      <h3>JWKS-Based Validation (Ed25519) - Client-Side Safe</h3>
       <p>
         For asymmetric key signing with automatic public key discovery, use the{" "}
         <code>JwksTokenValidator</code>. This approach:

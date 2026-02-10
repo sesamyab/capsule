@@ -450,55 +450,63 @@ if (result.valid) {
 
 ### Full Signature Validation (TokenValidator)
 
-For trusted first-party tokens, validate signatures client-side:
+> ⚠️ **Security Note:** `TokenValidator` uses HMAC-SHA256 with shared secrets. This is for **server-side validation only**. Never expose HMAC secrets in client-side code - anyone with the secret can forge tokens. For client-side validation, use `JwksTokenValidator` with Ed25519 asymmetric keys (see [JWKS-Based Token Validation](#jwks-based-token-validation-ed25519)).
+
+For trusted first-party tokens, validate signatures on your server:
 
 ```typescript
-import { TokenValidator, createTokenValidator } from '@sesamy/capsule';
+// app/api/validate-token/route.ts (SERVER-SIDE ONLY)
+import { TokenValidator } from '@sesamy/capsule';
 
-// Option 1: Whitelist trusted publishers
 const validator = new TokenValidator({
   trustedKeys: {
-    'my-publisher:key-2026-01': 'shared-secret-here',
-    'partner-site:key-v1': 'partner-secret',
+    'my-publisher:key-2026-01': process.env.TOKEN_SECRET,      // Server-only env var
+    'partner-site:key-v1': process.env.PARTNER_TOKEN_SECRET,   // Never NEXT_PUBLIC_*
   },
   requireTrustedIssuer: true, // Reject unknown issuers
 });
 
-const result = await validator.validate(token);
+export async function POST(request: Request) {
+  const { token } = await request.json();
+  const result = await validator.validate(token);
 
-if (result.valid) {
-  console.log(`Signature verified!`);
-  console.log(`Trusted issuer: ${result.trusted}`);
-  console.log(`Issuer: ${result.payload.iss}`);
-  console.log(`Key ID: ${result.payload.kid}`);
-  console.log(`Expired: ${result.expired}`);
-} else {
-  console.error(`Validation failed: ${result.error}`);
-  // Possible errors: 'invalid_signature', 'untrusted_issuer', 'expired', 'malformed'
+  if (result.valid) {
+    console.log(`Signature verified!`);
+    console.log(`Trusted issuer: ${result.trusted}`);
+    console.log(`Issuer: ${result.payload.iss}`);
+    console.log(`Key ID: ${result.payload.kid}`);
+    console.log(`Expired: ${result.expired}`);
+    return Response.json({ valid: true, payload: result.payload });
+  } else {
+    console.error(`Validation failed: ${result.error}`);
+    // Possible errors: 'invalid_signature', 'untrusted_issuer', 'expired', 'malformed'
+    return Response.json({ valid: false, error: result.error }, { status: 401 });
+  }
 }
 ```
 
-### Accepting Any Token
+### Accepting Any Token (Server-Side)
 
-For open validation without a whitelist:
+For open validation without a whitelist (server-side only):
 
 ```typescript
-// Accept any token with a provided secret
+// SERVER-SIDE ONLY - Never use HMAC secrets in client code
 const validator = new TokenValidator();
 
 const result = await validator.validate(token, {
-  secret: mySecret,                    // Required when not using trusted keys
+  secret: process.env.TOKEN_SECRET,    // Server-only env var
   contentId: 'expected-article-id',    // Optional: validate content binding
 });
 ```
 
-### Runtime Key Management
+### Runtime Key Management (Server-Side)
 
-Add or remove trusted keys dynamically:
+Add or remove trusted keys dynamically on the server:
 
 ```typescript
+// SERVER-SIDE ONLY
 const validator = new TokenValidator({
-  trustedKeys: { 'issuer-a:key-1': 'secret-a' }
+  trustedKeys: { 'issuer-a:key-1': process.env.SECRET_A }
 });
 
 // Check trust status
@@ -506,35 +514,36 @@ validator.isTrusted('issuer-a', 'key-1');  // true
 validator.isTrusted('issuer-b', 'key-1');  // false
 
 // Add new trusted key
-validator.addTrustedKey('issuer-b', 'key-1', 'secret-b');
+validator.addTrustedKey('issuer-b', 'key-1', process.env.SECRET_B);
 
 // Remove trusted key
 validator.removeTrustedKey('issuer-a', 'key-1');
 ```
 
-### Validate from URL
+### Validate from URL (Server-Side)
 
-Convenience method to extract and validate token from current URL:
+Convenience method for server-side HMAC validation:
 
 ```typescript
-const result = await validator.validateFromUrl();
+// SERVER-SIDE ONLY - app/api/validate/route.ts
+const result = await validator.validateFromUrl(request);
 
 if (result?.valid && !result.expired) {
   // Token from ?token=... is valid
   console.log(`Valid token for ${result.payload.contentId}`);
-  await capsule.unlockWithToken(article, result.token);
 }
 ```
 
-### Complete Share Link Flow
+### Complete Share Link Flow (Client-Side with JWKS)
+
+For client-side token validation, use `JwksTokenValidator` with Ed25519 asymmetric keys:
 
 ```typescript
-import { CapsuleClient, TokenValidator, getShareTokenFromUrl } from '@sesamy/capsule';
+import { CapsuleClient, JwksTokenValidator, getShareTokenFromUrl } from '@sesamy/capsule';
 
-const validator = new TokenValidator({
-  trustedKeys: {
-    'my-site:key-2026': process.env.NEXT_PUBLIC_TOKEN_SECRET,
-  },
+// ✅ Safe for client-side - only needs issuer URLs, not secrets
+const validator = new JwksTokenValidator({
+  trustedIssuers: ['https://api.example.com'],
 });
 
 const capsule = new CapsuleClient({
@@ -552,8 +561,8 @@ async function handleShareLink() {
   const tokenInfo = getShareTokenFromUrl();
   if (!tokenInfo?.valid) return;
 
-  // Validate signature
-  const validation = await validator.validateFromUrl();
+  // Validate signature (fetches JWKS from issuer)
+  const validation = await validator.validate(tokenInfo.token);
   if (!validation?.valid) {
     showError('Invalid or expired share link');
     return;

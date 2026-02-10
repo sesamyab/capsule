@@ -395,28 +395,35 @@ if (urlToken?.valid) {
   }
 }`}</CodeBlock>
 
-      <h3>HMAC Signature Validation</h3>
+      <h3>HMAC Signature Validation (Server-Side Only)</h3>
       <p>
-        For first-party tokens with shared secrets:
+        <strong>⚠️ Security Note:</strong> HMAC uses symmetric secrets. Never expose
+        the signing secret in client-side code. Use <code>TokenValidator</code> only
+        on the server (API routes, middleware). For client-side validation, use{" "}
+        <code>JwksTokenValidator</code> with Ed25519 (asymmetric keys).
       </p>
-      <CodeBlock>{`import { TokenValidator } from '@sesamy/capsule';
+      <CodeBlock>{`// ⚠️ SERVER-SIDE ONLY - api/validate-token/route.ts
+import { TokenValidator } from '@sesamy/capsule';
 
 const validator = new TokenValidator({
   trustedKeys: {
-    'my-publisher:key-2026-01': 'shared-secret',
-    'partner:key-v1': 'partner-secret',
+    'my-publisher:key-2026-01': process.env.TOKEN_SECRET, // Server env var, NOT public!
   },
   requireTrustedIssuer: true,
 });
 
-const result = await validator.validate(token);
-
-if (result.valid && !result.expired) {
-  console.log(\`Verified! Issuer: \${result.payload.iss}\`);
-  await capsule.unlockWithToken(article, token);
+export async function POST(req: Request) {
+  const { token } = await req.json();
+  const result = await validator.validate(token);
+  
+  if (!result.valid || result.expired) {
+    return Response.json({ error: 'Invalid token' }, { status: 401 });
+  }
+  
+  return Response.json({ valid: true, payload: result.payload });
 }`}</CodeBlock>
 
-      <h3>JWKS Validation (Ed25519)</h3>
+      <h3>JWKS Validation (Ed25519) - Client-Side Safe</h3>
       <p>
         For tokens signed with Ed25519, the client fetches public keys from
         the issuer's <code>/.well-known/jwks.json</code> endpoint:
