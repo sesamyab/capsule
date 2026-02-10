@@ -940,10 +940,10 @@ const { tier, contentId, exp, userId } = result.payload;`}</CodeBlock>
         </p>
 
         <h3>Installation</h3>
-        <CodeBlock language="bash">{`npm install capsule`}</CodeBlock>
+        <CodeBlock language="bash">{`npm install @sesamy/capsule-server`}</CodeBlock>
 
         <h3>Basic Usage</h3>
-        <CodeBlock>{`import { ArticleEncryptor } from 'capsule';
+        <CodeBlock>{`import { ArticleEncryptor } from '@sesamy/capsule-server';
 
 // Encrypt content for a specific client
 const encryptor = new ArticleEncryptor(clientPublicKey);

@@ -116,7 +116,7 @@ export function parseShareToken(token: string): ParsedToken | TokenParseError {
     const payloadB64 = token.substring(0, dotIndex);
 
     // Decode payload
-    const payloadJson = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"));
+    const payloadJson = atob(base64UrlToBase64(payloadB64));
     const payload = JSON.parse(payloadJson) as ShareTokenPayload;
 
     // Validate required fields
@@ -310,6 +310,23 @@ function arrayBufferToBase64Url(buffer: ArrayBuffer): string {
 }
 
 /**
+ * Convert base64url to standard base64 with proper padding.
+ *
+ * RFC 4648 base64url commonly omits '=' padding; restore it to a multiple of 4
+ * before decoding with atob() to prevent runtime errors in strict environments.
+ */
+function base64UrlToBase64(base64url: string): string {
+  // Replace base64url characters with standard base64
+  let base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+  // Add padding if needed (base64 length must be multiple of 4)
+  const pad = base64.length % 4;
+  if (pad) {
+    base64 += "=".repeat(4 - pad);
+  }
+  return base64;
+}
+
+/**
  * Timing-safe comparison for signatures.
  */
 function timingSafeEqual(a: string, b: string): boolean {
@@ -432,9 +449,7 @@ export class TokenValidator {
     // Decode payload
     let payload: ShareTokenPayload;
     try {
-      const payloadJson = atob(
-        payloadB64.replace(/-/g, "+").replace(/_/g, "/"),
-      );
+      const payloadJson = atob(base64UrlToBase64(payloadB64));
       payload = JSON.parse(payloadJson);
     } catch {
       return {
@@ -670,8 +685,7 @@ async function verifyEd25519Signature(
   const dataBuffer = encoder.encode(data);
 
   // Decode base64url signature
-  const sigB64 = signature.replace(/-/g, "+").replace(/_/g, "/");
-  const sigBinary = atob(sigB64);
+  const sigBinary = atob(base64UrlToBase64(signature));
   const sigBuffer = new Uint8Array(sigBinary.length);
   for (let i = 0; i < sigBinary.length; i++) {
     sigBuffer[i] = sigBinary.charCodeAt(i);
@@ -826,9 +840,7 @@ export class JwksTokenValidator {
     // Decode payload
     let payload: ShareTokenPayload & { alg?: string };
     try {
-      const payloadJson = atob(
-        payloadB64.replace(/-/g, "+").replace(/_/g, "/"),
-      );
+      const payloadJson = atob(base64UrlToBase64(payloadB64));
       payload = JSON.parse(payloadJson);
     } catch {
       return {
