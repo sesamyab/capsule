@@ -15,7 +15,7 @@ const BUCKET_PERIOD_SECONDS = 30;
 const MASTER_SECRET =
   process.env.CAPSULE_MASTER_SECRET ||
   Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString(
-    "base64"
+    "base64",
   );
 
 /**
@@ -47,7 +47,7 @@ const totp = createTotpKeyProvider({
 export const cms = createCmsServer({
   getKeys: async (keyIds) => {
     const keys = await totp.getKeys(
-      keyIds.filter((id) => !id.startsWith("article:"))
+      keyIds.filter((id) => !id.startsWith("article:")),
     );
 
     // Handle article keys

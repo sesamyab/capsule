@@ -85,11 +85,28 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
             />
           </section>
 
-          <section className="share-section" style={{ marginTop: "2rem", padding: "1rem", background: "var(--border)", borderRadius: "8px" }}>
-            <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>🔗 Share This Article</h3>
-            <p style={{ fontSize: "0.9rem", color: "var(--muted)", marginBottom: "1rem" }}>
-              Generate a pre-signed link to share this article on social media or via email.
-              Recipients can unlock the content without logging in.
+          <section
+            className="share-section"
+            style={{
+              marginTop: "2rem",
+              padding: "1rem",
+              background: "var(--border)",
+              borderRadius: "8px",
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+              🔗 Share This Article
+            </h3>
+            <p
+              style={{
+                fontSize: "0.9rem",
+                color: "var(--muted)",
+                marginBottom: "1rem",
+              }}
+            >
+              Generate a pre-signed link to share this article on social media
+              or via email. Recipients can unlock the content without logging
+              in.
             </p>
             <ShareButton contentId={article.id} tier="premium" />
           </section>

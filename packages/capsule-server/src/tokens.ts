@@ -110,7 +110,7 @@ export interface TokenManagerOptions {
 export type UsageTracker = (
   tokenId: string,
   payload: UnlockTokenPayload,
-  context: { articleId?: string; ip?: string }
+  context: { articleId?: string; ip?: string },
 ) => Promise<{ allowed: boolean; currentUses?: number }>;
 
 /**
@@ -125,7 +125,7 @@ function parseDuration(duration: string | number): number {
   const match = duration.match(/^(\d+)(s|m|h|d)$/);
   if (!match) {
     throw new Error(
-      `Invalid duration format: ${duration}. Use "1h", "24h", "7d", etc.`
+      `Invalid duration format: ${duration}. Use "1h", "24h", "7d", etc.`,
     );
   }
 
@@ -166,7 +166,7 @@ export class TokenManager {
 
     if (this.secret.length < 32) {
       console.warn(
-        "TokenManager: secret should be at least 32 bytes for security"
+        "TokenManager: secret should be at least 32 bytes for security",
       );
     }
   }
@@ -229,7 +229,7 @@ export class TokenManager {
     let payload: UnlockTokenPayload;
     try {
       const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8"
+        "utf-8",
       );
       payload = JSON.parse(payloadJson);
     } catch {
@@ -260,7 +260,7 @@ export class TokenManager {
 
       const payloadB64 = token.substring(0, dotIndex);
       const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8"
+        "utf-8",
       );
       return JSON.parse(payloadJson);
     } catch {
@@ -305,8 +305,6 @@ export class TokenManager {
  * const shareUrl = `https://example.com/article/my-article?token=${token}`;
  * ```
  */
-export function createTokenManager(
-  options: TokenManagerOptions
-): TokenManager {
+export function createTokenManager(options: TokenManagerOptions): TokenManager {
   return new TokenManager(options);
 }

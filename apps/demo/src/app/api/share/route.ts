@@ -48,21 +48,21 @@ export async function POST(request: NextRequest) {
     if (!tier || typeof tier !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid tier" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (!contentId || typeof contentId !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid contentId" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (!expiresIn || typeof expiresIn !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid expiresIn (e.g., '24h', '7d')" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -82,14 +82,17 @@ export async function POST(request: NextRequest) {
     if (!payload) {
       return NextResponse.json(
         { error: "Failed to generate token" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
     // Build share URL
     const baseUrl = request.headers.get("origin") || request.nextUrl.origin;
     const path = `/article/${contentId}`;
-    const shareUrl = url || `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
+    const defaultUrl = `${baseUrl}${path}`;
+    const targetUrl = url || defaultUrl;
+    const separator = targetUrl.includes("?") ? "&" : "?";
+    const shareUrl = `${targetUrl}${separator}token=${encodeURIComponent(token)}`;
 
     // Log token generation for audit
     console.log(`[SHARE] Token generated`, {
@@ -122,7 +125,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       { error: "Failed to generate share token" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

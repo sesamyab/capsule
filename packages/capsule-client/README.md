@@ -55,7 +55,7 @@ document.addEventListener("capsule:unlock", (e) => {
   console.log(
     "Unlocked:",
     e.detail.articleId,
-    e.detail.content.substring(0, 100)
+    e.detail.content.substring(0, 100),
   );
 });
 
@@ -224,7 +224,7 @@ document.addEventListener(
   "capsule:unlock",
   (e: CustomEvent<CapsuleUnlockEvent>) => {
     const { articleId, keyId, content, element } = e.detail;
-  }
+  },
 );
 ```
 
@@ -237,7 +237,7 @@ document.addEventListener(
   "capsule:error",
   (e: CustomEvent<CapsuleErrorEvent>) => {
     const { articleId, error, element } = e.detail;
-  }
+  },
 );
 ```
 
@@ -251,7 +251,7 @@ document.addEventListener(
   (e: CustomEvent<CapsuleStateEvent>) => {
     const { articleId, previousState, state, element } = e.detail;
     // state: 'locked' | 'unlocking' | 'decrypting' | 'unlocked' | 'error'
-  }
+  },
 );
 ```
 
@@ -320,11 +320,11 @@ const capsule = new CapsuleClient({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        token,        // Pre-signed share token (if present)
+        token, // Pre-signed share token (if present)
         wrappedDek,
         publicKey,
         articleId,
-        keyId,        // Fallback for non-token unlock
+        keyId, // Fallback for non-token unlock
       }),
     });
     return response.json();
@@ -334,9 +334,9 @@ const capsule = new CapsuleClient({
 // Check for token in URL and auto-unlock
 async function initPage() {
   const article = JSON.parse(
-    document.querySelector("[data-capsule]")?.dataset.capsule ?? "{}"
+    document.querySelector("[data-capsule]")?.dataset.capsule ?? "{}",
   );
-  
+
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token");
 
@@ -344,7 +344,7 @@ async function initPage() {
     try {
       const content = await capsule.unlockWithToken(article, token);
       renderContent(content);
-      
+
       // Optional: remove token from URL for cleaner sharing
       const url = new URL(window.location.href);
       url.searchParams.delete("token");
@@ -361,17 +361,18 @@ async function initPage() {
 
 Tokens can include:
 
-| Property | Description |
-|----------|-------------|
-| `tier` | Required. Which tier this grants access to |
-| `expiresIn` | Required. Token validity: "1h", "24h", "7d", "30d" |
-| `articleId` | Optional. Restrict to specific article |
-| `maxUses` | Optional. Limit total uses across all readers |
-| `userId` | Optional. Track which user/publisher created the link |
+| Property    | Description                                           |
+| ----------- | ----------------------------------------------------- |
+| `tier`      | Required. Which tier this grants access to            |
+| `expiresIn` | Required. Token validity: "1h", "24h", "7d", "30d"    |
+| `articleId` | Optional. Restrict to specific article                |
+| `maxUses`   | Optional. Limit total uses across all readers         |
+| `userId`    | Optional. Track which user/publisher created the link |
 
 ### Server-Side Token Handling
 
 See [@sesamy/capsule-server](https://github.com/user/capsule/tree/main/packages/capsule-server#share-links--pre-signed-tokens) for:
+
 - Token generation with `createTokenManager()`
 - Token validation in your unlock endpoint
 - The `unlockWithToken()` server method
@@ -379,6 +380,7 @@ See [@sesamy/capsule-server](https://github.com/user/capsule/tree/main/packages/
 ## Share Link Token Validation
 
 The client library includes utilities for parsing and validating share link tokens. This enables:
+
 - **Quick token inspection** without server round-trips
 - **Client-side expiry checks** before making network requests
 - **Content routing** based on token's `contentId` or `url`
@@ -388,26 +390,26 @@ The client library includes utilities for parsing and validating share link toke
 
 Share tokens contain:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `iss` | string | Issuer identifier (who created the token) |
-| `kid` | string | Key ID (which signing key was used) |
-| `tier` | string | Access tier granted |
-| `contentId` | string | Publisher's content ID |
-| `url` | string? | Optional full URL for the content |
-| `exp` | number | Expiration timestamp (Unix seconds) |
-| `iat` | number | Issued-at timestamp |
-| `tid` | string | Unique token ID for tracking |
-| `userId` | string? | Optional creator ID |
-| `maxUses` | number? | Optional usage limit |
-| `meta` | object? | Optional custom metadata |
+| Field       | Type    | Description                               |
+| ----------- | ------- | ----------------------------------------- |
+| `iss`       | string  | Issuer identifier (who created the token) |
+| `kid`       | string  | Key ID (which signing key was used)       |
+| `tier`      | string  | Access tier granted                       |
+| `contentId` | string  | Publisher's content ID                    |
+| `url`       | string? | Optional full URL for the content         |
+| `exp`       | number  | Expiration timestamp (Unix seconds)       |
+| `iat`       | number  | Issued-at timestamp                       |
+| `tid`       | string  | Unique token ID for tracking              |
+| `userId`    | string? | Optional creator ID                       |
+| `maxUses`   | number? | Optional usage limit                      |
+| `meta`      | object? | Optional custom metadata                  |
 
 ### Basic Token Parsing
 
 Parse tokens without signature validation (for routing/display):
 
 ```typescript
-import { parseShareToken, getShareTokenFromUrl } from '@sesamy/capsule';
+import { parseShareToken, getShareTokenFromUrl } from "@sesamy/capsule";
 
 // Parse a token string
 const result = parseShareToken(token);
@@ -426,7 +428,8 @@ const urlToken = getShareTokenFromUrl();
 if (urlToken?.valid && !urlToken.expired) {
   // Redirect to correct content if needed
   if (urlToken.payload.contentId !== currentArticleId) {
-    window.location.href = urlToken.payload.url || `/article/${urlToken.payload.contentId}`;
+    window.location.href =
+      urlToken.payload.url || `/article/${urlToken.payload.contentId}`;
   }
 }
 ```
@@ -436,11 +439,11 @@ if (urlToken?.valid && !urlToken.expired) {
 Check that a token is for the expected content:
 
 ```typescript
-import { parseShareToken, validateTokenForContent } from '@sesamy/capsule';
+import { parseShareToken, validateTokenForContent } from "@sesamy/capsule";
 
 const result = parseShareToken(token);
 if (result.valid) {
-  const validation = validateTokenForContent(result, 'my-article-id');
+  const validation = validateTokenForContent(result, "my-article-id");
   if (!validation.valid) {
     console.error(validation.reason);
     // "Token is for content 'other-article', not 'my-article-id'"
@@ -456,12 +459,12 @@ For trusted first-party tokens, validate signatures on your server:
 
 ```typescript
 // app/api/validate-token/route.ts (SERVER-SIDE ONLY)
-import { TokenValidator } from '@sesamy/capsule';
+import { TokenValidator } from "@sesamy/capsule";
 
 const validator = new TokenValidator({
   trustedKeys: {
-    'my-publisher:key-2026-01': process.env.TOKEN_SECRET,      // Server-only env var
-    'partner-site:key-v1': process.env.PARTNER_TOKEN_SECRET,   // Never NEXT_PUBLIC_*
+    "my-publisher:key-2026-01": process.env.TOKEN_SECRET, // Server-only env var
+    "partner-site:key-v1": process.env.PARTNER_TOKEN_SECRET, // Never NEXT_PUBLIC_*
   },
   requireTrustedIssuer: true, // Reject unknown issuers
 });
@@ -480,7 +483,10 @@ export async function POST(request: Request) {
   } else {
     console.error(`Validation failed: ${result.error}`);
     // Possible errors: 'invalid_signature', 'untrusted_issuer', 'expired', 'malformed'
-    return Response.json({ valid: false, error: result.error }, { status: 401 });
+    return Response.json(
+      { valid: false, error: result.error },
+      { status: 401 },
+    );
   }
 }
 ```
@@ -494,8 +500,8 @@ For open validation without a whitelist (server-side only):
 const validator = new TokenValidator();
 
 const result = await validator.validate(token, {
-  secret: process.env.TOKEN_SECRET,    // Server-only env var
-  contentId: 'expected-article-id',    // Optional: validate content binding
+  secret: process.env.TOKEN_SECRET, // Server-only env var
+  contentId: "expected-article-id", // Optional: validate content binding
 });
 ```
 
@@ -506,18 +512,18 @@ Add or remove trusted keys dynamically on the server:
 ```typescript
 // SERVER-SIDE ONLY
 const validator = new TokenValidator({
-  trustedKeys: { 'issuer-a:key-1': process.env.SECRET_A }
+  trustedKeys: { "issuer-a:key-1": process.env.SECRET_A },
 });
 
 // Check trust status
-validator.isTrusted('issuer-a', 'key-1');  // true
-validator.isTrusted('issuer-b', 'key-1');  // false
+validator.isTrusted("issuer-a", "key-1"); // true
+validator.isTrusted("issuer-b", "key-1"); // false
 
 // Add new trusted key
-validator.addTrustedKey('issuer-b', 'key-1', process.env.SECRET_B);
+validator.addTrustedKey("issuer-b", "key-1", process.env.SECRET_B);
 
 // Remove trusted key
-validator.removeTrustedKey('issuer-a', 'key-1');
+validator.removeTrustedKey("issuer-a", "key-1");
 ```
 
 ### Validate from URL (Server-Side)
@@ -539,18 +545,22 @@ if (result?.valid && !result.expired) {
 For client-side token validation, use `JwksTokenValidator` with Ed25519 asymmetric keys:
 
 ```typescript
-import { CapsuleClient, JwksTokenValidator, getShareTokenFromUrl } from '@sesamy/capsule';
+import {
+  CapsuleClient,
+  JwksTokenValidator,
+  getShareTokenFromUrl,
+} from "@sesamy/capsule";
 
 // ✅ Safe for client-side - only needs issuer URLs, not secrets
 const validator = new JwksTokenValidator({
-  trustedIssuers: ['https://api.example.com'],
+  trustedIssuers: ["https://api.example.com"],
 });
 
 const capsule = new CapsuleClient({
   unlock: async (params) => {
-    const res = await fetch('/api/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
     });
     return res.json();
@@ -564,12 +574,12 @@ async function handleShareLink() {
   // Validate signature (fetches JWKS from issuer)
   const validation = await validator.validate(tokenInfo.token);
   if (!validation?.valid) {
-    showError('Invalid or expired share link');
+    showError("Invalid or expired share link");
     return;
   }
 
   if (validation.expired) {
-    showError('This share link has expired');
+    showError("This share link has expired");
     return;
   }
 
@@ -577,11 +587,11 @@ async function handleShareLink() {
   const article = getArticleData(validation.payload.contentId);
   const content = await capsule.unlockWithToken(article, tokenInfo.token);
   renderContent(content);
-  
+
   // Clean URL
   const url = new URL(window.location.href);
-  url.searchParams.delete('token');
-  history.replaceState({}, '', url);
+  url.searchParams.delete("token");
+  history.replaceState({}, "", url);
 }
 ```
 
@@ -590,18 +600,23 @@ async function handleShareLink() {
 ```typescript
 interface TokenValidationSuccess {
   valid: true;
-  trusted: boolean;      // Is issuer in trustedKeys?
-  expired: boolean;      // Has token expired?
-  expiresIn: number;     // Seconds until expiry (negative if expired)
+  trusted: boolean; // Is issuer in trustedKeys?
+  expired: boolean; // Has token expired?
+  expiresIn: number; // Seconds until expiry (negative if expired)
   payload: ShareTokenPayload;
 }
 
 interface TokenValidationFailure {
   valid: false;
-  error: 'malformed' | 'invalid_format' | 'invalid_signature' 
-       | 'untrusted_issuer' | 'no_secret' | 'expired';
+  error:
+    | "malformed"
+    | "invalid_format"
+    | "invalid_signature"
+    | "untrusted_issuer"
+    | "no_secret"
+    | "expired";
   message: string;
-  payload?: ShareTokenPayload;  // Available for debugging
+  payload?: ShareTokenPayload; // Available for debugging
 }
 ```
 
@@ -619,25 +634,26 @@ For asymmetric key signing with automatic public key discovery, use the `JwksTok
 On the server, use `AsymmetricTokenManager` to generate Ed25519-signed tokens:
 
 ```typescript
-import { 
-  AsymmetricTokenManager, 
-  generateSigningKeyPair 
-} from '@sesamy/capsule-server';
+import {
+  AsymmetricTokenManager,
+  generateSigningKeyPair,
+} from "@sesamy/capsule-server";
 
 // Generate or load a key pair
-const keyPair = await generateSigningKeyPair();
+const { privateKey, publicKey, keyId } = generateSigningKeyPair();
 
 const tokenManager = new AsymmetricTokenManager({
-  issuer: 'https://api.example.com',
-  keyId: 'key-2025-01',
-  keyPair,
+  issuer: "https://api.example.com",
+  privateKey,
+  publicKey,
+  keyId,
 });
 
 // Generate a share token
 const token = await tokenManager.generate({
-  tier: 'premium',
-  contentId: 'article-123',
-  expiresIn: '7d',
+  tier: "premium",
+  contentId: "article-123",
+  expiresIn: "7d",
 });
 
 // Expose JWKS at /.well-known/jwks.json
@@ -652,14 +668,11 @@ export async function GET() {
 Use `JwksTokenValidator` to validate tokens from trusted issuers:
 
 ```typescript
-import { JwksTokenValidator, createJwksTokenValidator } from '@sesamy/capsule';
+import { JwksTokenValidator, createJwksTokenValidator } from "@sesamy/capsule";
 
 // Whitelist trusted issuers by URL
 const validator = new JwksTokenValidator({
-  trustedIssuers: [
-    'https://api.example.com',
-    'https://partner.example.org',
-  ],
+  trustedIssuers: ["https://api.example.com", "https://partner.example.org"],
 });
 
 // Validate a token
@@ -700,18 +713,18 @@ Manage trusted issuers at runtime:
 
 ```typescript
 const validator = new JwksTokenValidator({
-  trustedIssuers: ['https://api.example.com'],
+  trustedIssuers: ["https://api.example.com"],
 });
 
 // Check if an issuer is trusted
-validator.isTrustedIssuer('https://api.example.com');  // true
-validator.isTrustedIssuer('https://evil.com');         // false
+validator.isTrustedIssuer("https://api.example.com"); // true
+validator.isTrustedIssuer("https://evil.com"); // false
 
 // Add new trusted issuer
-validator.addTrustedIssuer('https://partner.example.org');
+validator.addTrustedIssuer("https://partner.example.org");
 
 // Remove trusted issuer (also clears cached keys)
-validator.removeTrustedIssuer('https://old.example.com');
+validator.removeTrustedIssuer("https://old.example.com");
 ```
 
 ### JWKS Caching
@@ -720,8 +733,8 @@ The validator caches JWKS responses to avoid repeated fetches:
 
 ```typescript
 const validator = new JwksTokenValidator({
-  trustedIssuers: ['https://api.example.com'],
-  cacheTimeMs: 60 * 60 * 1000,  // 1 hour (default)
+  trustedIssuers: ["https://api.example.com"],
+  cacheTimeMs: 60 * 60 * 1000, // 1 hour (default)
 });
 
 // First validation: fetches JWKS
@@ -731,7 +744,7 @@ await validator.validate(token1);
 await validator.validate(token2);
 
 // Force refresh by clearing cache
-validator.clearCache('https://api.example.com');
+validator.clearCache("https://api.example.com");
 // Or clear all cached issuers
 validator.clearCache();
 ```
@@ -740,9 +753,9 @@ validator.clearCache();
 
 Token signing keys are **separate from time bucket keys**:
 
-| Key Type | Purpose | Rotation |
-|----------|---------|----------|
-| Time bucket keys | Wrap content DEKs | Every 15 minutes |
+| Key Type           | Purpose                | Rotation                    |
+| ------------------ | ---------------------- | --------------------------- |
+| Time bucket keys   | Wrap content DEKs      | Every 15 minutes            |
 | Token signing keys | Sign share link tokens | Infrequently (months/years) |
 
 Signing keys must be long-lived because share links may be valid for 30+ days.
@@ -766,10 +779,10 @@ Optionally validate that the token is for specific content:
 
 ```typescript
 const result = await validator.validate(token, {
-  contentId: 'expected-article-id',
+  contentId: "expected-article-id",
 });
 
-if (!result.valid && result.error === 'malformed') {
+if (!result.valid && result.error === "malformed") {
   console.error(result.message);
   // "Token is for content 'other-article', not 'expected-article-id'"
 }
@@ -793,25 +806,22 @@ if (result?.valid && !result.expired) {
 ### Complete JWKS Share Link Flow
 
 ```typescript
-import { 
-  CapsuleClient, 
+import {
+  CapsuleClient,
   JwksTokenValidator,
-  getShareTokenFromUrl 
-} from '@sesamy/capsule';
+  getShareTokenFromUrl,
+} from "@sesamy/capsule";
 
 // Create JWKS validator with trusted issuers
 const validator = new JwksTokenValidator({
-  trustedIssuers: [
-    'https://api.yoursite.com',
-    'https://api.partner.com',
-  ],
+  trustedIssuers: ["https://api.yoursite.com", "https://api.partner.com"],
 });
 
 const capsule = new CapsuleClient({
   unlock: async (params) => {
-    const res = await fetch('/api/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetch("/api/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
     });
     return res.json();
@@ -831,7 +841,7 @@ async function handleShareLink() {
   }
 
   if (validation.expired) {
-    showError('This share link has expired');
+    showError("This share link has expired");
     return;
   }
 
@@ -842,8 +852,8 @@ async function handleShareLink() {
 
   // Clean URL
   const url = new URL(window.location.href);
-  url.searchParams.delete('token');
-  history.replaceState({}, '', url);
+  url.searchParams.delete("token");
+  history.replaceState({}, "", url);
 }
 ```
 
@@ -852,18 +862,23 @@ async function handleShareLink() {
 ```typescript
 interface JwksValidationSuccess {
   valid: true;
-  issuer: string;        // Verified issuer URL
-  keyId: string;         // Key ID used to sign
-  expired: boolean;      // Has token expired?
-  expiresIn: number;     // Seconds until expiry
+  issuer: string; // Verified issuer URL
+  keyId: string; // Key ID used to sign
+  expired: boolean; // Has token expired?
+  expiresIn: number; // Seconds until expiry
   payload: ShareTokenPayload;
 }
 
 interface JwksValidationFailure {
   valid: false;
-  error: 'malformed' | 'invalid_format' | 'invalid_signature' 
-       | 'untrusted_issuer' | 'unknown_key' | 'jwks_fetch_failed'
-       | 'unsupported_algorithm';
+  error:
+    | "malformed"
+    | "invalid_format"
+    | "invalid_signature"
+    | "untrusted_issuer"
+    | "unknown_key"
+    | "jwks_fetch_failed"
+    | "unsupported_algorithm";
   message: string;
   payload?: ShareTokenPayload;
 }
@@ -871,13 +886,13 @@ interface JwksValidationFailure {
 
 ### Choosing Between HMAC and JWKS
 
-| Feature | TokenValidator (HMAC) | JwksTokenValidator (Ed25519) |
-|---------|----------------------|------------------------------|
-| **Signing** | Symmetric (shared secret) | Asymmetric (public/private key) |
-| **Secret sharing** | Client needs secret | Client only needs issuer URL |
-| **Key discovery** | Manual key configuration | Automatic via JWKS endpoint |
-| **Cross-domain** | Requires secret sharing | Works without sharing secrets |
-| **Best for** | First-party tokens | Third-party/partner tokens |
+| Feature            | TokenValidator (HMAC)     | JwksTokenValidator (Ed25519)    |
+| ------------------ | ------------------------- | ------------------------------- |
+| **Signing**        | Symmetric (shared secret) | Asymmetric (public/private key) |
+| **Secret sharing** | Client needs secret       | Client only needs issuer URL    |
+| **Key discovery**  | Manual key configuration  | Automatic via JWKS endpoint     |
+| **Cross-domain**   | Requires secret sharing   | Works without sharing secrets   |
+| **Best for**       | First-party tokens        | Third-party/partner tokens      |
 
 ## DEK Storage Modes
 
@@ -907,7 +922,7 @@ const privateKey = await crypto.subtle.importKey(
   privateKeyJwk,
   { name: "RSA-OAEP", hash: "SHA-256" },
   false, // NOT extractable - this is enforced at the browser engine level
-  ["unwrapKey"]
+  ["unwrapKey"],
 );
 ```
 

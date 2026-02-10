@@ -29,7 +29,7 @@ export function TableOfContents({
   // Scan for headings and build ToC - only once on mount
   useEffect(() => {
     if (hasProcessed.current) return;
-    
+
     const container = document.querySelector(containerSelector);
     if (!container) return;
 
@@ -46,11 +46,11 @@ export function TableOfContents({
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/(^-|-$)/g, "");
-      
+
       // Handle duplicates by appending a counter
       const count = idCounts.get(baseId) || 0;
       idCounts.set(baseId, count + 1);
-      
+
       let id = heading.id;
       if (!id) {
         id = count > 0 ? `${baseId}-${count}` : baseId;
@@ -80,7 +80,7 @@ export function TableOfContents({
       {
         rootMargin: "-80px 0px -80% 0px",
         threshold: 0,
-      }
+      },
     );
 
     items.forEach((item) => {
@@ -96,10 +96,7 @@ export function TableOfContents({
   const minLevel = Math.min(...items.map((i) => i.level));
 
   return (
-    <nav
-      className={`toc toc-${position}`}
-      aria-label="Table of contents"
-    >
+    <nav className={`toc toc-${position}`} aria-label="Table of contents">
       <div className="toc-title">On this page</div>
       <ul className="toc-list">
         {items.map((item) => (
@@ -109,16 +106,19 @@ export function TableOfContents({
               activeId === item.id ? "toc-active" : ""
             }`}
           >
-            <a href={`#${item.id}`} onClick={(e) => {
-              e.preventDefault();
-              const element = document.getElementById(item.id);
-              if (element) {
-                element.scrollIntoView({ behavior: "smooth" });
-                // Update URL without triggering scroll
-                history.pushState(null, "", `#${item.id}`);
-                setActiveId(item.id);
-              }
-            }}>
+            <a
+              href={`#${item.id}`}
+              onClick={(e) => {
+                e.preventDefault();
+                const element = document.getElementById(item.id);
+                if (element) {
+                  element.scrollIntoView({ behavior: "smooth" });
+                  // Update URL without triggering scroll
+                  history.pushState(null, "", `#${item.id}`);
+                  setActiveId(item.id);
+                }
+              }}
+            >
               {item.text}
             </a>
           </li>

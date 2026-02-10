@@ -28,13 +28,13 @@ function createMockJwks(keys: JwkKey[]) {
 // Helper to sign a payload with Ed25519
 async function signPayload(
   privateKey: CryptoKey,
-  payloadB64: string
+  payloadB64: string,
 ): Promise<string> {
   const encoder = new TextEncoder();
   const signature = await crypto.subtle.sign(
     "Ed25519",
     privateKey,
-    encoder.encode(payloadB64)
+    encoder.encode(payloadB64),
   );
   return base64url(new Uint8Array(signature));
 }
@@ -42,7 +42,7 @@ async function signPayload(
 // Helper to create a token
 async function createToken(
   privateKey: CryptoKey,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
 ): Promise<string> {
   const payloadJson = JSON.stringify(payload);
   const payloadB64 = btoa(payloadJson)

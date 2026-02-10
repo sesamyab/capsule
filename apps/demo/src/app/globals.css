@@ -1,6 +1,7 @@
 :root {
   --foreground: #171717;
   --background: #ffffff;
+  --background-rgb: 255, 255, 255;
   --accent: #0070f3;
   --accent-hover: #0060df;
   --muted: #666;
@@ -14,6 +15,7 @@
   :root {
     --foreground: #ededed;
     --background: #0a0a0a;
+    --background-rgb: 10, 10, 10;
     --accent: #3291ff;
     --accent-hover: #5ba4ff;
     --muted: #888;
@@ -365,18 +367,12 @@ p {
 
 /* Navigation */
 .main-nav {
-  background: rgba(var(--background-rgb, 255, 255, 255), 0.95);
+  background: rgba(var(--background-rgb), 0.95);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 200;
   backdrop-filter: blur(10px);
-}
-
-@media (prefers-color-scheme: dark) {
-  .main-nav {
-    background: rgba(10, 10, 10, 0.95);
-  }
 }
 
 .nav-container {

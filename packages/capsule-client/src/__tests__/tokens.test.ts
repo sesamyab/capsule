@@ -248,7 +248,7 @@ describe("getShareTokenFromUrl", () => {
 // Helper to create HMAC-SHA256 signed tokens (matching server implementation)
 async function createSignedToken(
   payload: object,
-  secret: string
+  secret: string,
 ): Promise<string> {
   const payloadJson = JSON.stringify(payload);
   const payloadB64 = btoa(payloadJson)
@@ -265,7 +265,7 @@ async function createSignedToken(
     keyData,
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["sign"],
   );
 
   const signature = await crypto.subtle.sign("HMAC", key, messageData);

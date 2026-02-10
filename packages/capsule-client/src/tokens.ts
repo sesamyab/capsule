@@ -101,9 +101,7 @@ export interface TokenParseError {
  * }
  * ```
  */
-export function parseShareToken(
-  token: string
-): ParsedToken | TokenParseError {
+export function parseShareToken(token: string): ParsedToken | TokenParseError {
   try {
     // Token format: base64url(payload).base64url(signature)
     const dotIndex = token.lastIndexOf(".");
@@ -118,9 +116,7 @@ export function parseShareToken(
     const payloadB64 = token.substring(0, dotIndex);
 
     // Decode payload
-    const payloadJson = atob(
-      payloadB64.replace(/-/g, "+").replace(/_/g, "/")
-    );
+    const payloadJson = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"));
     const payload = JSON.parse(payloadJson) as ShareTokenPayload;
 
     // Validate required fields
@@ -171,7 +167,10 @@ export function parseShareToken(
  * }
  * ```
  */
-export function getShareTokenFromUrl(): (ParsedToken & { token: string }) | TokenParseError | null {
+export function getShareTokenFromUrl():
+  | (ParsedToken & { token: string })
+  | TokenParseError
+  | null {
   if (typeof window === "undefined") return null;
 
   const params = new URLSearchParams(window.location.search);
@@ -201,7 +200,7 @@ export function getShareTokenFromUrl(): (ParsedToken & { token: string }) | Toke
  */
 export function validateTokenForContent(
   tokenResult: ParsedToken,
-  contentId: string
+  contentId: string,
 ): { valid: true } | { valid: false; reason: string } {
   if (tokenResult.expired) {
     return { valid: false, reason: "Token has expired" };
@@ -281,7 +280,7 @@ export type TokenValidationResult =
  */
 async function computeHmacSignature(
   data: string,
-  secret: string
+  secret: string,
 ): Promise<ArrayBuffer> {
   const encoder = new TextEncoder();
   const keyData = encoder.encode(secret);
@@ -292,7 +291,7 @@ async function computeHmacSignature(
     keyData,
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["sign"],
   );
 
   return crypto.subtle.sign("HMAC", key, messageData);
@@ -415,7 +414,7 @@ export class TokenValidator {
    */
   async validate(
     token: string,
-    options: { secret?: string; contentId?: string } = {}
+    options: { secret?: string; contentId?: string } = {},
   ): Promise<TokenValidationResult> {
     // Parse token structure
     const dotIndex = token.lastIndexOf(".");
@@ -434,7 +433,7 @@ export class TokenValidator {
     let payload: ShareTokenPayload;
     try {
       const payloadJson = atob(
-        payloadB64.replace(/-/g, "+").replace(/_/g, "/")
+        payloadB64.replace(/-/g, "+").replace(/_/g, "/"),
       );
       payload = JSON.parse(payloadJson);
     } catch {
@@ -528,7 +527,7 @@ export class TokenValidator {
    * @returns Validation result or null if no token in URL
    */
   async validateFromUrl(
-    options: { secret?: string; contentId?: string } = {}
+    options: { secret?: string; contentId?: string } = {},
   ): Promise<(TokenValidationResult & { token: string }) | null> {
     if (typeof window === "undefined") return null;
 
@@ -557,7 +556,7 @@ export class TokenValidator {
  * ```
  */
 export function createTokenValidator(
-  options: TokenValidatorOptions = {}
+  options: TokenValidatorOptions = {},
 ): TokenValidator {
   return new TokenValidator(options);
 }
@@ -638,7 +637,9 @@ export interface JwksValidationFailure {
   payload?: ShareTokenPayload & { alg?: string };
 }
 
-export type JwksValidationResult = JwksValidationSuccess | JwksValidationFailure;
+export type JwksValidationResult =
+  | JwksValidationSuccess
+  | JwksValidationFailure;
 
 /**
  * Import an Ed25519 public key from JWK format for Web Crypto API.
@@ -653,7 +654,7 @@ async function importEd25519PublicKey(jwk: JwkKey): Promise<CryptoKey> {
     },
     { name: "Ed25519" },
     false,
-    ["verify"]
+    ["verify"],
   );
 }
 
@@ -663,11 +664,11 @@ async function importEd25519PublicKey(jwk: JwkKey): Promise<CryptoKey> {
 async function verifyEd25519Signature(
   publicKey: CryptoKey,
   data: string,
-  signature: string
+  signature: string,
 ): Promise<boolean> {
   const encoder = new TextEncoder();
   const dataBuffer = encoder.encode(data);
-  
+
   // Decode base64url signature
   const sigB64 = signature.replace(/-/g, "+").replace(/_/g, "/");
   const sigBinary = atob(sigB64);
@@ -677,7 +678,12 @@ async function verifyEd25519Signature(
   }
 
   try {
-    return await crypto.subtle.verify("Ed25519", publicKey, sigBuffer, dataBuffer);
+    return await crypto.subtle.verify(
+      "Ed25519",
+      publicKey,
+      sigBuffer,
+      dataBuffer,
+    );
   } catch {
     return false;
   }
@@ -713,7 +719,7 @@ export class JwksTokenValidator {
 
   constructor(options: JwksTokenValidatorOptions) {
     this.trustedIssuers = new Set(
-      options.trustedIssuers.map(url => url.replace(/\/$/, "")) // Remove trailing slash
+      options.trustedIssuers.map((url) => url.replace(/\/$/, "")), // Remove trailing slash
     );
     this.cacheTimeMs = options.cacheTimeMs ?? 60 * 60 * 1000; // 1 hour default
     this.fetchFn = options.fetch ?? fetch.bind(globalThis);
@@ -756,9 +762,11 @@ export class JwksTokenValidator {
   /**
    * Fetch and cache JWKS from an issuer.
    */
-  private async fetchJwks(issuerUrl: string): Promise<Map<string, CryptoKey> | null> {
+  private async fetchJwks(
+    issuerUrl: string,
+  ): Promise<Map<string, CryptoKey> | null> {
     const normalized = issuerUrl.replace(/\/$/, "");
-    
+
     // Check cache
     const cached = this.cache.get(normalized);
     if (cached && Date.now() - cached.fetchedAt < this.cacheTimeMs) {
@@ -767,7 +775,9 @@ export class JwksTokenValidator {
 
     // Fetch JWKS
     try {
-      const response = await this.fetchFn(`${normalized}/.well-known/jwks.json`);
+      const response = await this.fetchFn(
+        `${normalized}/.well-known/jwks.json`,
+      );
       if (!response.ok) {
         return null;
       }
@@ -798,7 +808,7 @@ export class JwksTokenValidator {
    */
   async validate(
     token: string,
-    options: { contentId?: string } = {}
+    options: { contentId?: string } = {},
   ): Promise<JwksValidationResult> {
     // Parse token
     const dotIndex = token.lastIndexOf(".");
@@ -816,10 +826,16 @@ export class JwksTokenValidator {
     // Decode payload
     let payload: ShareTokenPayload & { alg?: string };
     try {
-      const payloadJson = atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/"));
+      const payloadJson = atob(
+        payloadB64.replace(/-/g, "+").replace(/_/g, "/"),
+      );
       payload = JSON.parse(payloadJson);
     } catch {
-      return { valid: false, error: "malformed", message: "Failed to decode token payload" };
+      return {
+        valid: false,
+        error: "malformed",
+        message: "Failed to decode token payload",
+      };
     }
 
     // Validate required fields
@@ -882,7 +898,11 @@ export class JwksTokenValidator {
     }
 
     // Verify signature
-    const isValid = await verifyEd25519Signature(publicKey, payloadB64, signatureB64);
+    const isValid = await verifyEd25519Signature(
+      publicKey,
+      payloadB64,
+      signatureB64,
+    );
     if (!isValid) {
       return {
         valid: false,
@@ -921,7 +941,7 @@ export class JwksTokenValidator {
    * Validate a token from the current URL.
    */
   async validateFromUrl(
-    options: { contentId?: string } = {}
+    options: { contentId?: string } = {},
   ): Promise<(JwksValidationResult & { token: string }) | null> {
     if (typeof window === "undefined") return null;
 
@@ -948,7 +968,7 @@ export class JwksTokenValidator {
  * ```
  */
 export function createJwksTokenValidator(
-  options: JwksTokenValidatorOptions
+  options: JwksTokenValidatorOptions,
 ): JwksTokenValidator {
   return new JwksTokenValidator(options);
 }

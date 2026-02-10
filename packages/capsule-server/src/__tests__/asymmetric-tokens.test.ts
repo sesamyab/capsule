@@ -95,9 +95,13 @@ describe("AsymmetricTokenManager", () => {
 
       // Tamper with the payload
       const [payloadB64, sig] = token.split(".");
-      const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString());
+      const payload = JSON.parse(
+        Buffer.from(payloadB64, "base64url").toString(),
+      );
       payload.tier = "enterprise"; // Attempt to upgrade tier
-      const tamperedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
+      const tamperedPayload = Buffer.from(JSON.stringify(payload)).toString(
+        "base64url",
+      );
       const tamperedToken = `${tamperedPayload}.${sig}`;
 
       const result = manager.validate(tamperedToken);
@@ -258,8 +262,8 @@ describe("AsymmetricTokenManager", () => {
 
       const jwks = manager.getJwks();
       expect(jwks.keys).toHaveLength(3);
-      
-      const kids = jwks.keys.map(k => k.kid);
+
+      const kids = jwks.keys.map((k) => k.kid);
       expect(kids).toContain("key-2025");
       expect(kids).toContain("key-2026");
       expect(kids).toContain("key-2027");

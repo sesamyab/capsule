@@ -8,7 +8,10 @@ interface PageWithTocProps {
   position?: "left" | "right";
 }
 
-export function PageWithToc({ children, position = "right" }: PageWithTocProps) {
+export function PageWithToc({
+  children,
+  position = "right",
+}: PageWithTocProps) {
   return (
     <>
       {children}

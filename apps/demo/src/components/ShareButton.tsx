@@ -58,7 +58,9 @@ export function ShareButton({ contentId, tier = "premium" }: ShareButtonProps) {
       const result = await response.json();
       setShareResult(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate share link");
+      setError(
+        err instanceof Error ? err.message : "Failed to generate share link",
+      );
     } finally {
       setIsGenerating(false);
     }
@@ -162,9 +164,7 @@ export function ShareButton({ contentId, tier = "premium" }: ShareButtonProps) {
                 <span className="spinner" /> Generating...
               </>
             ) : (
-              <>
-                🔗 Generate Share Link
-              </>
+              <>🔗 Generate Share Link</>
             )}
           </button>
         </div>
@@ -178,7 +178,9 @@ export function ShareButton({ contentId, tier = "premium" }: ShareButtonProps) {
           }}
         >
           <div style={{ marginBottom: "0.75rem" }}>
-            <strong style={{ color: "var(--accent)" }}>✅ Share Link Generated!</strong>
+            <strong style={{ color: "var(--accent)" }}>
+              ✅ Share Link Generated!
+            </strong>
           </div>
 
           <div

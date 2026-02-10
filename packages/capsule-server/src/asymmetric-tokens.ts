@@ -11,7 +11,7 @@
  * import { createAsymmetricTokenManager, generateSigningKeyPair } from '@sesamy/capsule-server';
  *
  * // Generate a new key pair (do this once, store securely)
- * const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
+ * const { privateKey, publicKey, keyId } = generateSigningKeyPair();
  *
  * // Create token manager with private key
  * const tokens = createAsymmetricTokenManager({
@@ -29,7 +29,15 @@
  * ```
  */
 
-import { createPrivateKey, createPublicKey, sign, verify, generateKeyPairSync, randomBytes, KeyObject } from "crypto";
+import {
+  createPrivateKey,
+  createPublicKey,
+  sign,
+  verify,
+  generateKeyPairSync,
+  randomBytes,
+  KeyObject,
+} from "crypto";
 
 /** Ed25519 key pair for signing */
 export interface SigningKeyPair {
@@ -138,18 +146,25 @@ function parseDuration(duration: string | number): number {
 
   const match = duration.match(/^(\d+)(s|m|h|d)$/);
   if (!match) {
-    throw new Error(`Invalid duration format: ${duration}. Use "1h", "24h", "7d", etc.`);
+    throw new Error(
+      `Invalid duration format: ${duration}. Use "1h", "24h", "7d", etc.`,
+    );
   }
 
   const value = parseInt(match[1], 10);
   const unit = match[2];
 
   switch (unit) {
-    case "s": return value;
-    case "m": return value * 60;
-    case "h": return value * 60 * 60;
-    case "d": return value * 60 * 60 * 24;
-    default: throw new Error(`Unknown duration unit: ${unit}`);
+    case "s":
+      return value;
+    case "m":
+      return value * 60;
+    case "h":
+      return value * 60 * 60;
+    case "d":
+      return value * 60 * 60 * 24;
+    default:
+      throw new Error(`Unknown duration unit: ${unit}`);
   }
 }
 
@@ -159,7 +174,7 @@ function parseDuration(duration: string | number): number {
 function publicKeyToJwk(publicKeyPem: string, keyId: string): JwkKey {
   const keyObject = createPublicKey(publicKeyPem);
   const exported = keyObject.export({ format: "jwk" });
-  
+
   return {
     kty: "OKP",
     crv: "Ed25519",
@@ -175,7 +190,7 @@ function publicKeyToJwk(publicKeyPem: string, keyId: string): JwkKey {
  *
  * @example
  * ```typescript
- * const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
+ * const { privateKey, publicKey, keyId } = generateSigningKeyPair();
  * // Store privateKey securely (e.g., in KMS)
  * // publicKey will be exposed via JWKS
  * ```
@@ -186,7 +201,8 @@ export function generateSigningKeyPair(customKeyId?: string): SigningKeyPair {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
 
-  const keyId = customKeyId || `key-${Date.now()}-${randomBytes(4).toString("hex")}`;
+  const keyId =
+    customKeyId || `key-${Date.now()}-${randomBytes(4).toString("hex")}`;
 
   return {
     privateKey: privateKey as string,
@@ -220,7 +236,7 @@ export class AsymmetricTokenManager {
 
     // Build JWKS with current key and any additional keys
     const keys: JwkKey[] = [publicKeyToJwk(options.publicKey, options.keyId)];
-    
+
     if (options.additionalPublicKeys) {
       for (const { publicKey, keyId } of options.additionalPublicKeys) {
         keys.push(publicKeyToJwk(publicKey, keyId));
@@ -261,10 +277,16 @@ export class AsymmetricTokenManager {
   /**
    * Validate a token using the public key.
    */
-  validate(token: string): AsymmetricValidationResult | AsymmetricValidationError {
+  validate(
+    token: string,
+  ): AsymmetricValidationResult | AsymmetricValidationError {
     const dotIndex = token.lastIndexOf(".");
     if (dotIndex === -1) {
-      return { valid: false, error: "malformed", message: "Invalid token format" };
+      return {
+        valid: false,
+        error: "malformed",
+        message: "Invalid token format",
+      };
     }
 
     const payloadB64 = token.substring(0, dotIndex);
@@ -273,21 +295,36 @@ export class AsymmetricTokenManager {
     // Decode payload first to check kid
     let payload: AsymmetricTokenPayload;
     try {
-      const payloadJson = Buffer.from(payloadB64, "base64url").toString("utf-8");
+      const payloadJson = Buffer.from(payloadB64, "base64url").toString(
+        "utf-8",
+      );
       payload = JSON.parse(payloadJson);
     } catch {
-      return { valid: false, error: "malformed", message: "Invalid payload encoding" };
+      return {
+        valid: false,
+        error: "malformed",
+        message: "Invalid payload encoding",
+      };
     }
 
     // Look up the public key for this kid
     const publicKey = this.publicKeys.get(payload.kid);
     if (!publicKey) {
-      return { valid: false, error: "unknown_key", message: `Unknown key ID: ${payload.kid}` };
+      return {
+        valid: false,
+        error: "unknown_key",
+        message: `Unknown key ID: ${payload.kid}`,
+      };
     }
 
     // Verify signature using the correct key
     const signatureBuffer = Buffer.from(signatureB64, "base64url");
-    const isValid = verify(null, Buffer.from(payloadB64), publicKey, signatureBuffer);
+    const isValid = verify(
+      null,
+      Buffer.from(payloadB64),
+      publicKey,
+      signatureBuffer,
+    );
 
     if (!isValid) {
       return { valid: false, error: "invalid", message: "Invalid signature" };
@@ -325,7 +362,9 @@ export class AsymmetricTokenManager {
       if (dotIndex === -1) return null;
 
       const payloadB64 = token.substring(0, dotIndex);
-      const payloadJson = Buffer.from(payloadB64, "base64url").toString("utf-8");
+      const payloadJson = Buffer.from(payloadB64, "base64url").toString(
+        "utf-8",
+      );
       return JSON.parse(payloadJson);
     } catch {
       return null;
@@ -347,7 +386,7 @@ export class AsymmetricTokenManager {
  * Create an asymmetric token manager for Ed25519 signing.
  */
 export function createAsymmetricTokenManager(
-  options: AsymmetricTokenManagerOptions
+  options: AsymmetricTokenManagerOptions,
 ): AsymmetricTokenManager {
   return new AsymmetricTokenManager(options);
 }
