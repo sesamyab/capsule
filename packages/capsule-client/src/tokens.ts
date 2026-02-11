@@ -502,7 +502,10 @@ export class TokenValidator {
     const expectedSig = await computeHmacSignature(payloadB64, secret);
     const expectedSigB64 = arrayBufferToBase64Url(expectedSig);
 
-    if (!timingSafeEqual(expectedSigB64, signatureB64)) {
+    // Normalize incoming signature by stripping padding (base64url encoders may keep trailing =)
+    const normalizedSigB64 = signatureB64.replace(/=+$/, "");
+
+    if (!timingSafeEqual(expectedSigB64, normalizedSigB64)) {
       return {
         valid: false,
         error: "invalid_signature",
@@ -681,17 +684,17 @@ async function verifyEd25519Signature(
   data: string,
   signature: string,
 ): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const dataBuffer = encoder.encode(data);
-
-  // Decode base64url signature
-  const sigBinary = atob(base64UrlToBase64(signature));
-  const sigBuffer = new Uint8Array(sigBinary.length);
-  for (let i = 0; i < sigBinary.length; i++) {
-    sigBuffer[i] = sigBinary.charCodeAt(i);
-  }
-
   try {
+    const encoder = new TextEncoder();
+    const dataBuffer = encoder.encode(data);
+
+    // Decode base64url signature (atob throws InvalidCharacterError on malformed input)
+    const sigBinary = atob(base64UrlToBase64(signature));
+    const sigBuffer = new Uint8Array(sigBinary.length);
+    for (let i = 0; i < sigBinary.length; i++) {
+      sigBuffer[i] = sigBinary.charCodeAt(i);
+    }
+
     return await crypto.subtle.verify(
       "Ed25519",
       publicKey,
