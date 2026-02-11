@@ -1,5 +1,11 @@
 # @sesamy/capsule-server
 
+## 0.4.0
+
+### Minor Changes
+
+- [#6](https://github.com/sesamyab/capsule/pull/6) [`cfc41ee`](https://github.com/sesamyab/capsule/commit/cfc41ee5ccbc01606b93f82b297a14e131bca4c1) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Export public keys
+
 ## 0.3.0
 
 ### Minor Changes
