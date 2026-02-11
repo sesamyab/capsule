@@ -13,17 +13,17 @@ Capsule provides a complete solution for encrypting and decrypting premium conte
 
 Capsule supports two ways to unlock content:
 
-| Flow | Use Case | User Auth Required |
-|------|----------|-------------------|
-| **Subscription Flow** | Logged-in subscribers unlock content | ✅ Yes |
-| **Share Link Flow** | Anyone with a link can unlock | ❌ No |
+| Flow                  | Use Case                             | User Auth Required |
+| --------------------- | ------------------------------------ | ------------------ |
+| **Subscription Flow** | Logged-in subscribers unlock content | ✅ Yes             |
+| **Share Link Flow**   | Anyone with a link can unlock        | ❌ No              |
 
 ## Share Links (Pre-signed Tokens)
 
 Publishers can generate shareable links that unlock content without requiring user authentication. Perfect for:
 
 - 📱 **Social Media** - Share articles on Facebook, Twitter, LinkedIn
-- 📧 **Email Campaigns** - Direct article access in newsletters  
+- 📧 **Email Campaigns** - Direct article access in newsletters
 - 🎁 **Gift Articles** - "Send this article to a friend"
 - ⏰ **Promotions** - Time-limited free access
 
@@ -87,7 +87,7 @@ const tokens = createTokenManager({ secret: process.env.TOKEN_SECRET });
 const token = tokens.generate({
   tier: "premium",
   expiresIn: "7d",
-  maxUses: 1000,        // Optional: limit uses
+  maxUses: 1000, // Optional: limit uses
   articleId: "my-article", // Optional: restrict to article
 });
 
@@ -103,7 +103,7 @@ const capsule = new CapsuleClient({
     return fetch("/api/unlock", {
       method: "POST",
       body: JSON.stringify(params),
-    }).then(r => r.json());
+    }).then((r) => r.json());
   },
 });
 
@@ -119,15 +119,17 @@ if (token) {
 ### Analytics & Tracking
 
 Every share link unlock is logged with:
+
 - **Token ID** - Unique identifier for the token
 - **Tier** - Which tier was accessed
 - **Article ID** - Which article was unlocked
 - **Timestamp** - When the unlock occurred
 - **IP Address** - Reader's location (for geo analytics)
 
-This gives publishers full visibility: *"Share link X was used 847 times, peaked at 3pm when the Twitter post went viral."*
+This gives publishers full visibility: _"Share link X was used 847 times, peaked at 3pm when the Twitter post went viral."_
 
 See detailed documentation:
+
 - [@sesamy/capsule-server](./packages/capsule-server/README.md#share-links--pre-signed-tokens) - Token generation and validation
 - [@sesamy/capsule](./packages/capsule-client/README.md#share-link-unlock) - Client-side token handling
 
@@ -148,10 +150,10 @@ capsule/
 
 ### Packages
 
-| Package                  | Description                              | Location                                               |
-| ------------------------ | ---------------------------------------- | ------------------------------------------------------ |
-| `@sesamy/capsule`        | Browser client-side decryption library   | [packages/capsule-client](./packages/capsule-client)   |
-| `@sesamy/capsule-server` | Server encryption, tokens & unlock       | [packages/capsule-server](./packages/capsule-server)   |
+| Package                  | Description                            | Location                                             |
+| ------------------------ | -------------------------------------- | ---------------------------------------------------- |
+| `@sesamy/capsule`        | Browser client-side decryption library | [packages/capsule-client](./packages/capsule-client) |
+| `@sesamy/capsule-server` | Server encryption, tokens & unlock     | [packages/capsule-server](./packages/capsule-server) |
 
 ### Apps
 
@@ -254,13 +256,13 @@ Capsule supports two security modes for storing Data Encryption Keys (DEKs), con
 <EncryptedSection securityMode="persist" {...props} />
 ```
 
-| Aspect | Description |
-|--------|-------------|
-| **Storage** | Non-extractable `CryptoKey` stored directly in IndexedDB |
-| **Page Refresh** | ✅ No network request needed - instant decryption |
-| **Exfiltration** | ✅ Key material cannot be exported via `exportKey()` |
-| **Local Attack** | ⚠️ Attacker with IndexedDB access can *use* the key locally |
-| **Best For** | Typical premium content, performance-critical apps |
+| Aspect           | Description                                                 |
+| ---------------- | ----------------------------------------------------------- |
+| **Storage**      | Non-extractable `CryptoKey` stored directly in IndexedDB    |
+| **Page Refresh** | ✅ No network request needed - instant decryption           |
+| **Exfiltration** | ✅ Key material cannot be exported via `exportKey()`        |
+| **Local Attack** | ⚠️ Attacker with IndexedDB access can _use_ the key locally |
+| **Best For**     | Typical premium content, performance-critical apps          |
 
 **How it works**: The `CryptoKey` object is stored directly in IndexedDB (it's structured-cloneable). On page refresh, the key is loaded and used immediately without any network requests. The key is marked as `extractable: false`, meaning `crypto.subtle.exportKey()` will throw an error - an attacker cannot export the raw key bytes to send to their server.
 
@@ -270,13 +272,13 @@ Capsule supports two security modes for storing Data Encryption Keys (DEKs), con
 <EncryptedSection securityMode="session" {...props} />
 ```
 
-| Aspect | Description |
-|--------|-------------|
-| **Storage** | DEK kept in memory only (not persisted) |
-| **Page Refresh** | ⚠️ Requires network request to fetch new DEK |
-| **Exfiltration** | ✅ Key vanishes when tab closes |
-| **Local Attack** | ✅ Key only exists while tab is open |
-| **Best For** | Highly sensitive content, security-critical apps |
+| Aspect           | Description                                      |
+| ---------------- | ------------------------------------------------ |
+| **Storage**      | DEK kept in memory only (not persisted)          |
+| **Page Refresh** | ⚠️ Requires network request to fetch new DEK     |
+| **Exfiltration** | ✅ Key vanishes when tab closes                  |
+| **Local Attack** | ✅ Key only exists while tab is open             |
+| **Best For**     | Highly sensitive content, security-critical apps |
 
 **How it works**: The DEK is only stored in JavaScript memory and expires when the page is closed or refreshed. Each page load requires a new network request to obtain a fresh DEK.
 
@@ -304,6 +306,7 @@ Capsule supports two security modes for storing Data Encryption Keys (DEKs), con
 3. Modify the page to exfiltrate content
 
 **Defense in depth is essential:**
+
 - Content Security Policy (CSP) to prevent script injection
 - Subresource Integrity (SRI) for all scripts
 - Time-limited DEKs with bucket rotation
@@ -352,7 +355,7 @@ const iv = crypto.getRandomValues(new Uint8Array(12));
 const encryptedContent = await subtle.encrypt(
   { name: "AES-GCM", iv },
   dek,
-  new TextEncoder().encode(content)
+  new TextEncoder().encode(content),
 );
 
 // 3. Wrap DEK with recipient's public RSA key

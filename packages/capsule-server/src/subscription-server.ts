@@ -142,7 +142,7 @@ export class SubscriptionServer {
   async unlockForUser(
     wrappedKey: WrappedKey,
     userPublicKeyB64: string,
-    staticKeyLookup?: (keyId: string) => Buffer | null | Promise<Buffer | null>
+    staticKeyLookup?: (keyId: string) => Buffer | null | Promise<Buffer | null>,
   ): Promise<UnlockResponse> {
     const { keyId, wrappedDek } = wrappedKey;
     const wrappedDekBuffer = Buffer.from(wrappedDek, "base64");
@@ -159,7 +159,7 @@ export class SubscriptionServer {
         const currentBucket = getCurrentBucket(this.bucketPeriodSeconds);
         expiresAt = getBucketExpiration(
           currentBucket,
-          this.bucketPeriodSeconds
+          this.bucketPeriodSeconds,
         );
 
         // Unwrap and re-wrap
@@ -169,7 +169,7 @@ export class SubscriptionServer {
           userPublicKeyB64,
           keyId,
           undefined,
-          expiresAt
+          expiresAt,
         );
       }
     }
@@ -178,7 +178,7 @@ export class SubscriptionServer {
     const colonIndex = keyId.lastIndexOf(":");
     if (colonIndex === -1) {
       throw new Error(
-        `Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`
+        `Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`,
       );
     }
 
@@ -188,7 +188,7 @@ export class SubscriptionServer {
     // Only treat as bucket key if suffix is numeric
     if (!isNumericBucketId(suffix)) {
       throw new Error(
-        `No static key found for '${keyId}' and suffix '${suffix}' is not a valid bucket ID. Provide a staticKeyLookup function.`
+        `No static key found for '${keyId}' and suffix '${suffix}' is not a valid bucket ID. Provide a staticKeyLookup function.`,
       );
     }
 
@@ -207,7 +207,7 @@ export class SubscriptionServer {
       userPublicKeyB64,
       keyId,
       bucketId,
-      expiresAt
+      expiresAt,
     );
   }
 
@@ -220,7 +220,7 @@ export class SubscriptionServer {
     userPublicKeyB64: string,
     keyId: string,
     bucketId: string | undefined,
-    expiresAt: Date
+    expiresAt: Date,
   ): Promise<UnlockResponse> {
     // Unwrap the DEK
     const dek = unwrapDek(wrappedDekBuffer, keyWrappingKey);
@@ -236,7 +236,7 @@ export class SubscriptionServer {
         padding: constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: "sha256",
       },
-      dek
+      dek,
     );
 
     return {
@@ -255,7 +255,7 @@ export class SubscriptionServer {
     dek: Buffer,
     userPublicKeyB64: string,
     keyId: string,
-    expiresAt: Date
+    expiresAt: Date,
   ): UnlockResponse {
     const publicKeyPem = this.convertToPem(userPublicKeyB64);
     const pubKey = createPublicKey(publicKeyPem);
@@ -266,7 +266,7 @@ export class SubscriptionServer {
         padding: constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: "sha256",
       },
-      dek
+      dek,
     );
 
     // Only extract bucketId if suffix is numeric (otherwise it's a static key like "article:crypto-guide")
@@ -310,7 +310,7 @@ export class SubscriptionServer {
   getTierKeyForUser(
     tier: string,
     bucketId: string,
-    userPublicKeyB64: string
+    userPublicKeyB64: string,
   ): UnlockResponse {
     if (!this.isBucketValid(bucketId)) {
       throw new Error(`Bucket ${bucketId} is expired or invalid`);
@@ -328,7 +328,7 @@ export class SubscriptionServer {
         padding: constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: "sha256",
       },
-      keyWrappingKey
+      keyWrappingKey,
     );
 
     return {
@@ -356,21 +356,21 @@ export class SubscriptionServer {
    * @param tokenPayload - Validated token payload (from TokenManager.validate())
    * @param wrappedDekB64 - Base64 wrapped DEK from the article
    * @param userPublicKeyB64 - Reader's RSA public key (Base64 SPKI)
-   * @param articleId - Optional article ID for logging/validation
+   * @param contentId - Optional content ID for validation (compared against token.contentId)
    * @returns Unlock response with DEK wrapped for the reader
    */
   unlockWithToken(
     tokenPayload: UnlockTokenPayload,
     wrappedDekB64: string,
     userPublicKeyB64: string,
-    articleId?: string
+    contentId?: string,
   ): UnlockResponse {
     const { tier } = tokenPayload;
 
-    // If token specifies an articleId, validate it matches
-    if (tokenPayload.articleId && articleId && tokenPayload.articleId !== articleId) {
+    // Validate contentId matches (token always has contentId)
+    if (contentId && tokenPayload.contentId !== contentId) {
       throw new Error(
-        `Token is for article '${tokenPayload.articleId}', not '${articleId}'`
+        `Token is for content '${tokenPayload.contentId}', not '${contentId}'`,
       );
     }
 
@@ -380,7 +380,10 @@ export class SubscriptionServer {
 
     // For token-based unlock, we need to try current and adjacent buckets
     // since the article might have been encrypted in a different bucket
-    const currentBucketNum = parseInt(getCurrentBucket(this.bucketPeriodSeconds), 10);
+    const currentBucketNum = parseInt(
+      getCurrentBucket(this.bucketPeriodSeconds),
+      10,
+    );
     const bucketsToTry = [
       currentBucketNum.toString(),
       (currentBucketNum - 1).toString(),
@@ -391,7 +394,11 @@ export class SubscriptionServer {
 
     for (const bucketId of bucketsToTry) {
       try {
-        const keyWrappingKey = deriveBucketKey(this.masterSecret, tier, bucketId);
+        const keyWrappingKey = deriveBucketKey(
+          this.masterSecret,
+          tier,
+          bucketId,
+        );
         const dek = unwrapDek(wrappedDekBuffer, keyWrappingKey);
 
         // Success! Re-wrap for user
@@ -404,10 +411,13 @@ export class SubscriptionServer {
             padding: constants.RSA_PKCS1_OAEP_PADDING,
             oaepHash: "sha256",
           },
-          dek
+          dek,
         );
 
-        const expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
+        const expiresAt = getBucketExpiration(
+          bucketId,
+          this.bucketPeriodSeconds,
+        );
 
         return {
           encryptedDek: encryptedDek.toString("base64"),
@@ -422,7 +432,7 @@ export class SubscriptionServer {
     }
 
     throw new Error(
-      `Failed to unlock with token for tier '${tier}': ${lastError?.message}`
+      `Failed to unlock with token for tier '${tier}': ${lastError?.message}`,
     );
   }
 
@@ -439,7 +449,7 @@ export class SubscriptionServer {
     }
 
     return `-----BEGIN PUBLIC KEY-----\n${base64Lines.join(
-      "\n"
+      "\n",
     )}\n-----END PUBLIC KEY-----`;
   }
 }
@@ -462,7 +472,7 @@ export class SubscriptionServer {
  * ```
  */
 export function createSubscriptionServer(
-  options: SubscriptionServerOptions
+  options: SubscriptionServerOptions,
 ): SubscriptionServer;
 /**
  * Create a subscription server (legacy signature).
@@ -470,11 +480,11 @@ export function createSubscriptionServer(
  */
 export function createSubscriptionServer(
   masterSecret: string | Buffer,
-  bucketPeriodSeconds?: number
+  bucketPeriodSeconds?: number,
 ): SubscriptionServer;
 export function createSubscriptionServer(
   optionsOrSecret: SubscriptionServerOptions | string | Buffer,
-  bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS
+  bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS,
 ): SubscriptionServer {
   // Handle both signatures
   if (

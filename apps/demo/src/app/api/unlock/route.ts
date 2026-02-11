@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSubscriptionServer, createTokenManager } from "@sesamy/capsule-server";
-import { MASTER_SECRET, BUCKET_PERIOD_SECONDS, totp, TOKEN_SECRET } from "@/lib/capsule";
+import {
+  createSubscriptionServer,
+  createTokenManager,
+} from "@sesamy/capsule-server";
+import {
+  MASTER_SECRET,
+  BUCKET_PERIOD_SECONDS,
+  totp,
+  TOKEN_SECRET,
+} from "@/lib/capsule";
 
 /**
  * Create subscription server with the same master secret as the CMS.
@@ -15,6 +23,8 @@ const server = createSubscriptionServer({
  */
 const tokens = createTokenManager({
   secret: TOKEN_SECRET,
+  issuer: "capsule-demo",
+  keyId: "demo-key-2026",
 });
 
 /**
@@ -64,13 +74,13 @@ const tokens = createTokenManager({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { token, keyId, wrappedDek, publicKey, mode, articleId } = body;
+    const { token, keyId, wrappedDek, publicKey, mode, contentId } = body;
 
     // Validate public key (required for all modes)
     if (!publicKey || typeof publicKey !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid publicKey" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -79,48 +89,59 @@ export async function POST(request: NextRequest) {
       if (!wrappedDek || typeof wrappedDek !== "string") {
         return NextResponse.json(
           { error: "Missing wrappedDek (required for token mode)" },
-          { status: 400 }
+          { status: 400 },
         );
       }
 
       // Validate the token
       const validation = tokens.validate(token);
       if (!validation.valid) {
-        console.log(`Token validation failed: ${validation.error} - ${validation.message}`);
+        console.log(
+          `Token validation failed: ${validation.error} - ${validation.message}`,
+        );
         return NextResponse.json(
           { error: validation.message },
-          { status: 401 }
+          { status: 401 },
         );
       }
 
       const payload = validation.payload;
 
       // Log the unlock for analytics
-      console.log(`[UNLOCK] Token ${payload.tid} used for tier '${payload.tier}'`, {
-        tokenId: payload.tid,
-        tier: payload.tier,
-        articleId: articleId || payload.articleId,
-        userId: payload.userId,
-        maxUses: payload.maxUses,
-        ip: request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip"),
-        timestamp: new Date().toISOString(),
-      });
+      console.log(
+        `[UNLOCK] Token ${payload.tid} used for tier '${payload.tier}'`,
+        {
+          tokenId: payload.tid,
+          issuer: payload.iss,
+          keyId: payload.kid,
+          tier: payload.tier,
+          contentId: contentId || payload.contentId,
+          userId: payload.userId,
+          maxUses: payload.maxUses,
+          ip:
+            request.headers.get("x-forwarded-for") ||
+            request.headers.get("x-real-ip"),
+          timestamp: new Date().toISOString(),
+        },
+      );
 
       // TODO: Check usage count if payload.maxUses is set
       // This would require a Redis/DB lookup to track usage
 
-      // Unlock using the token
+      // Unlock using the token (validates contentId matches)
       const result = server.unlockWithToken(
         payload,
         wrappedDek,
         publicKey,
-        articleId
+        contentId,
       );
 
       return NextResponse.json({
         ...result,
         keyType: "dek",
         tokenId: payload.tid,
+        issuer: payload.iss,
+        contentId: payload.contentId,
         bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
       });
     }
@@ -129,7 +150,7 @@ export async function POST(request: NextRequest) {
     if (!keyId || typeof keyId !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid keyId (or provide a token)" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -145,7 +166,7 @@ export async function POST(request: NextRequest) {
       if (colonIndex === -1) {
         return NextResponse.json(
           { error: "Invalid tier keyId format. Expected 'tier:bucketId'" },
-          { status: 400 }
+          { status: 400 },
         );
       }
 
@@ -165,7 +186,7 @@ export async function POST(request: NextRequest) {
     if (!wrappedDek || typeof wrappedDek !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid wrappedDek (required for article keys)" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -184,7 +205,7 @@ export async function POST(request: NextRequest) {
     const result = await server.unlockForUser(
       { keyId, wrappedDek },
       publicKey,
-      staticKeyLookup
+      staticKeyLookup,
     );
 
     return NextResponse.json({
@@ -202,7 +223,7 @@ export async function POST(request: NextRequest) {
       ) {
         return NextResponse.json(
           { error: "Invalid public key format" },
-          { status: 400 }
+          { status: 400 },
         );
       }
       if (
@@ -215,7 +236,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       { error: "Failed to process unlock request" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

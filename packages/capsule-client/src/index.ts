@@ -58,6 +58,29 @@
 
 export { CapsuleClient } from "./client";
 export { KeyStorage } from "./storage";
+export {
+  parseShareToken,
+  getShareTokenFromUrl,
+  validateTokenForContent,
+  TokenValidator,
+  createTokenValidator,
+  JwksTokenValidator,
+  createJwksTokenValidator,
+  type ShareTokenPayload,
+  type ParsedToken,
+  type TokenParseError,
+  type TrustedKeys,
+  type TokenValidatorOptions,
+  type TokenValidationSuccess,
+  type TokenValidationFailure,
+  type TokenValidationResult,
+  type JwkKey,
+  type Jwks,
+  type JwksTokenValidatorOptions,
+  type JwksValidationSuccess,
+  type JwksValidationFailure,
+  type JwksValidationResult,
+} from "./tokens";
 export type {
   // Core data types
   EncryptedPayload,

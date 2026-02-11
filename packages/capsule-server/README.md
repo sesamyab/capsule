@@ -125,7 +125,7 @@ const { data, json, attribute, html } = await cms.encryptForTemplate(
   content,
   {
     keyIds: ["premium"],
-  }
+  },
 );
 ```
 
@@ -161,7 +161,7 @@ const articleKey = await totp.getArticleKey("article-123");
 const cms = createCmsServer({
   getKeys: async (keyIds) => {
     const keys = await totp.getKeys(
-      keyIds.filter((id) => !id.startsWith("article:"))
+      keyIds.filter((id) => !id.startsWith("article:")),
     );
 
     // Add article keys if requested
@@ -206,7 +206,7 @@ app.post("/api/unlock", async (req) => {
     { keyId, wrappedDek },
     publicKey,
     // Optional: lookup for static keys (per-article purchase)
-    (keyId) => staticKeyStore.get(keyId)
+    (keyId) => staticKeyStore.get(keyId),
   );
 });
 ```
@@ -275,11 +275,11 @@ const tokens = createTokenManager({
 
 // Generate a share token
 const token = tokens.generate({
-  tier: "premium",               // Required: which tier to grant access to
-  expiresIn: "7d",              // Required: "1h", "24h", "7d", "30d"
-  articleId: "crypto-guide",    // Optional: restrict to specific article
-  maxUses: 1000,                // Optional: limit total uses
-  userId: "publisher-123",      // Optional: for attribution
+  tier: "premium", // Required: which tier to grant access to
+  expiresIn: "7d", // Required: "1h", "24h", "7d", "30d"
+  articleId: "crypto-guide", // Optional: restrict to specific article
+  maxUses: 1000, // Optional: limit total uses
+  userId: "publisher-123", // Optional: for attribution
   meta: { campaign: "twitter" }, // Optional: custom metadata
 });
 
@@ -319,7 +319,7 @@ app.post("/api/unlock", async (req) => {
     validation.payload,
     wrappedDek,
     publicKey,
-    articleId
+    articleId,
   );
 
   return res.json({ ...result, tokenId: validation.payload.tid });
@@ -332,15 +332,15 @@ Tokens are URL-safe, signed payloads:
 
 ```typescript
 interface UnlockTokenPayload {
-  v: 1;                          // Version
-  tid: string;                   // Unique token ID (for tracking/revocation)
-  tier: string;                  // Tier this grants access to
-  articleId?: string;            // Specific article (if restricted)
-  userId?: string;               // Creator attribution
-  maxUses?: number;              // Usage limit
-  iat: number;                   // Issued at (Unix timestamp)
-  exp: number;                   // Expires at (Unix timestamp)
-  meta?: Record<string, any>;    // Custom metadata
+  v: 1; // Version
+  tid: string; // Unique token ID (for tracking/revocation)
+  tier: string; // Tier this grants access to
+  articleId?: string; // Specific article (if restricted)
+  userId?: string; // Creator attribution
+  maxUses?: number; // Usage limit
+  iat: number; // Issued at (Unix timestamp)
+  exp: number; // Expires at (Unix timestamp)
+  meta?: Record<string, any>; // Custom metadata
 }
 ```
 
@@ -350,10 +350,10 @@ interface UnlockTokenPayload {
 // 1. Publisher generates share link
 app.post("/api/share", async (req, res) => {
   const { tier, articleId, expiresIn, maxUses } = req.body;
-  
+
   const token = tokens.generate({ tier, articleId, expiresIn, maxUses });
   const payload = tokens.peek(token);
-  
+
   res.json({
     token,
     tokenId: payload.tid,
@@ -368,13 +368,13 @@ app.post("/api/share", async (req, res) => {
 // 3. Server validates and unlocks
 app.post("/api/unlock", async (req, res) => {
   const { token, wrappedDek, publicKey, articleId } = req.body;
-  
+
   if (token) {
     const validation = tokens.validate(token);
     if (!validation.valid) {
       return res.status(401).json({ error: validation.message });
     }
-    
+
     // Full audit trail
     await analytics.log("share_link_unlock", {
       tokenId: validation.payload.tid,
@@ -382,15 +382,15 @@ app.post("/api/unlock", async (req, res) => {
       articleId,
       ip: req.ip,
     });
-    
+
     const result = server.unlockWithToken(
       validation.payload,
       wrappedDek,
-      publicKey
+      publicKey,
     );
     return res.json(result);
   }
-  
+
   // Regular unlock flow...
 });
 ```

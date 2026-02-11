@@ -46,7 +46,7 @@ export function EncryptedSection({
 
   // Parse keyId to get type and base info
   const parseKeyId = (
-    keyId: string
+    keyId: string,
   ): { type: "tier" | "article"; baseId: string; bucketId?: string } => {
     const [first, second] = keyId.split(":", 2);
     if (first === "article") {
@@ -106,7 +106,7 @@ export function EncryptedSection({
       contentElement.dispatchEvent(event);
       log(
         `Dispatched 'capsule:unlocked' event for article "${articleId}"`,
-        "info"
+        "info",
       );
     }
   }, [state, decryptedContent, log, articleId, usedKeyId]);
@@ -137,7 +137,7 @@ export function EncryptedSection({
           if (token) {
             log(
               `POST /api/unlock { token: "...", wrappedDek: "...", publicKey: "..." } (share link mode)`,
-              "network"
+              "network",
             );
 
             const response = await fetch("/api/unlock", {
@@ -154,17 +154,19 @@ export function EncryptedSection({
             if (!response.ok) {
               const data = await response.json();
               log(`Server error: ${data.error}`, "error");
-              throw new Error(data.error || `Server returned ${response.status}`);
+              throw new Error(
+                data.error || `Server returned ${response.status}`,
+              );
             }
 
             const result = await response.json();
             log(
               `Share link unlocked! Token ID: ${result.tokenId || "unknown"}`,
-              "success"
+              "success",
             );
             log(
               `Received encrypted DEK (${result.encryptedDek.length} chars)`,
-              "success"
+              "success",
             );
 
             if (mounted) {
@@ -179,12 +181,12 @@ export function EncryptedSection({
           if (isTierKey) {
             log(
               `POST /api/unlock { keyId: "${keyId}", publicKey: "..." } (tier mode - getting KEK)`,
-              "network"
+              "network",
             );
           } else {
             log(
               `POST /api/unlock { keyId: "${keyId}", wrappedDek: "...", publicKey: "..." }`,
-              "network"
+              "network",
             );
           }
 
@@ -207,18 +209,18 @@ export function EncryptedSection({
 
           const result = await response.json();
           log(
-            `Received encrypted ${
-              result.keyType?.toUpperCase() || "DEK"
-            } (${result.encryptedDek.length} chars)`,
-            "success"
+            `Received encrypted ${result.keyType?.toUpperCase() || "DEK"} (${
+              result.encryptedDek.length
+            } chars)`,
+            "success",
           );
           log(
             `Key valid until: ${new Date(
-              result.expiresAt
-            ).toLocaleTimeString()} (bucket ${
-              result.bucketId || "static"
-            }, ${result.bucketPeriodSeconds}s period)`,
-            "info"
+              result.expiresAt,
+            ).toLocaleTimeString()} (bucket ${result.bucketId || "static"}, ${
+              result.bucketPeriodSeconds
+            }s period)`,
+            "info",
           );
 
           // Store expiry for display
@@ -237,7 +239,10 @@ export function EncryptedSection({
           executeScripts: true,
           logger: (message, level) => {
             // Map client log levels to console log types
-            const typeMap: Record<string, "info" | "success" | "error" | "crypto" | "key"> = {
+            const typeMap: Record<
+              string,
+              "info" | "success" | "error" | "crypto" | "key"
+            > = {
               info: "info",
               debug: "crypto",
               error: "error",
@@ -256,21 +261,24 @@ export function EncryptedSection({
           if (keyInfo) {
             log(
               `Key size: RSA-${keyInfo.keySize}, created: ${new Date(
-                keyInfo.createdAt
+                keyInfo.createdAt,
               ).toLocaleDateString()}`,
-              "info"
+              "info",
             );
           }
         } else {
           log(
             "No existing keys found. Generating new RSA-2048 key pair...",
-            "key"
+            "key",
           );
         }
 
         // Get public key (creates if needed)
         const publicKey = await client.getPublicKey();
-        log(`Public key ready (${publicKey.length} chars, Base64 SPKI)`, "success");
+        log(
+          `Public key ready (${publicKey.length} chars, Base64 SPKI)`,
+          "success",
+        );
 
         if (!hasKeys) {
           log("RSA key pair generated and stored securely", "success");
@@ -292,10 +300,13 @@ export function EncryptedSection({
               setState("unlocking");
 
               try {
-                const content = await client.unlockWithToken(encryptedData, token);
+                const content = await client.unlockWithToken(
+                  encryptedData,
+                  token,
+                );
 
                 const tierKey = encryptedData.wrappedKeys.find(
-                  (k) => !k.keyId.startsWith("article:")
+                  (k) => !k.keyId.startsWith("article:"),
                 );
 
                 setDecryptedContent(content);
@@ -316,7 +327,7 @@ export function EncryptedSection({
                   `Share link unlock failed: ${
                     err instanceof Error ? err.message : "Unknown error"
                   }`,
-                  "error"
+                  "error",
                 );
                 // Fall through to regular unlock flow
               }
@@ -332,7 +343,7 @@ export function EncryptedSection({
 
               // Find which key was used
               const tierKey = encryptedData.wrappedKeys.find(
-                (k) => !k.keyId.startsWith("article:")
+                (k) => !k.keyId.startsWith("article:"),
               );
 
               setDecryptedContent(content);
@@ -345,7 +356,7 @@ export function EncryptedSection({
               log(`Encrypted content ready (${securityMode} mode)`, "info");
               log(
                 `Available keys: ${tierKeys.length} tier, ${articleKeys.length} article`,
-                "info"
+                "info",
               );
               log("Click 'Unlock' to request decryption key", "info");
               setState("locked");
@@ -358,7 +369,7 @@ export function EncryptedSection({
           `Error: ${
             err instanceof Error ? err.message : "Failed to initialize"
           }`,
-          "error"
+          "error",
         );
         if (mounted) {
           setError(err instanceof Error ? err.message : "Failed to initialize");
@@ -402,19 +413,25 @@ export function EncryptedSection({
       const usedKey =
         keyType === "tier"
           ? encryptedData.wrappedKeys.find(
-              (k) => !k.keyId.startsWith("article:")
+              (k) => !k.keyId.startsWith("article:"),
             )
           : encryptedData.wrappedKeys.find((k) =>
-              k.keyId.startsWith("article:")
+              k.keyId.startsWith("article:"),
             );
 
-      log("DEK unwrapped successfully (AES-256-GCM, non-extractable)", "success");
+      log(
+        "DEK unwrapped successfully (AES-256-GCM, non-extractable)",
+        "success",
+      );
       log("Decrypting content with AES-256-GCM...", "crypto");
 
       setDecryptedContent(content);
       setUsedKeyId(usedKey?.keyId || "unknown");
       setState("unlocked");
-      log(`Content decrypted successfully (${content.length} chars)`, "success");
+      log(
+        `Content decrypted successfully (${content.length} chars)`,
+        "success",
+      );
       log("✨ Article unlocked!", "success");
     } catch (err) {
       console.error("Unlock failed:", err);
@@ -422,7 +439,7 @@ export function EncryptedSection({
         `Unlock failed: ${
           err instanceof Error ? err.message : "Unknown error"
         }`,
-        "error"
+        "error",
       );
       setError(err instanceof Error ? err.message : "Unlock failed");
       setState("error");
@@ -469,15 +486,18 @@ export function EncryptedSection({
     const keyLabel = tokenId
       ? `share link`
       : parsed.type === "tier"
-        ? `tier "${parsed.baseId}"`
-        : `article "${parsed.baseId}"`;
+      ? `tier "${parsed.baseId}"`
+      : `article "${parsed.baseId}"`;
     const expiryDisplay = getExpiryDisplay();
 
     return (
       <div className="unlocked-section">
         <div className="unlock-banner">
           <span>{tokenId ? "🔗" : "🔓"}</span>
-          <span>Content decrypted locally (using {keyLabel}{tokenId ? ` • token: ${tokenId.slice(0, 8)}...` : ""} key)</span>
+          <span>
+            Content decrypted locally (using {keyLabel}
+            {tokenId ? ` • token: ${tokenId.slice(0, 8)}...` : ""} key)
+          </span>
           {expiryDisplay && (
             <span
               className="key-expiry-badge"
@@ -554,7 +574,10 @@ export function EncryptedSection({
             <p>Choose how to unlock this encrypted content:</p>
             <div className="unlock-buttons">
               {tierKeys.length > 0 && (
-                <button onClick={() => handleUnlock("tier")} className="primary">
+                <button
+                  onClick={() => handleUnlock("tier")}
+                  className="primary"
+                >
                   <span className="button-icon">🎫</span>
                   <span className="button-text">
                     <strong>Premium Tier</strong>

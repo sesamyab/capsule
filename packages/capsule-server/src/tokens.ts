@@ -39,10 +39,16 @@ export interface UnlockTokenPayload {
   v: 1;
   /** Unique token ID for tracking/revocation */
   tid: string;
+  /** Issuer identifier (e.g., "sesamy", "publisher-name") */
+  iss: string;
+  /** Key ID used for signing (enables key rotation) */
+  kid: string;
   /** Tier this token grants access to (e.g., "premium") */
   tier: string;
-  /** Optional: specific article ID (if not set, works for any article in tier) */
-  articleId?: string;
+  /** Publisher's content ID (required for content binding) */
+  contentId: string;
+  /** Optional: full URL for the content */
+  url?: string;
   /** Optional: user/purchaser ID for attribution */
   userId?: string;
   /** Optional: maximum number of uses (undefined = unlimited) */
@@ -59,8 +65,10 @@ export interface UnlockTokenPayload {
 export interface GenerateTokenOptions {
   /** Tier this token grants access to */
   tier: string;
-  /** Optional: specific article ID */
-  articleId?: string;
+  /** Publisher's content ID (required) */
+  contentId: string;
+  /** Optional: full URL for the content */
+  url?: string;
   /** Optional: user/purchaser ID */
   userId?: string;
   /** Optional: maximum uses */
@@ -92,13 +100,17 @@ export interface TokenValidationError {
 export interface TokenManagerOptions {
   /** Secret key for signing tokens (min 32 bytes recommended) */
   secret: string | Buffer;
+  /** Issuer identifier (e.g., "sesamy", "my-publisher") */
+  issuer: string;
+  /** Key ID for this secret (enables key rotation, e.g., "key-2026-01") */
+  keyId: string;
 }
 
 /** Callback for tracking token usage */
 export type UsageTracker = (
   tokenId: string,
   payload: UnlockTokenPayload,
-  context: { articleId?: string; ip?: string }
+  context: { articleId?: string; ip?: string },
 ) => Promise<{ allowed: boolean; currentUses?: number }>;
 
 /**
@@ -113,7 +125,7 @@ function parseDuration(duration: string | number): number {
   const match = duration.match(/^(\d+)(s|m|h|d)$/);
   if (!match) {
     throw new Error(
-      `Invalid duration format: ${duration}. Use "1h", "24h", "7d", etc.`
+      `Invalid duration format: ${duration}. Use "1h", "24h", "7d", etc.`,
     );
   }
 
@@ -142,15 +154,19 @@ function parseDuration(duration: string | number): number {
  */
 export class TokenManager {
   private secret: Buffer;
+  private issuer: string;
+  private keyId: string;
 
   constructor(options: TokenManagerOptions) {
     this.secret = Buffer.isBuffer(options.secret)
       ? options.secret
       : Buffer.from(options.secret, "utf-8");
+    this.issuer = options.issuer;
+    this.keyId = options.keyId;
 
     if (this.secret.length < 32) {
       console.warn(
-        "TokenManager: secret should be at least 32 bytes for security"
+        "TokenManager: secret should be at least 32 bytes for security",
       );
     }
   }
@@ -165,12 +181,15 @@ export class TokenManager {
     const payload: UnlockTokenPayload = {
       v: 1,
       tid: randomBytes(12).toString("base64url"),
+      iss: this.issuer,
+      kid: this.keyId,
       tier: options.tier,
+      contentId: options.contentId,
       iat: now,
       exp: now + expiresInSeconds,
     };
 
-    if (options.articleId) payload.articleId = options.articleId;
+    if (options.url) payload.url = options.url;
     if (options.userId) payload.userId = options.userId;
     if (options.maxUses !== undefined) payload.maxUses = options.maxUses;
     if (options.meta) payload.meta = options.meta;
@@ -210,7 +229,7 @@ export class TokenManager {
     let payload: UnlockTokenPayload;
     try {
       const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8"
+        "utf-8",
       );
       payload = JSON.parse(payloadJson);
     } catch {
@@ -241,7 +260,7 @@ export class TokenManager {
 
       const payloadB64 = token.substring(0, dotIndex);
       const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8"
+        "utf-8",
       );
       return JSON.parse(payloadJson);
     } catch {
@@ -286,8 +305,6 @@ export class TokenManager {
  * const shareUrl = `https://example.com/article/my-article?token=${token}`;
  * ```
  */
-export function createTokenManager(
-  options: TokenManagerOptions
-): TokenManager {
+export function createTokenManager(options: TokenManagerOptions): TokenManager {
   return new TokenManager(options);
 }

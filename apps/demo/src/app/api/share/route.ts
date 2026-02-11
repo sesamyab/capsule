@@ -7,6 +7,8 @@ import { TOKEN_SECRET } from "@/lib/capsule";
  */
 const tokens = createTokenManager({
   secret: TOKEN_SECRET,
+  issuer: "capsule-demo",
+  keyId: "demo-key-2026",
 });
 
 /**
@@ -18,7 +20,8 @@ const tokens = createTokenManager({
  * Request body:
  * {
  *   tier: string (e.g., "premium"),
- *   articleId?: string (optional, restrict to specific article),
+ *   contentId: string (required, publisher's content ID),
+ *   url?: string (optional, full URL for the content),
  *   expiresIn: string (e.g., "24h", "7d"),
  *   maxUses?: number (optional, limit total uses),
  *   userId?: string (optional, for attribution),
@@ -39,27 +42,35 @@ const tokens = createTokenManager({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { tier, articleId, expiresIn, maxUses, userId, meta } = body;
+    const { tier, contentId, url, expiresIn, maxUses, userId, meta } = body;
 
     // Validate required fields
     if (!tier || typeof tier !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid tier" },
-        { status: 400 }
+        { status: 400 },
+      );
+    }
+
+    if (!contentId || typeof contentId !== "string") {
+      return NextResponse.json(
+        { error: "Missing or invalid contentId" },
+        { status: 400 },
       );
     }
 
     if (!expiresIn || typeof expiresIn !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid expiresIn (e.g., '24h', '7d')" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     // Generate the token
     const token = tokens.generate({
       tier,
-      articleId,
+      contentId,
+      url,
       expiresIn,
       maxUses,
       userId,
@@ -71,20 +82,25 @@ export async function POST(request: NextRequest) {
     if (!payload) {
       return NextResponse.json(
         { error: "Failed to generate token" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
     // Build share URL
     const baseUrl = request.headers.get("origin") || request.nextUrl.origin;
-    const path = articleId ? `/article/${articleId}` : "/";
-    const shareUrl = `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
+    const path = `/article/${contentId}`;
+    const defaultUrl = `${baseUrl}${path}`;
+    const targetUrl = url || defaultUrl;
+    const separator = targetUrl.includes("?") ? "&" : "?";
+    const shareUrl = `${targetUrl}${separator}token=${encodeURIComponent(token)}`;
 
     // Log token generation for audit
     console.log(`[SHARE] Token generated`, {
       tokenId: payload.tid,
+      issuer: payload.iss,
+      keyId: payload.kid,
       tier,
-      articleId,
+      contentId,
       expiresIn,
       maxUses,
       userId,
@@ -94,6 +110,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       token,
       tokenId: payload.tid,
+      issuer: payload.iss,
+      keyId: payload.kid,
+      contentId: payload.contentId,
       expiresAt: new Date(payload.exp * 1000).toISOString(),
       shareUrl,
     });
@@ -106,7 +125,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       { error: "Failed to generate share token" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

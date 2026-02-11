@@ -167,7 +167,7 @@ export class CapsuleClient {
     const keyPair = await this.ensureKeyPair();
     const publicKeySpki = await crypto.subtle.exportKey(
       "spki",
-      keyPair.publicKey
+      keyPair.publicKey,
     );
     return this.arrayBufferToBase64(publicKeySpki);
   }
@@ -229,7 +229,7 @@ export class CapsuleClient {
         const articleId = element.dataset.capsuleId || "unknown";
         results.set(
           articleId,
-          err instanceof Error ? err : new Error(String(err))
+          err instanceof Error ? err : new Error(String(err)),
         );
       }
     }
@@ -261,11 +261,11 @@ export class CapsuleClient {
    */
   async unlockWithToken(
     article: EncryptedArticle,
-    token: string
+    token: string,
   ): Promise<string> {
     if (!this.unlockFn) {
       throw new Error(
-        "No unlock function provided. Pass an unlock function to the constructor."
+        "No unlock function provided. Pass an unlock function to the constructor.",
       );
     }
 
@@ -274,7 +274,7 @@ export class CapsuleClient {
 
     // Use the first tier key's wrappedDek (token-based unlock doesn't need keyId)
     const tierKey = article.wrappedKeys.find(
-      (k) => !k.keyId.startsWith("article:")
+      (k) => !k.keyId.startsWith("article:"),
     );
     if (!tierKey) {
       throw new Error("No tier key found in article for token-based unlock");
@@ -294,8 +294,10 @@ export class CapsuleClient {
     await this.cacheDek(tierKey.keyId, dek, response);
 
     this.log(
-      `Unlocked ${article.articleId} with token ${response.tokenId || "unknown"}`,
-      "info"
+      `Unlocked ${article.articleId} with token ${
+        response.tokenId || "unknown"
+      }`,
+      "info",
     );
 
     return await this.decryptWithDek(article, dek);
@@ -317,14 +319,14 @@ export class CapsuleClient {
    */
   async unlock(
     article: EncryptedArticle,
-    preferredKeyType: "tier" | "article" = "tier"
+    preferredKeyType: "tier" | "article" = "tier",
   ): Promise<string> {
     const keyPair = await this.ensureKeyPair();
 
     // Sort wrapped keys by preference
     const sortedKeys = this.sortKeysByPreference(
       article.wrappedKeys,
-      preferredKeyType
+      preferredKeyType,
     );
 
     // Try cached DEKs first
@@ -338,7 +340,7 @@ export class CapsuleClient {
           // Cache might be stale, continue
           this.log(
             `Cached DEK failed for ${wrappedKey.keyId}, trying next`,
-            "debug"
+            "debug",
           );
         }
       }
@@ -348,7 +350,7 @@ export class CapsuleClient {
     if (!this.unlockFn) {
       throw new Error(
         "No unlock function provided. Either pass an unlock function to the constructor, " +
-          "or use decrypt() with a pre-fetched encryptedDek."
+          "or use decrypt() with a pre-fetched encryptedDek.",
       );
     }
 
@@ -365,7 +367,7 @@ export class CapsuleClient {
 
         const dek = await this.unwrapDek(
           keyPair.privateKey,
-          response.encryptedDek
+          response.encryptedDek,
         );
         await this.cacheDek(wrappedKey.keyId, dek, response);
 
@@ -401,7 +403,7 @@ export class CapsuleClient {
    */
   async decrypt(
     article: EncryptedArticle,
-    encryptedDek: string
+    encryptedDek: string,
   ): Promise<string> {
     const keyPair = await this.ensureKeyPair();
     const dek = await this.unwrapDek(keyPair.privateKey, encryptedDek);
@@ -425,7 +427,7 @@ export class CapsuleClient {
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv },
       dek,
-      ciphertext
+      ciphertext,
     );
 
     return new TextDecoder().decode(decrypted);
@@ -481,7 +483,7 @@ export class CapsuleClient {
     } else if (this.dekStorage === "session") {
       // Clear from sessionStorage
       const keys = Object.keys(sessionStorage).filter((k) =>
-        k.startsWith(DEK_STORAGE_PREFIX)
+        k.startsWith(DEK_STORAGE_PREFIX),
       );
       keys.forEach((k) => sessionStorage.removeItem(k));
     }
@@ -547,7 +549,7 @@ export class CapsuleClient {
   private findElement(articleId: string): HTMLElement | null {
     // Try data-capsule-id first
     let element = document.querySelector<HTMLElement>(
-      `[data-capsule-id="${articleId}"]`
+      `[data-capsule-id="${articleId}"]`,
     );
     if (element) return element;
 
@@ -591,7 +593,7 @@ export class CapsuleClient {
   private renderContent(
     element: HTMLElement,
     content: string,
-    articleId: string
+    articleId: string,
   ): void {
     // Set the HTML content
     element.innerHTML = content;
@@ -638,7 +640,7 @@ export class CapsuleClient {
   private setElementState(
     element: HTMLElement,
     articleId: string,
-    state: ElementState
+    state: ElementState,
   ): void {
     const previousState = this.elementStates.get(articleId) || "locked";
     this.elementStates.set(articleId, state);
@@ -663,7 +665,7 @@ export class CapsuleClient {
   private emitEvent<T>(
     element: HTMLElement,
     eventName: string,
-    detail: T
+    detail: T,
   ): void {
     const event = new CustomEvent(eventName, {
       detail,
@@ -709,20 +711,20 @@ export class CapsuleClient {
         hash: "SHA-256",
       },
       true, // Need extractable for public key export
-      ["wrapKey", "unwrapKey"]
+      ["wrapKey", "unwrapKey"],
     );
 
     // Re-import private key as non-extractable
     const privateKeyJwk = await crypto.subtle.exportKey(
       "jwk",
-      keyPair.privateKey
+      keyPair.privateKey,
     );
     const nonExtractablePrivateKey = await crypto.subtle.importKey(
       "jwk",
       privateKeyJwk,
       { name: "RSA-OAEP", hash: "SHA-256" },
       false, // NOT extractable
-      ["unwrapKey"]
+      ["unwrapKey"],
     );
 
     // Store
@@ -730,7 +732,7 @@ export class CapsuleClient {
       DEFAULT_KEY_ID,
       keyPair.publicKey,
       nonExtractablePrivateKey,
-      this.keySize
+      this.keySize,
     );
 
     this.log("Key pair generated and stored", "info");
@@ -753,7 +755,7 @@ export class CapsuleClient {
    */
   private sortKeysByPreference(
     keys: WrappedKey[],
-    preferredType: "tier" | "article"
+    preferredType: "tier" | "article",
   ): WrappedKey[] {
     const parseKeyType = (keyId: string): "tier" | "article" => {
       return keyId.startsWith("article:") ? "article" : "tier";
@@ -773,7 +775,7 @@ export class CapsuleClient {
    * Get cached DEK for a key ID.
    */
   private async getCachedDek(
-    keyId: string
+    keyId: string,
   ): Promise<{ dek: CryptoKey; info: StoredDek } | null> {
     // Check memory cache first
     const memCached = this.dekCache.get(keyId);
@@ -805,7 +807,7 @@ export class CapsuleClient {
   private async cacheDek(
     keyId: string,
     dek: CryptoKey,
-    response: UnlockResponse
+    response: UnlockResponse,
   ): Promise<void> {
     const expiresAt =
       typeof response.expiresAt === "string"
@@ -832,7 +834,7 @@ export class CapsuleClient {
 
     this.log(
       `Cached DEK for ${keyId}, expires ${new Date(expiresAt).toISOString()}`,
-      "debug"
+      "debug",
     );
   }
 
@@ -942,7 +944,7 @@ export class CapsuleClient {
 
   private getDekFromStore(
     db: IDBDatabase,
-    keyId: string
+    keyId: string,
   ): Promise<StoredDek | null> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction("deks", "readonly");
@@ -956,7 +958,7 @@ export class CapsuleClient {
   private putDekToStore(
     db: IDBDatabase,
     keyId: string,
-    info: StoredDek
+    info: StoredDek,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const tx = db.transaction("deks", "readwrite");
@@ -986,7 +988,7 @@ export class CapsuleClient {
    */
   private async unwrapDek(
     privateKey: CryptoKey,
-    encryptedDekB64: string
+    encryptedDekB64: string,
   ): Promise<CryptoKey> {
     const encryptedDek = this.base64ToArrayBuffer(encryptedDekB64);
 
@@ -997,7 +999,7 @@ export class CapsuleClient {
       { name: "RSA-OAEP" },
       { name: "AES-GCM", length: 256 },
       false, // Non-extractable
-      ["decrypt"]
+      ["decrypt"],
     );
   }
 
@@ -1006,7 +1008,7 @@ export class CapsuleClient {
    */
   private async decryptWithDek(
     article: EncryptedArticle,
-    dek: CryptoKey
+    dek: CryptoKey,
   ): Promise<string> {
     const iv = this.base64ToArrayBuffer(article.iv);
     const ciphertext = this.base64ToArrayBuffer(article.encryptedContent);
@@ -1014,7 +1016,7 @@ export class CapsuleClient {
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv },
       dek,
-      ciphertext
+      ciphertext,
     );
 
     return new TextDecoder().decode(decrypted);
