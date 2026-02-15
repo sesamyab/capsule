@@ -12,53 +12,67 @@ import {
   hkdf,
 } from "../time-buckets";
 
+// Helper to compare Uint8Arrays
+function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+// Helper to convert string to Uint8Array
+function encodeUtf8(str: string): Uint8Array {
+  return new TextEncoder().encode(str);
+}
+
 describe("time-buckets", () => {
   describe("hkdf", () => {
-    it("derives deterministic keys", () => {
-      const secret = Buffer.from("master-secret");
+    it("derives deterministic keys", async () => {
+      const secret = encodeUtf8("master-secret");
       const salt = "test-salt";
       const info = "test-info";
 
-      const key1 = hkdf(secret, salt, info, 32);
-      const key2 = hkdf(secret, salt, info, 32);
+      const key1 = await hkdf(secret, salt, info, 32);
+      const key2 = await hkdf(secret, salt, info, 32);
 
-      expect(key1.equals(key2)).toBe(true);
+      expect(arraysEqual(key1, key2)).toBe(true);
     });
 
-    it("produces different keys with different salts", () => {
-      const secret = Buffer.from("master-secret");
+    it("produces different keys with different salts", async () => {
+      const secret = encodeUtf8("master-secret");
       const info = "test-info";
 
-      const key1 = hkdf(secret, "salt1", info, 32);
-      const key2 = hkdf(secret, "salt2", info, 32);
+      const key1 = await hkdf(secret, "salt1", info, 32);
+      const key2 = await hkdf(secret, "salt2", info, 32);
 
-      expect(key1.equals(key2)).toBe(false);
+      expect(arraysEqual(key1, key2)).toBe(false);
     });
 
-    it("produces different keys with different info", () => {
-      const secret = Buffer.from("master-secret");
+    it("produces different keys with different info", async () => {
+      const secret = encodeUtf8("master-secret");
       const salt = "test-salt";
 
-      const key1 = hkdf(secret, salt, "info1", 32);
-      const key2 = hkdf(secret, salt, "info2", 32);
+      const key1 = await hkdf(secret, salt, "info1", 32);
+      const key2 = await hkdf(secret, salt, "info2", 32);
 
-      expect(key1.equals(key2)).toBe(false);
+      expect(arraysEqual(key1, key2)).toBe(false);
     });
 
-    it("produces keys of requested length", () => {
-      const secret = Buffer.from("master-secret");
+    it("produces keys of requested length", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      expect(hkdf(secret, "salt", "info", 16).length).toBe(16);
-      expect(hkdf(secret, "salt", "info", 32).length).toBe(32);
-      expect(hkdf(secret, "salt", "info", 64).length).toBe(64);
+      expect((await hkdf(secret, "salt", "info", 16)).length).toBe(16);
+      expect((await hkdf(secret, "salt", "info", 32)).length).toBe(32);
+      expect((await hkdf(secret, "salt", "info", 64)).length).toBe(64);
     });
 
-    it("accepts Buffer for salt and info", () => {
-      const secret = Buffer.from("master-secret");
-      const salt = Buffer.from("salt");
-      const info = Buffer.from("info");
+    it("accepts Uint8Array for salt and info", async () => {
+      const secret = encodeUtf8("master-secret");
+      const salt = encodeUtf8("salt");
+      const info = encodeUtf8("info");
 
-      const key = hkdf(secret, salt, info, 32);
+      const key = await hkdf(secret, salt, info, 32);
       expect(key.length).toBe(32);
     });
   });
@@ -177,48 +191,48 @@ describe("time-buckets", () => {
   });
 
   describe("deriveBucketKey", () => {
-    it("derives deterministic keys", () => {
-      const secret = Buffer.from("master-secret-for-testing", "utf-8");
+    it("derives deterministic keys", async () => {
+      const secret = encodeUtf8("master-secret-for-testing");
 
-      const key1 = deriveBucketKey(secret, "premium", "12345");
-      const key2 = deriveBucketKey(secret, "premium", "12345");
+      const key1 = await deriveBucketKey(secret, "premium", "12345");
+      const key2 = await deriveBucketKey(secret, "premium", "12345");
 
-      expect(key1.equals(key2)).toBe(true);
+      expect(arraysEqual(key1, key2)).toBe(true);
     });
 
-    it("produces 256-bit keys", () => {
-      const secret = Buffer.from("master-secret", "utf-8");
+    it("produces 256-bit keys", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      const key = deriveBucketKey(secret, "premium", "12345");
+      const key = await deriveBucketKey(secret, "premium", "12345");
       expect(key.length).toBe(32);
     });
 
-    it("produces different keys for different tiers", () => {
-      const secret = Buffer.from("master-secret", "utf-8");
+    it("produces different keys for different tiers", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      const premiumKey = deriveBucketKey(secret, "premium", "12345");
-      const basicKey = deriveBucketKey(secret, "basic", "12345");
+      const premiumKey = await deriveBucketKey(secret, "premium", "12345");
+      const basicKey = await deriveBucketKey(secret, "basic", "12345");
 
-      expect(premiumKey.equals(basicKey)).toBe(false);
+      expect(arraysEqual(premiumKey, basicKey)).toBe(false);
     });
 
-    it("produces different keys for different buckets", () => {
-      const secret = Buffer.from("master-secret", "utf-8");
+    it("produces different keys for different buckets", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      const key1 = deriveBucketKey(secret, "premium", "12345");
-      const key2 = deriveBucketKey(secret, "premium", "12346");
+      const key1 = await deriveBucketKey(secret, "premium", "12345");
+      const key2 = await deriveBucketKey(secret, "premium", "12346");
 
-      expect(key1.equals(key2)).toBe(false);
+      expect(arraysEqual(key1, key2)).toBe(false);
     });
 
-    it("produces different keys for different secrets", () => {
-      const secret1 = Buffer.from("secret1", "utf-8");
-      const secret2 = Buffer.from("secret2", "utf-8");
+    it("produces different keys for different secrets", async () => {
+      const secret1 = encodeUtf8("secret1");
+      const secret2 = encodeUtf8("secret2");
 
-      const key1 = deriveBucketKey(secret1, "premium", "12345");
-      const key2 = deriveBucketKey(secret2, "premium", "12345");
+      const key1 = await deriveBucketKey(secret1, "premium", "12345");
+      const key2 = await deriveBucketKey(secret2, "premium", "12345");
 
-      expect(key1.equals(key2)).toBe(false);
+      expect(arraysEqual(key1, key2)).toBe(false);
     });
   });
 
@@ -232,13 +246,13 @@ describe("time-buckets", () => {
       vi.useRealTimers();
     });
 
-    it("returns key with metadata", () => {
-      const secret = Buffer.from("master-secret", "utf-8");
+    it("returns key with metadata", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      const bucketKey = getBucketKey(secret, "premium", "56802240", 30);
+      const bucketKey = await getBucketKey(secret, "premium", "56802240", 30);
 
       expect(bucketKey.bucketId).toBe("56802240");
-      expect(bucketKey.key).toBeInstanceOf(Buffer);
+      expect(bucketKey.key).toBeInstanceOf(Uint8Array);
       expect(bucketKey.key.length).toBe(32);
       expect(bucketKey.expiresAt).toBeInstanceOf(Date);
     });
@@ -254,20 +268,20 @@ describe("time-buckets", () => {
       vi.useRealTimers();
     });
 
-    it("returns current and next bucket keys", () => {
-      const secret = Buffer.from("master-secret", "utf-8");
+    it("returns current and next bucket keys", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      const { current, next } = getBucketKeys(secret, "premium", 30);
+      const { current, next } = await getBucketKeys(secret, "premium", 30);
 
       expect(current.bucketId).toBe("56802240");
       expect(next.bucketId).toBe("56802241");
-      expect(current.key).not.toEqual(next.key);
+      expect(arraysEqual(current.key, next.key)).toBe(false);
     });
 
-    it("uses default period when not specified", () => {
-      const secret = Buffer.from("master-secret", "utf-8");
+    it("uses default period when not specified", async () => {
+      const secret = encodeUtf8("master-secret");
 
-      const { current, next } = getBucketKeys(secret, "premium");
+      const { current, next } = await getBucketKeys(secret, "premium");
 
       expect(parseInt(next.bucketId)).toBe(parseInt(current.bucketId) + 1);
     });

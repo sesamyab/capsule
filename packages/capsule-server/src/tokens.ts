@@ -17,21 +17,29 @@
  * });
  *
  * // Generate a share token for social media
- * const token = tokens.generate({
+ * const token = await tokens.generate({
  *   tier: 'premium',
  *   maxUses: 1000,
  *   expiresIn: '7d',
  * });
  *
  * // Validate token from incoming request
- * const payload = tokens.validate(token);
+ * const payload = await tokens.validate(token);
  * if (payload) {
  *   // Token is valid, proceed with unlock
  * }
  * ```
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import {
+  hmacSha256,
+  getRandomBytes,
+  toBase64Url,
+  fromBase64Url,
+  encodeUtf8,
+  decodeUtf8,
+  timingSafeEqual,
+} from "./web-crypto";
 
 /** Token payload - what's encoded in the token */
 export interface UnlockTokenPayload {
@@ -99,7 +107,7 @@ export interface TokenValidationError {
 /** Token manager options */
 export interface TokenManagerOptions {
   /** Secret key for signing tokens (min 32 bytes recommended) */
-  secret: string | Buffer;
+  secret: string | Uint8Array;
   /** Issuer identifier (e.g., "sesamy", "my-publisher") */
   issuer: string;
   /** Key ID for this secret (enables key rotation, e.g., "key-2026-01") */
@@ -153,14 +161,19 @@ function parseDuration(duration: string | number): number {
  * Format: base64url(payload).base64url(signature)
  */
 export class TokenManager {
-  private secret: Buffer;
+  private secret: Uint8Array;
   private issuer: string;
   private keyId: string;
 
   constructor(options: TokenManagerOptions) {
-    this.secret = Buffer.isBuffer(options.secret)
-      ? options.secret
-      : Buffer.from(options.secret, "utf-8");
+    if (options.secret instanceof Uint8Array) {
+      this.secret = options.secret;
+    } else if (typeof options.secret === "string") {
+      this.secret = encodeUtf8(options.secret);
+    } else {
+      // Buffer (Node.js)
+      this.secret = new Uint8Array(options.secret);
+    }
     this.issuer = options.issuer;
     this.keyId = options.keyId;
 
@@ -174,13 +187,13 @@ export class TokenManager {
   /**
    * Generate a signed unlock token.
    */
-  generate(options: GenerateTokenOptions): string {
+  async generate(options: GenerateTokenOptions): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     const expiresInSeconds = parseDuration(options.expiresIn);
 
     const payload: UnlockTokenPayload = {
       v: 1,
-      tid: randomBytes(12).toString("base64url"),
+      tid: toBase64Url(getRandomBytes(12)),
       iss: this.issuer,
       kid: this.keyId,
       tier: options.tier,
@@ -200,7 +213,9 @@ export class TokenManager {
   /**
    * Validate a token and return its payload.
    */
-  validate(token: string): TokenValidationResult | TokenValidationError {
+  async validate(
+    token: string,
+  ): Promise<TokenValidationResult | TokenValidationError> {
     // Parse token
     const dotIndex = token.lastIndexOf(".");
     if (dotIndex === -1) {
@@ -215,22 +230,17 @@ export class TokenManager {
     const signatureB64 = token.substring(dotIndex + 1);
 
     // Verify signature
-    const expectedSig = this.computeSignature(payloadB64);
-    const providedSig = Buffer.from(signatureB64, "base64url");
+    const expectedSig = await this.computeSignature(payloadB64);
+    const providedSig = fromBase64Url(signatureB64);
 
-    if (
-      expectedSig.length !== providedSig.length ||
-      !timingSafeEqual(expectedSig, providedSig)
-    ) {
+    if (!timingSafeEqual(expectedSig, providedSig)) {
       return { valid: false, error: "invalid", message: "Invalid signature" };
     }
 
     // Decode payload
     let payload: UnlockTokenPayload;
     try {
-      const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8",
-      );
+      const payloadJson = decodeUtf8(fromBase64Url(payloadB64));
       payload = JSON.parse(payloadJson);
     } catch {
       return {
@@ -259,9 +269,7 @@ export class TokenManager {
       if (dotIndex === -1) return null;
 
       const payloadB64 = token.substring(0, dotIndex);
-      const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8",
-      );
+      const payloadJson = decodeUtf8(fromBase64Url(payloadB64));
       return JSON.parse(payloadJson);
     } catch {
       return null;
@@ -271,18 +279,18 @@ export class TokenManager {
   /**
    * Sign a payload and return the complete token.
    */
-  private sign(payload: UnlockTokenPayload): string {
+  private async sign(payload: UnlockTokenPayload): Promise<string> {
     const payloadJson = JSON.stringify(payload);
-    const payloadB64 = Buffer.from(payloadJson).toString("base64url");
-    const signature = this.computeSignature(payloadB64);
-    return `${payloadB64}.${signature.toString("base64url")}`;
+    const payloadB64 = toBase64Url(encodeUtf8(payloadJson));
+    const signature = await this.computeSignature(payloadB64);
+    return `${payloadB64}.${toBase64Url(signature)}`;
   }
 
   /**
    * Compute HMAC-SHA256 signature.
    */
-  private computeSignature(data: string): Buffer {
-    return createHmac("sha256", this.secret).update(data).digest();
+  private async computeSignature(data: string): Promise<Uint8Array> {
+    return hmacSha256(this.secret, encodeUtf8(data));
   }
 }
 

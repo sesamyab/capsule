@@ -11,6 +11,8 @@
  * - Use TOTP derivation (see `createTotpKeyProvider`)
  * - Return hardcoded/cached keys
  *
+ * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
+ *
  * @example Basic Usage with Custom Key Provider
  * ```typescript
  * import { createCmsServer } from '@sesamy/capsule-server';
@@ -57,6 +59,7 @@ import {
   getBucketKeys,
   DEFAULT_BUCKET_PERIOD_SECONDS,
 } from "./time-buckets";
+import { fromBase64, toBase64 } from "./web-crypto";
 import type { EncryptedArticle, WrappedKey } from "./types";
 
 /**
@@ -65,8 +68,8 @@ import type { EncryptedArticle, WrappedKey } from "./types";
 export interface KeyEntry {
   /** Unique key identifier */
   keyId: string;
-  /** 256-bit AES key (Buffer or base64 string) */
-  key: Buffer | string;
+  /** 256-bit AES key (Uint8Array or base64 string) */
+  key: Uint8Array | string;
   /** Optional expiration time (for time-bucket keys) */
   expiresAt?: Date | string;
 }
@@ -245,9 +248,10 @@ export class CmsServer {
     // Convert keys to internal format
     const keyConfigs = keyEntries.map((entry) => ({
       keyId: entry.keyId,
-      key: Buffer.isBuffer(entry.key)
-        ? entry.key
-        : Buffer.from(entry.key, "base64"),
+      key:
+        entry.key instanceof Uint8Array
+          ? entry.key
+          : fromBase64(entry.key),
       expiresAt: entry.expiresAt
         ? entry.expiresAt instanceof Date
           ? entry.expiresAt
@@ -261,14 +265,16 @@ export class CmsServer {
     const dek = generateDek();
 
     // Encrypt content ONCE with the DEK
-    const { encryptedContent, iv } = encryptContent(content, dek);
+    const { encryptedContent, iv } = await encryptContent(content, dek);
 
     // Wrap the DEK with each key-wrapping key
-    const wrappedKeys: WrappedKey[] = keyConfigs.map((config) => ({
-      keyId: config.keyId,
-      wrappedDek: wrapDek(dek, config.key).toString("base64"),
-      expiresAt: config.expiresAt?.toISOString(),
-    }));
+    const wrappedKeys: WrappedKey[] = await Promise.all(
+      keyConfigs.map(async (config) => ({
+        keyId: config.keyId,
+        wrappedDek: toBase64(await wrapDek(dek, config.key)),
+        expiresAt: config.expiresAt?.toISOString(),
+      })),
+    );
 
     /**
      * The encrypted article structure sent to the client:
@@ -288,8 +294,8 @@ export class CmsServer {
      */
     const result: EncryptedArticle = {
       articleId,
-      encryptedContent: encryptedContent.toString("base64"),
-      iv: iv.toString("base64"),
+      encryptedContent: toBase64(encryptedContent),
+      iv: toBase64(iv),
       wrappedKeys,
     };
 
@@ -410,9 +416,9 @@ export function createCmsServer(options: CmsServerOptions): CmsServer {
 export interface TotpKeyProviderOptions {
   /**
    * Master secret for key derivation.
-   * Can be a Buffer or base64-encoded string.
+   * Can be a Uint8Array or base64-encoded string.
    */
-  masterSecret: Buffer | string;
+  masterSecret: Uint8Array | string;
 
   /**
    * Bucket period in seconds.
@@ -429,13 +435,14 @@ export interface TotpKeyProviderOptions {
  * to handle clock drift between CMS and subscription server.
  */
 export class TotpKeyProvider {
-  private masterSecret: Buffer;
+  private masterSecret: Uint8Array;
   private bucketPeriodSeconds: number;
 
   constructor(options: TotpKeyProviderOptions) {
-    this.masterSecret = Buffer.isBuffer(options.masterSecret)
-      ? options.masterSecret
-      : Buffer.from(options.masterSecret, "base64");
+    this.masterSecret =
+      options.masterSecret instanceof Uint8Array
+        ? options.masterSecret
+        : fromBase64(options.masterSecret);
     this.bucketPeriodSeconds =
       options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
   }
@@ -454,10 +461,10 @@ export class TotpKeyProvider {
     const entries: KeyEntry[] = [];
 
     for (const keyId of keyIds) {
-      const bucketKeys = getBucketKeys(
+      const bucketKeys = await getBucketKeys(
         this.masterSecret,
         keyId,
-        this.bucketPeriodSeconds
+        this.bucketPeriodSeconds,
       );
 
       // Add current bucket key
@@ -483,7 +490,7 @@ export class TotpKeyProvider {
    * Useful for per-article purchase access.
    */
   async getArticleKey(articleId: string): Promise<KeyEntry> {
-    const key = deriveBucketKey(this.masterSecret, "article", articleId);
+    const key = await deriveBucketKey(this.masterSecret, "article", articleId);
     return {
       keyId: `article:${articleId}`,
       key,

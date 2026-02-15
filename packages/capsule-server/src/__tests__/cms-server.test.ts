@@ -6,6 +6,16 @@ import {
   createTotpKeyProvider,
 } from "../capsule";
 import { unwrapDek, decryptContent } from "../encryption";
+import { fromBase64, toBase64, decodeUtf8 } from "../web-crypto";
+
+// Helper to compare Uint8Arrays
+function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 describe("CmsServer", () => {
   const mockKeyProvider = vi.fn();
@@ -30,7 +40,7 @@ describe("CmsServer", () => {
 
   describe("encrypt", () => {
     it("encrypts content with provided keys", async () => {
-      const testKey = Buffer.alloc(32, 1); // Dummy 256-bit key
+      const testKey = new Uint8Array(32).fill(1); // Dummy 256-bit key
       mockKeyProvider.mockResolvedValue([{ keyId: "test-key", key: testKey }]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -48,8 +58,8 @@ describe("CmsServer", () => {
     });
 
     it("encrypts with multiple keys", async () => {
-      const key1 = Buffer.alloc(32, 1);
-      const key2 = Buffer.alloc(32, 2);
+      const key1 = new Uint8Array(32).fill(1);
+      const key2 = new Uint8Array(32).fill(2);
       mockKeyProvider.mockResolvedValue([
         { keyId: "premium", key: key1 },
         { keyId: "enterprise", key: key2 },
@@ -69,7 +79,7 @@ describe("CmsServer", () => {
     it("includes expiresAt when provided by key provider", async () => {
       const expiresAt = new Date(Date.now() + 60000);
       mockKeyProvider.mockResolvedValue([
-        { keyId: "test-key", key: Buffer.alloc(32, 1), expiresAt },
+        { keyId: "test-key", key: new Uint8Array(32).fill(1), expiresAt },
       ]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -82,7 +92,7 @@ describe("CmsServer", () => {
     });
 
     it("can decrypt content with the wrapped DEK", async () => {
-      const wrappingKey = Buffer.alloc(32, 1);
+      const wrappingKey = new Uint8Array(32).fill(1);
       mockKeyProvider.mockResolvedValue([
         { keyId: "test-key", key: wrappingKey },
       ]);
@@ -95,22 +105,19 @@ describe("CmsServer", () => {
       });
 
       // Verify we can decrypt
-      const wrappedDek = Buffer.from(
-        encrypted.wrappedKeys[0].wrappedDek,
-        "base64"
-      );
-      const dek = unwrapDek(wrappedDek, wrappingKey);
+      const wrappedDek = fromBase64(encrypted.wrappedKeys[0].wrappedDek);
+      const dek = await unwrapDek(wrappedDek, wrappingKey);
 
-      const iv = Buffer.from(encrypted.iv, "base64");
-      const ciphertext = Buffer.from(encrypted.encryptedContent, "base64");
-      const decrypted = decryptContent(ciphertext, dek, iv);
+      const iv = fromBase64(encrypted.iv);
+      const ciphertext = fromBase64(encrypted.encryptedContent);
+      const decrypted = await decryptContent(ciphertext, dek, iv);
 
-      expect(decrypted.toString("utf-8")).toBe(originalContent);
+      expect(decodeUtf8(decrypted)).toBe(originalContent);
     });
 
     it("produces different ciphertext for same content (random DEK and IV)", async () => {
       mockKeyProvider.mockResolvedValue([
-        { keyId: "test-key", key: Buffer.alloc(32, 1) },
+        { keyId: "test-key", key: new Uint8Array(32).fill(1) },
       ]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -129,7 +136,7 @@ describe("CmsServer", () => {
 
     it("returns HTML format when specified", async () => {
       mockKeyProvider.mockResolvedValue([
-        { keyId: "test-key", key: Buffer.alloc(32, 1) },
+        { keyId: "test-key", key: new Uint8Array(32).fill(1) },
       ]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -146,7 +153,7 @@ describe("CmsServer", () => {
 
     it("returns HTML template format when specified", async () => {
       mockKeyProvider.mockResolvedValue([
-        { keyId: "test-key", key: Buffer.alloc(32, 1) },
+        { keyId: "test-key", key: new Uint8Array(32).fill(1) },
       ]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -162,9 +169,9 @@ describe("CmsServer", () => {
     });
 
     it("accepts base64 keys from provider", async () => {
-      const wrappingKey = Buffer.alloc(32, 1);
+      const wrappingKey = new Uint8Array(32).fill(1);
       mockKeyProvider.mockResolvedValue([
-        { keyId: "test-key", key: wrappingKey.toString("base64") },
+        { keyId: "test-key", key: toBase64(wrappingKey) },
       ]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -175,22 +182,19 @@ describe("CmsServer", () => {
       });
 
       // Verify we can decrypt with the original key
-      const wrappedDek = Buffer.from(
-        encrypted.wrappedKeys[0].wrappedDek,
-        "base64"
-      );
-      const dek = unwrapDek(wrappedDek, wrappingKey);
+      const wrappedDek = fromBase64(encrypted.wrappedKeys[0].wrappedDek);
+      const dek = await unwrapDek(wrappedDek, wrappingKey);
 
-      const iv = Buffer.from(encrypted.iv, "base64");
-      const ciphertext = Buffer.from(encrypted.encryptedContent, "base64");
-      const decrypted = decryptContent(ciphertext, dek, iv);
+      const iv = fromBase64(encrypted.iv);
+      const ciphertext = fromBase64(encrypted.encryptedContent);
+      const decrypted = await decryptContent(ciphertext, dek, iv);
 
-      expect(decrypted.toString("utf-8")).toBe(originalContent);
+      expect(decodeUtf8(decrypted)).toBe(originalContent);
     });
 
     it("handles unicode content correctly", async () => {
       mockKeyProvider.mockResolvedValue([
-        { keyId: "test-key", key: Buffer.alloc(32, 1) },
+        { keyId: "test-key", key: new Uint8Array(32).fill(1) },
       ]);
 
       const cms = createCmsServer({ getKeys: mockKeyProvider });
@@ -200,26 +204,22 @@ describe("CmsServer", () => {
         keyIds: ["test-key"],
       });
 
-      const wrappedDek = Buffer.from(
-        encrypted.wrappedKeys[0].wrappedDek,
-        "base64"
-      );
-      const dek = unwrapDek(wrappedDek, Buffer.alloc(32, 1));
-      const decrypted = decryptContent(
-        Buffer.from(encrypted.encryptedContent, "base64"),
+      const wrappedDek = fromBase64(encrypted.wrappedKeys[0].wrappedDek);
+      const dek = await unwrapDek(wrappedDek, new Uint8Array(32).fill(1));
+      const decrypted = await decryptContent(
+        fromBase64(encrypted.encryptedContent),
         dek,
-        Buffer.from(encrypted.iv, "base64")
+        fromBase64(encrypted.iv)
       );
 
-      expect(decrypted.toString("utf-8")).toBe(originalContent);
+      expect(decodeUtf8(decrypted)).toBe(originalContent);
     });
   });
 });
 
 describe("TotpKeyProvider", () => {
-  const masterSecret = Buffer.from(
-    "test-master-secret-for-capsule-tests",
-    "utf-8"
+  const masterSecret = new TextEncoder().encode(
+    "test-master-secret-for-capsule-tests"
   );
 
   beforeEach(() => {
@@ -239,7 +239,7 @@ describe("TotpKeyProvider", () => {
 
     it("accepts base64 encoded master secret", () => {
       const totp = createTotpKeyProvider({
-        masterSecret: masterSecret.toString("base64"),
+        masterSecret: toBase64(masterSecret),
       });
       expect(totp).toBeInstanceOf(TotpKeyProvider);
     });
@@ -303,7 +303,8 @@ describe("TotpKeyProvider", () => {
       expect(keys1.length).toBe(keys2.length);
       for (let i = 0; i < keys1.length; i++) {
         expect(keys1[i].keyId).toBe(keys2[i].keyId);
-        expect(keys1[i].key.equals(keys2[i].key)).toBe(true);
+        // Keys from TotpKeyProvider are always Uint8Array
+        expect(arraysEqual(keys1[i].key as Uint8Array, keys2[i].key as Uint8Array)).toBe(true);
       }
     });
 
@@ -321,7 +322,8 @@ describe("TotpKeyProvider", () => {
       )!;
       const basicKey = basicKeys.find((k) => k.keyId.startsWith("basic:"))!;
 
-      expect(premiumKey.key.equals(basicKey.key)).toBe(false);
+      // Keys from TotpKeyProvider are always Uint8Array
+      expect(arraysEqual(premiumKey.key as Uint8Array, basicKey.key as Uint8Array)).toBe(false);
     });
   });
 
@@ -353,16 +355,17 @@ describe("TotpKeyProvider", () => {
         (wk) => wk.keyId === "premium:56802240"
       )!;
 
-      const wrappedDek = Buffer.from(wrappedKey.wrappedDek, "base64");
-      const dek = unwrapDek(wrappedDek, currentBucketKey.key);
+      const wrappedDek = fromBase64(wrappedKey.wrappedDek);
+      // Keys from TotpKeyProvider are always Uint8Array
+      const dek = await unwrapDek(wrappedDek, currentBucketKey.key as Uint8Array);
 
-      const decrypted = decryptContent(
-        Buffer.from(encrypted.encryptedContent, "base64"),
+      const decrypted = await decryptContent(
+        fromBase64(encrypted.encryptedContent),
         dek,
-        Buffer.from(encrypted.iv, "base64")
+        fromBase64(encrypted.iv)
       );
 
-      expect(decrypted.toString("utf-8")).toBe(content);
+      expect(decodeUtf8(decrypted)).toBe(content);
     });
   });
 });

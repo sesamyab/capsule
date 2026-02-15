@@ -7,7 +7,7 @@ export interface BucketKey {
   /** Bucket identifier (TOTP counter value) */
   bucketId: string;
   /** 256-bit AES key for this bucket */
-  key: Buffer;
+  key: Uint8Array;
   /** When this bucket expires */
   expiresAt: Date;
 }
@@ -39,7 +39,7 @@ export interface KeyWrapConfig {
   /** Key ID (e.g., "premium", "article:crypto-guide") */
   keyId: string;
   /** 256-bit AES key-wrapping key */
-  key: Buffer;
+  key: Uint8Array;
   /** Expiration time (for time-bucket keys) */
   expiresAt?: Date;
 }

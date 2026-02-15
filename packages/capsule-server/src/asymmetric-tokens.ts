@@ -6,15 +6,17 @@
  * - JWKS endpoint for key discovery
  * - Key rotation with multiple active keys
  *
+ * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
+ *
  * @example
  * ```typescript
  * import { createAsymmetricTokenManager, generateSigningKeyPair } from '@sesamy/capsule-server';
  *
  * // Generate a new key pair (do this once, store securely)
- * const { privateKey, publicKey, keyId } = generateSigningKeyPair();
+ * const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
  *
  * // Create token manager with private key
- * const tokens = createAsymmetricTokenManager({
+ * const tokens = await createAsymmetricTokenManager({
  *   privateKey,
  *   publicKey,
  *   keyId,
@@ -22,7 +24,7 @@
  * });
  *
  * // Generate tokens
- * const token = tokens.generate({ tier: 'premium', contentId: 'article-123', expiresIn: '7d' });
+ * const token = await tokens.generate({ tier: 'premium', contentId: 'article-123', expiresIn: '7d' });
  *
  * // Get JWKS for /.well-known/jwks.json endpoint
  * const jwks = tokens.getJwks();
@@ -30,14 +32,24 @@
  */
 
 import {
-  createPrivateKey,
-  createPublicKey,
-  sign,
-  verify,
-  generateKeyPairSync,
-  randomBytes,
-  KeyObject,
-} from "crypto";
+  generateEd25519KeyPair,
+  importEd25519PrivateKey,
+  importEd25519PublicKey,
+  ed25519Sign,
+  ed25519Verify,
+  exportEd25519PublicKeyAsJwk,
+  privateKeyToPem,
+  publicKeyToPem,
+  getRandomBytes,
+  toBase64Url,
+  fromBase64Url,
+  toHex,
+  encodeUtf8,
+  decodeUtf8,
+} from "./web-crypto";
+
+// Type alias for Web Crypto CryptoKey (for cross-platform DTS compatibility)
+type WebCryptoKey = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
 
 /** Ed25519 key pair for signing */
 export interface SigningKeyPair {
@@ -169,11 +181,14 @@ function parseDuration(duration: string | number): number {
 }
 
 /**
- * Convert a PEM public key to JWK format for JWKS.
+ * Convert an Ed25519 public key to JWK format for JWKS.
  */
-function publicKeyToJwk(publicKeyPem: string, keyId: string): JwkKey {
-  const keyObject = createPublicKey(publicKeyPem);
-  const exported = keyObject.export({ format: "jwk" });
+async function publicKeyToJwk(
+  publicKeyPem: string,
+  keyId: string,
+): Promise<JwkKey> {
+  const cryptoKey = await importEd25519PublicKey(publicKeyPem);
+  const exported = await exportEd25519PublicKeyAsJwk(cryptoKey);
 
   return {
     kty: "OKP",
@@ -190,23 +205,22 @@ function publicKeyToJwk(publicKeyPem: string, keyId: string): JwkKey {
  *
  * @example
  * ```typescript
- * const { privateKey, publicKey, keyId } = generateSigningKeyPair();
+ * const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
  * // Store privateKey securely (e.g., in KMS)
  * // publicKey will be exposed via JWKS
  * ```
  */
-export function generateSigningKeyPair(customKeyId?: string): SigningKeyPair {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519", {
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-    publicKeyEncoding: { type: "spki", format: "pem" },
-  });
+export async function generateSigningKeyPair(
+  customKeyId?: string,
+): Promise<SigningKeyPair> {
+  const keyPair = await generateEd25519KeyPair();
 
   const keyId =
-    customKeyId || `key-${Date.now()}-${randomBytes(4).toString("hex")}`;
+    customKeyId || `key-${Date.now()}-${toHex(getRandomBytes(4))}`;
 
   return {
-    privateKey: privateKey as string,
-    publicKey: publicKey as string,
+    privateKey: privateKeyToPem(keyPair.privateKey),
+    publicKey: publicKeyToPem(keyPair.publicKey),
     keyId,
   };
 }
@@ -218,29 +232,43 @@ export function generateSigningKeyPair(customKeyId?: string): SigningKeyPair {
  * exposed via the JWKS endpoint.
  */
 export class AsymmetricTokenManager {
-  private privateKey: KeyObject;
+  private privateKey!: WebCryptoKey;
   private keyId: string;
   private issuer: string;
-  private jwks: Jwks;
+  private jwks!: Jwks;
   /** Map of keyId → public key for signature verification */
-  private publicKeys: Map<string, KeyObject>;
+  private publicKeys!: Map<string, WebCryptoKey>;
+  /** Flag to track if initialization is complete */
+  private initialized: Promise<void>;
 
   constructor(options: AsymmetricTokenManagerOptions) {
-    this.privateKey = createPrivateKey(options.privateKey);
     this.keyId = options.keyId;
     this.issuer = options.issuer;
 
+    // Initialize asynchronously
+    this.initialized = this.init(options);
+  }
+
+  /**
+   * Initialize the token manager asynchronously.
+   */
+  private async init(options: AsymmetricTokenManagerOptions): Promise<void> {
+    this.privateKey = await importEd25519PrivateKey(options.privateKey);
+
     // Build public key map for verification
     this.publicKeys = new Map();
-    this.publicKeys.set(options.keyId, createPublicKey(options.publicKey));
+    const mainPubKey = await importEd25519PublicKey(options.publicKey);
+    this.publicKeys.set(options.keyId, mainPubKey);
 
     // Build JWKS with current key and any additional keys
-    const keys: JwkKey[] = [publicKeyToJwk(options.publicKey, options.keyId)];
+    const keys: JwkKey[] = [
+      await publicKeyToJwk(options.publicKey, options.keyId),
+    ];
 
     if (options.additionalPublicKeys) {
       for (const { publicKey, keyId } of options.additionalPublicKeys) {
-        keys.push(publicKeyToJwk(publicKey, keyId));
-        this.publicKeys.set(keyId, createPublicKey(publicKey));
+        keys.push(await publicKeyToJwk(publicKey, keyId));
+        this.publicKeys.set(keyId, await importEd25519PublicKey(publicKey));
       }
     }
 
@@ -248,15 +276,24 @@ export class AsymmetricTokenManager {
   }
 
   /**
+   * Ensure the manager is initialized before use.
+   */
+  private async ensureInitialized(): Promise<void> {
+    await this.initialized;
+  }
+
+  /**
    * Generate a signed token.
    */
-  generate(options: AsymmetricGenerateOptions): string {
+  async generate(options: AsymmetricGenerateOptions): Promise<string> {
+    await this.ensureInitialized();
+
     const now = Math.floor(Date.now() / 1000);
     const expiresInSeconds = parseDuration(options.expiresIn);
 
     const payload: AsymmetricTokenPayload = {
       v: 1,
-      tid: randomBytes(12).toString("base64url"),
+      tid: toBase64Url(getRandomBytes(12)),
       iss: this.issuer,
       kid: this.keyId,
       alg: "EdDSA",
@@ -277,9 +314,11 @@ export class AsymmetricTokenManager {
   /**
    * Validate a token using the public key.
    */
-  validate(
+  async validate(
     token: string,
-  ): AsymmetricValidationResult | AsymmetricValidationError {
+  ): Promise<AsymmetricValidationResult | AsymmetricValidationError> {
+    await this.ensureInitialized();
+
     const dotIndex = token.lastIndexOf(".");
     if (dotIndex === -1) {
       return {
@@ -295,9 +334,7 @@ export class AsymmetricTokenManager {
     // Decode payload first to check kid
     let payload: AsymmetricTokenPayload;
     try {
-      const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8",
-      );
+      const payloadJson = decodeUtf8(fromBase64Url(payloadB64));
       payload = JSON.parse(payloadJson);
     } catch {
       return {
@@ -318,12 +355,11 @@ export class AsymmetricTokenManager {
     }
 
     // Verify signature using the correct key
-    const signatureBuffer = Buffer.from(signatureB64, "base64url");
-    const isValid = verify(
-      null,
-      Buffer.from(payloadB64),
+    const signatureBytes = fromBase64Url(signatureB64);
+    const isValid = await ed25519Verify(
       publicKey,
-      signatureBuffer,
+      signatureBytes,
+      encodeUtf8(payloadB64),
     );
 
     if (!isValid) {
@@ -342,7 +378,8 @@ export class AsymmetricTokenManager {
   /**
    * Get the JWKS (JSON Web Key Set) for the /.well-known/jwks.json endpoint.
    */
-  getJwks(): Jwks {
+  async getJwks(): Promise<Jwks> {
+    await this.ensureInitialized();
     return this.jwks;
   }
 
@@ -362,9 +399,7 @@ export class AsymmetricTokenManager {
       if (dotIndex === -1) return null;
 
       const payloadB64 = token.substring(0, dotIndex);
-      const payloadJson = Buffer.from(payloadB64, "base64url").toString(
-        "utf-8",
-      );
+      const payloadJson = decodeUtf8(fromBase64Url(payloadB64));
       return JSON.parse(payloadJson);
     } catch {
       return null;
@@ -374,11 +409,11 @@ export class AsymmetricTokenManager {
   /**
    * Sign a payload and return the complete token.
    */
-  private sign(payload: AsymmetricTokenPayload): string {
+  private async sign(payload: AsymmetricTokenPayload): Promise<string> {
     const payloadJson = JSON.stringify(payload);
-    const payloadB64 = Buffer.from(payloadJson).toString("base64url");
-    const signature = sign(null, Buffer.from(payloadB64), this.privateKey);
-    return `${payloadB64}.${signature.toString("base64url")}`;
+    const payloadB64 = toBase64Url(encodeUtf8(payloadJson));
+    const signature = await ed25519Sign(this.privateKey, encodeUtf8(payloadB64));
+    return `${payloadB64}.${toBase64Url(signature)}`;
   }
 }
 
