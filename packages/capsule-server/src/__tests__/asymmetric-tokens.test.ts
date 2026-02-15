@@ -3,26 +3,37 @@ import {
   AsymmetricTokenManager,
   generateSigningKeyPair,
 } from "../asymmetric-tokens";
+import { toBase64Url, fromBase64Url } from "../web-crypto";
+
+// Helper to decode UTF-8 from Uint8Array
+function decodeUtf8(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+
+// Helper to encode string to Uint8Array
+function encodeUtf8(str: string): Uint8Array {
+  return new TextEncoder().encode(str);
+}
 
 describe("AsymmetricTokenManager", () => {
   describe("generateSigningKeyPair", () => {
-    it("generates valid Ed25519 key pair", () => {
-      const keyPair = generateSigningKeyPair();
+    it("generates valid Ed25519 key pair", async () => {
+      const keyPair = await generateSigningKeyPair();
 
       expect(keyPair.privateKey).toContain("-----BEGIN PRIVATE KEY-----");
       expect(keyPair.publicKey).toContain("-----BEGIN PUBLIC KEY-----");
       expect(keyPair.keyId).toMatch(/^key-\d+-[a-f0-9]+$/);
     });
 
-    it("uses custom keyId when provided", () => {
-      const keyPair = generateSigningKeyPair("my-custom-key");
+    it("uses custom keyId when provided", async () => {
+      const keyPair = await generateSigningKeyPair("my-custom-key");
       expect(keyPair.keyId).toBe("my-custom-key");
     });
   });
 
   describe("token generation and validation", () => {
-    it("generates and validates a token", () => {
-      const keyPair = generateSigningKeyPair("test-key");
+    it("generates and validates a token", async () => {
+      const keyPair = await generateSigningKeyPair("test-key");
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,
@@ -30,13 +41,13 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
 
-      const token = manager.generate({
+      const token = await manager.generate({
         tier: "premium",
         contentId: "article-123",
         expiresIn: "1h",
       });
 
-      const result = manager.validate(token);
+      const result = await manager.validate(token);
 
       expect(result.valid).toBe(true);
       if (result.valid) {
@@ -48,8 +59,8 @@ describe("AsymmetricTokenManager", () => {
       }
     });
 
-    it("includes optional fields in token", () => {
-      const keyPair = generateSigningKeyPair();
+    it("includes optional fields in token", async () => {
+      const keyPair = await generateSigningKeyPair();
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,
@@ -57,7 +68,7 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
 
-      const token = manager.generate({
+      const token = await manager.generate({
         tier: "premium",
         contentId: "article-123",
         url: "https://example.com/article/123",
@@ -67,7 +78,7 @@ describe("AsymmetricTokenManager", () => {
         meta: { campaign: "summer2026" },
       });
 
-      const result = manager.validate(token);
+      const result = await manager.validate(token);
 
       expect(result.valid).toBe(true);
       if (result.valid) {
@@ -78,8 +89,8 @@ describe("AsymmetricTokenManager", () => {
       }
     });
 
-    it("rejects tampered tokens", () => {
-      const keyPair = generateSigningKeyPair();
+    it("rejects tampered tokens", async () => {
+      const keyPair = await generateSigningKeyPair();
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,
@@ -87,7 +98,7 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
 
-      const token = manager.generate({
+      const token = await manager.generate({
         tier: "premium",
         contentId: "article-123",
         expiresIn: "1h",
@@ -95,16 +106,14 @@ describe("AsymmetricTokenManager", () => {
 
       // Tamper with the payload
       const [payloadB64, sig] = token.split(".");
-      const payload = JSON.parse(
-        Buffer.from(payloadB64, "base64url").toString(),
-      );
+      const payload = JSON.parse(decodeUtf8(fromBase64Url(payloadB64)));
       payload.tier = "enterprise"; // Attempt to upgrade tier
-      const tamperedPayload = Buffer.from(JSON.stringify(payload)).toString(
-        "base64url",
+      const tamperedPayload = toBase64Url(
+        encodeUtf8(JSON.stringify(payload)),
       );
       const tamperedToken = `${tamperedPayload}.${sig}`;
 
-      const result = manager.validate(tamperedToken);
+      const result = await manager.validate(tamperedToken);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
@@ -112,8 +121,8 @@ describe("AsymmetricTokenManager", () => {
       }
     });
 
-    it("rejects expired tokens", () => {
-      const keyPair = generateSigningKeyPair();
+    it("rejects expired tokens", async () => {
+      const keyPair = await generateSigningKeyPair();
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,
@@ -122,13 +131,13 @@ describe("AsymmetricTokenManager", () => {
       });
 
       // Generate token that expires in 1 second
-      const token = manager.generate({
+      const token = await manager.generate({
         tier: "premium",
         contentId: "article-123",
         expiresIn: -1, // Already expired
       });
 
-      const result = manager.validate(token);
+      const result = await manager.validate(token);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
@@ -136,8 +145,8 @@ describe("AsymmetricTokenManager", () => {
       }
     });
 
-    it("rejects malformed tokens", () => {
-      const keyPair = generateSigningKeyPair();
+    it("rejects malformed tokens", async () => {
+      const keyPair = await generateSigningKeyPair();
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,
@@ -145,22 +154,22 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
 
-      const result1 = manager.validate("not-a-token");
+      const result1 = await manager.validate("not-a-token");
       expect(result1.valid).toBe(false);
       if (!result1.valid) {
         expect(result1.error).toBe("malformed");
       }
 
-      const result2 = manager.validate("invalid.base64!!!");
+      const result2 = await manager.validate("invalid.base64!!!");
       expect(result2.valid).toBe(false);
     });
   });
 
   describe("key rotation", () => {
-    it("validates tokens signed with rotated keys", () => {
+    it("validates tokens signed with rotated keys", async () => {
       // Generate two key pairs - simulating key rotation
-      const oldKey = generateSigningKeyPair("key-2025");
-      const newKey = generateSigningKeyPair("key-2026");
+      const oldKey = await generateSigningKeyPair("key-2025");
+      const newKey = await generateSigningKeyPair("key-2026");
 
       // Old manager signs a token
       const oldManager = new AsymmetricTokenManager({
@@ -169,7 +178,7 @@ describe("AsymmetricTokenManager", () => {
         keyId: oldKey.keyId,
         issuer: "https://test.example.com",
       });
-      const oldToken = oldManager.generate({
+      const oldToken = await oldManager.generate({
         tier: "premium",
         contentId: "article-123",
         expiresIn: "30d",
@@ -187,30 +196,30 @@ describe("AsymmetricTokenManager", () => {
       });
 
       // New manager should validate old tokens
-      const result = newManager.validate(oldToken);
+      const result = await newManager.validate(oldToken);
       expect(result.valid).toBe(true);
       if (result.valid) {
         expect(result.payload.kid).toBe("key-2025");
       }
 
       // New manager should also validate new tokens
-      const newToken = newManager.generate({
+      const newToken = await newManager.generate({
         tier: "basic",
         contentId: "article-456",
         expiresIn: "7d",
       });
 
-      const newResult = newManager.validate(newToken);
+      const newResult = await newManager.validate(newToken);
       expect(newResult.valid).toBe(true);
       if (newResult.valid) {
         expect(newResult.payload.kid).toBe("key-2026");
       }
     });
 
-    it("rejects tokens signed with unknown keys", () => {
-      const keyPair1 = generateSigningKeyPair("key-1");
-      const keyPair2 = generateSigningKeyPair("key-2");
-      const unknownKey = generateSigningKeyPair("unknown-key");
+    it("rejects tokens signed with unknown keys", async () => {
+      const keyPair1 = await generateSigningKeyPair("key-1");
+      const keyPair2 = await generateSigningKeyPair("key-2");
+      const unknownKey = await generateSigningKeyPair("unknown-key");
 
       // Manager only knows about key-1 and key-2
       const manager = new AsymmetricTokenManager({
@@ -230,13 +239,13 @@ describe("AsymmetricTokenManager", () => {
         keyId: unknownKey.keyId,
         issuer: "https://test.example.com",
       });
-      const unknownToken = unknownManager.generate({
+      const unknownToken = await unknownManager.generate({
         tier: "premium",
         contentId: "article-123",
         expiresIn: "1h",
       });
 
-      const result = manager.validate(unknownToken);
+      const result = await manager.validate(unknownToken);
       expect(result.valid).toBe(false);
       if (!result.valid) {
         expect(result.error).toBe("unknown_key");
@@ -244,10 +253,10 @@ describe("AsymmetricTokenManager", () => {
       }
     });
 
-    it("includes all keys in JWKS", () => {
-      const key1 = generateSigningKeyPair("key-2025");
-      const key2 = generateSigningKeyPair("key-2026");
-      const key3 = generateSigningKeyPair("key-2027");
+    it("includes all keys in JWKS", async () => {
+      const key1 = await generateSigningKeyPair("key-2025");
+      const key2 = await generateSigningKeyPair("key-2026");
+      const key3 = await generateSigningKeyPair("key-2027");
 
       const manager = new AsymmetricTokenManager({
         privateKey: key3.privateKey,
@@ -260,7 +269,7 @@ describe("AsymmetricTokenManager", () => {
         ],
       });
 
-      const jwks = manager.getJwks();
+      const jwks = await manager.getJwks();
       expect(jwks.keys).toHaveLength(3);
 
       const kids = jwks.keys.map((k) => k.kid);
@@ -280,8 +289,8 @@ describe("AsymmetricTokenManager", () => {
   });
 
   describe("peek", () => {
-    it("peeks at token payload without validation", () => {
-      const keyPair = generateSigningKeyPair();
+    it("peeks at token payload without validation", async () => {
+      const keyPair = await generateSigningKeyPair();
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,
@@ -289,7 +298,7 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
 
-      const token = manager.generate({
+      const token = await manager.generate({
         tier: "premium",
         contentId: "article-123",
         expiresIn: "1h",
@@ -301,8 +310,8 @@ describe("AsymmetricTokenManager", () => {
       expect(payload?.contentId).toBe("article-123");
     });
 
-    it("returns null for invalid tokens", () => {
-      const keyPair = generateSigningKeyPair();
+    it("returns null for invalid tokens", async () => {
+      const keyPair = await generateSigningKeyPair();
       const manager = new AsymmetricTokenManager({
         privateKey: keyPair.privateKey,
         publicKey: keyPair.publicKey,

@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Validate the token
-      const validation = tokens.validate(token);
+      const validation = await tokens.validate(token);
       if (!validation.valid) {
         console.log(
           `Token validation failed: ${validation.error} - ${validation.message}`,
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
       // This would require a Redis/DB lookup to track usage
 
       // Unlock using the token (validates contentId matches)
-      const result = server.unlockWithToken(
+      const result = await server.unlockWithToken(
         payload,
         wrappedDek,
         publicKey,
@@ -173,7 +173,7 @@ export async function POST(request: NextRequest) {
       const tier = keyId.substring(0, colonIndex);
       const bucketId = keyId.substring(colonIndex + 1);
 
-      const result = server.getTierKeyForUser(tier, bucketId, publicKey);
+      const result = await server.getTierKeyForUser(tier, bucketId, publicKey);
 
       return NextResponse.json({
         ...result,
@@ -191,13 +191,20 @@ export async function POST(request: NextRequest) {
     }
 
     // Static key lookup for article keys - derive from same TOTP provider as CMS
-    const staticKeyLookup = async (keyId: string): Promise<Buffer | null> => {
+    const staticKeyLookup = async (keyId: string): Promise<Uint8Array | null> => {
       if (keyId.startsWith("article:")) {
         const articleId = keyId.slice(8);
         const keyEntry = await totp.getArticleKey(articleId);
-        return Buffer.isBuffer(keyEntry.key)
-          ? keyEntry.key
-          : Buffer.from(keyEntry.key, "base64");
+        if (keyEntry.key instanceof Uint8Array) {
+          return keyEntry.key;
+        }
+        // Decode base64 string to Uint8Array
+        const binaryString = atob(keyEntry.key);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
       }
       return null;
     };

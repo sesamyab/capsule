@@ -8,10 +8,13 @@
  * Supports two modes for obtaining bucket keys:
  * - TOTP: Derive keys locally from master secret (no network calls)
  * - API: Fetch keys from subscription server
+ *
+ * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
  */
 
 import { encryptContent, wrapDek, generateDek } from "./encryption";
 import { getBucketKeys, DEFAULT_BUCKET_PERIOD_SECONDS } from "./time-buckets";
+import { fromBase64, toBase64 } from "./web-crypto";
 import type {
   EncryptedArticle,
   WrappedKey,
@@ -32,14 +35,14 @@ interface BucketKeysApiResponse {
  * Use this in your CMS to encrypt article content with envelope encryption.
  */
 export class CmsEncryptor {
-  private masterSecret: Buffer | null;
+  private masterSecret: Uint8Array | null;
   private subscriptionServerUrl: string | null;
   private apiKey: string | null;
   private bucketPeriodSeconds: number;
 
   constructor(options: CmsEncryptorOptions = {}) {
     this.masterSecret = options.masterSecret
-      ? Buffer.from(options.masterSecret, "base64")
+      ? fromBase64(options.masterSecret)
       : null;
     this.subscriptionServerUrl = options.subscriptionServerUrl ?? null;
     this.apiKey = options.apiKey ?? null;
@@ -49,7 +52,7 @@ export class CmsEncryptor {
     // Validate configuration
     if (!this.masterSecret && !this.subscriptionServerUrl) {
       throw new Error(
-        "CmsEncryptor requires either masterSecret (TOTP mode) or subscriptionServerUrl (API mode)"
+        "CmsEncryptor requires either masterSecret (TOTP mode) or subscriptionServerUrl (API mode)",
       );
     }
   }
@@ -61,7 +64,7 @@ export class CmsEncryptor {
    * In API mode: fetches from subscription server (with 10s timeout).
    */
   async getBucketKeys(
-    keyId: string
+    keyId: string,
   ): Promise<{ current: BucketKey; next: BucketKey }> {
     if (this.masterSecret) {
       // TOTP mode - derive locally
@@ -89,7 +92,7 @@ export class CmsEncryptor {
           },
           body: JSON.stringify({ keyId }),
           signal: controller.signal,
-        }
+        },
       );
 
       if (!response.ok) {
@@ -101,19 +104,19 @@ export class CmsEncryptor {
       return {
         current: {
           bucketId: data.current.bucketId,
-          key: Buffer.from(data.current.key, "base64"),
+          key: fromBase64(data.current.key),
           expiresAt: new Date(data.current.expiresAt),
         },
         next: {
           bucketId: data.next.bucketId,
-          key: Buffer.from(data.next.key, "base64"),
+          key: fromBase64(data.next.key),
           expiresAt: new Date(data.next.expiresAt),
         },
       };
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new Error(
-          `Subscription server request timed out after ${TIMEOUT_MS}ms`
+          `Subscription server request timed out after ${TIMEOUT_MS}ms`,
         );
       }
       throw error;
@@ -133,11 +136,11 @@ export class CmsEncryptor {
    * @param keyConfigs - Array of key-wrapping configurations
    * @returns Encrypted article with wrapped keys
    */
-  encryptArticle(
+  async encryptArticle(
     articleId: string,
     content: string,
-    keyConfigs: KeyWrapConfig[]
-  ): EncryptedArticle {
+    keyConfigs: KeyWrapConfig[],
+  ): Promise<EncryptedArticle> {
     if (keyConfigs.length === 0) {
       throw new Error("At least one key configuration is required");
     }
@@ -146,19 +149,21 @@ export class CmsEncryptor {
     const dek = generateDek();
 
     // Encrypt content ONCE with the DEK
-    const { encryptedContent, iv } = encryptContent(content, dek);
+    const { encryptedContent, iv } = await encryptContent(content, dek);
 
     // Wrap the DEK with each key-wrapping key (serialize dates to ISO strings)
-    const wrappedKeys: WrappedKey[] = keyConfigs.map((config) => ({
-      keyId: config.keyId,
-      wrappedDek: wrapDek(dek, config.key).toString("base64"),
-      expiresAt: config.expiresAt?.toISOString(),
-    }));
+    const wrappedKeys: WrappedKey[] = await Promise.all(
+      keyConfigs.map(async (config) => ({
+        keyId: config.keyId,
+        wrappedDek: toBase64(await wrapDek(dek, config.key)),
+        expiresAt: config.expiresAt?.toISOString(),
+      })),
+    );
 
     return {
       articleId,
-      encryptedContent: encryptedContent.toString("base64"),
-      iv: iv.toString("base64"),
+      encryptedContent: toBase64(encryptedContent),
+      iv: toBase64(iv),
       wrappedKeys,
     };
   }
@@ -178,7 +183,7 @@ export class CmsEncryptor {
     articleId: string,
     content: string,
     tier: string,
-    additionalKeys: KeyWrapConfig[] = []
+    additionalKeys: KeyWrapConfig[] = [],
   ): Promise<EncryptedArticle> {
     // Get time-bucket keys for this tier
     const bucketKeys = await this.getBucketKeys(tier);
@@ -208,13 +213,11 @@ export class CmsEncryptor {
  * Create a simple encryptor for TOTP mode.
  */
 export function createTotpEncryptor(
-  masterSecret: string | Buffer,
-  bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS
+  masterSecret: string | Uint8Array,
+  bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS,
 ): CmsEncryptor {
   const secret =
-    typeof masterSecret === "string"
-      ? masterSecret
-      : masterSecret.toString("base64");
+    typeof masterSecret === "string" ? masterSecret : toBase64(masterSecret);
 
   return new CmsEncryptor({
     masterSecret: secret,
@@ -227,7 +230,7 @@ export function createTotpEncryptor(
  */
 export function createApiEncryptor(
   subscriptionServerUrl: string,
-  apiKey: string
+  apiKey: string,
 ): CmsEncryptor {
   return new CmsEncryptor({
     subscriptionServerUrl,

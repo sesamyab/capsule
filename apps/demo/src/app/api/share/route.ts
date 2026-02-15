@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate the token
-    const token = tokens.generate({
+    const token = await tokens.generate({
       tier,
       contentId,
       url,
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Extract token info for response
-    const payload = tokens.peek(token);
+    const payload = await tokens.peek(token);
     if (!payload) {
       return NextResponse.json(
         { error: "Failed to generate token" },

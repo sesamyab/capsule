@@ -659,7 +659,7 @@ const token = await tokenManager.generate({
 // Expose JWKS at /.well-known/jwks.json
 // GET /.well-known/jwks.json
 export async function GET() {
-  return Response.json(tokenManager.getJwks());
+  return Response.json(await tokenManager.getJwks());
 }
 ```
 

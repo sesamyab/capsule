@@ -6,6 +6,8 @@
  * 2. Unwrap DEKs for authenticated users (for decryption)
  * 3. Handle token-based unlock for pre-signed share links
  *
+ * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
+ *
  * @example
  * ```typescript
  * import { createSubscriptionServer, createTokenManager } from '@sesamy/capsule-server';
@@ -24,7 +26,7 @@
  *   const { token, wrappedDek, publicKey } = req.body;
  *
  *   // Validate token
- *   const validation = tokens.validate(token);
+ *   const validation = await tokens.validate(token);
  *   if (!validation.valid) {
  *     return res.status(401).json({ error: validation.message });
  *   }
@@ -40,7 +42,12 @@
  * ```
  */
 
-import { publicEncrypt, constants, createPublicKey } from "crypto";
+import {
+  importRsaPublicKey,
+  rsaOaepEncrypt,
+  fromBase64,
+  toBase64,
+} from "./web-crypto";
 import {
   deriveBucketKey,
   getBucketKeys,
@@ -60,8 +67,8 @@ function isNumericBucketId(str: string): boolean {
 
 /** Options for creating a subscription server */
 export interface SubscriptionServerOptions {
-  /** Master secret for deriving bucket keys (base64 encoded string or Buffer) */
-  masterSecret: string | Buffer;
+  /** Master secret for deriving bucket keys (base64 encoded string or Uint8Array) */
+  masterSecret: string | Uint8Array;
   /** Bucket period in seconds (default: 30) */
   bucketPeriodSeconds?: number;
 }
@@ -76,13 +83,15 @@ export interface SubscriptionServerOptions {
  * @see createSubscriptionServer for the recommended way to create an instance
  */
 export class SubscriptionServer {
-  private masterSecret: Buffer;
+  private masterSecret: Uint8Array;
   private bucketPeriodSeconds: number;
 
   constructor(options: SubscriptionServerOptions) {
-    this.masterSecret = Buffer.isBuffer(options.masterSecret)
-      ? options.masterSecret
-      : Buffer.from(options.masterSecret, "base64");
+    if (options.masterSecret instanceof Uint8Array) {
+      this.masterSecret = options.masterSecret;
+    } else {
+      this.masterSecret = fromBase64(options.masterSecret);
+    }
     this.bucketPeriodSeconds =
       options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
   }
@@ -93,27 +102,29 @@ export class SubscriptionServer {
    * Returns current and next bucket keys so CMS can encrypt
    * content that works across bucket boundaries.
    */
-  getBucketKeysForCms(keyId: string): { current: BucketKey; next: BucketKey } {
+  async getBucketKeysForCms(
+    keyId: string,
+  ): Promise<{ current: BucketKey; next: BucketKey }> {
     return getBucketKeys(this.masterSecret, keyId, this.bucketPeriodSeconds);
   }
 
   /**
    * Get bucket keys formatted for API response.
    */
-  getBucketKeysResponse(keyId: string): {
+  async getBucketKeysResponse(keyId: string): Promise<{
     current: { bucketId: string; key: string; expiresAt: string };
     next: { bucketId: string; key: string; expiresAt: string };
-  } {
-    const keys = this.getBucketKeysForCms(keyId);
+  }> {
+    const keys = await this.getBucketKeysForCms(keyId);
     return {
       current: {
         bucketId: keys.current.bucketId,
-        key: keys.current.key.toString("base64"),
+        key: toBase64(keys.current.key),
         expiresAt: keys.current.expiresAt.toISOString(),
       },
       next: {
         bucketId: keys.next.bucketId,
-        key: keys.next.key.toString("base64"),
+        key: toBase64(keys.next.key),
         expiresAt: keys.next.expiresAt.toISOString(),
       },
     };
@@ -142,12 +153,14 @@ export class SubscriptionServer {
   async unlockForUser(
     wrappedKey: WrappedKey,
     userPublicKeyB64: string,
-    staticKeyLookup?: (keyId: string) => Buffer | null | Promise<Buffer | null>,
+    staticKeyLookup?: (
+      keyId: string,
+    ) => Uint8Array | null | Promise<Uint8Array | null>,
   ): Promise<UnlockResponse> {
     const { keyId, wrappedDek } = wrappedKey;
-    const wrappedDekBuffer = Buffer.from(wrappedDek, "base64");
+    const wrappedDekBytes = fromBase64(wrappedDek);
 
-    let keyWrappingKey: Buffer;
+    let keyWrappingKey: Uint8Array;
     let expiresAt: Date;
 
     // First, try static key lookup if provided (handles "article:xxx" keys)
@@ -164,7 +177,7 @@ export class SubscriptionServer {
 
         // Unwrap and re-wrap
         return this.unwrapAndRewrap(
-          wrappedDekBuffer,
+          wrappedDekBytes,
           keyWrappingKey,
           userPublicKeyB64,
           keyId,
@@ -198,11 +211,15 @@ export class SubscriptionServer {
     if (!this.isBucketValid(bucketId)) {
       throw new Error(`Bucket ${bucketId} is expired or invalid`);
     }
-    keyWrappingKey = deriveBucketKey(this.masterSecret, baseKeyId, bucketId);
+    keyWrappingKey = await deriveBucketKey(
+      this.masterSecret,
+      baseKeyId,
+      bucketId,
+    );
     expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
 
     return this.unwrapAndRewrap(
-      wrappedDekBuffer,
+      wrappedDekBytes,
       keyWrappingKey,
       userPublicKeyB64,
       keyId,
@@ -215,32 +232,22 @@ export class SubscriptionServer {
    * Internal helper to unwrap DEK and re-wrap with user's public key.
    */
   private async unwrapAndRewrap(
-    wrappedDekBuffer: Buffer,
-    keyWrappingKey: Buffer,
+    wrappedDekBytes: Uint8Array,
+    keyWrappingKey: Uint8Array,
     userPublicKeyB64: string,
     keyId: string,
     bucketId: string | undefined,
     expiresAt: Date,
   ): Promise<UnlockResponse> {
     // Unwrap the DEK
-    const dek = unwrapDek(wrappedDekBuffer, keyWrappingKey);
+    const dek = await unwrapDek(wrappedDekBytes, keyWrappingKey);
 
-    // Convert user's public key to PEM format
-    const publicKeyPem = this.convertToPem(userPublicKeyB64);
-    const pubKey = createPublicKey(publicKeyPem);
-
-    // Re-wrap DEK with user's RSA public key
-    const encryptedDek = publicEncrypt(
-      {
-        key: pubKey,
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
-      },
-      dek,
-    );
+    // Import user's public key and re-wrap DEK with RSA-OAEP
+    const pubKey = await importRsaPublicKey(userPublicKeyB64);
+    const encryptedDek = await rsaOaepEncrypt(pubKey, dek);
 
     return {
-      encryptedDek: encryptedDek.toString("base64"),
+      encryptedDek: toBase64(encryptedDek),
       keyId,
       bucketId,
       expiresAt: expiresAt.toISOString(),
@@ -251,23 +258,14 @@ export class SubscriptionServer {
    * Simple unlock when you already have the key-wrapping key.
    * Used when the unlock logic is separate from bucket key derivation.
    */
-  wrapDekForUser(
-    dek: Buffer,
+  async wrapDekForUser(
+    dek: Uint8Array,
     userPublicKeyB64: string,
     keyId: string,
     expiresAt: Date,
-  ): UnlockResponse {
-    const publicKeyPem = this.convertToPem(userPublicKeyB64);
-    const pubKey = createPublicKey(publicKeyPem);
-
-    const encryptedDek = publicEncrypt(
-      {
-        key: pubKey,
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
-      },
-      dek,
-    );
+  ): Promise<UnlockResponse> {
+    const pubKey = await importRsaPublicKey(userPublicKeyB64);
+    const encryptedDek = await rsaOaepEncrypt(pubKey, dek);
 
     // Only extract bucketId if suffix is numeric (otherwise it's a static key like "article:crypto-guide")
     let bucketId: string | undefined;
@@ -280,7 +278,7 @@ export class SubscriptionServer {
     }
 
     return {
-      encryptedDek: encryptedDek.toString("base64"),
+      encryptedDek: toBase64(encryptedDek),
       keyId,
       bucketId,
       expiresAt: expiresAt.toISOString(),
@@ -291,7 +289,7 @@ export class SubscriptionServer {
    * Get the key-wrapping key for a bucket key ID.
    * Useful when you need the raw key for custom logic.
    */
-  getBucketKey(keyId: string, bucketId: string): Buffer {
+  async getBucketKey(keyId: string, bucketId: string): Promise<Uint8Array> {
     return deriveBucketKey(this.masterSecret, keyId, bucketId);
   }
 
@@ -307,32 +305,27 @@ export class SubscriptionServer {
    * @param bucketId - The bucket ID to get the key for
    * @param userPublicKeyB64 - User's RSA public key (Base64 SPKI format)
    */
-  getTierKeyForUser(
+  async getTierKeyForUser(
     tier: string,
     bucketId: string,
     userPublicKeyB64: string,
-  ): UnlockResponse {
+  ): Promise<UnlockResponse> {
     if (!this.isBucketValid(bucketId)) {
       throw new Error(`Bucket ${bucketId} is expired or invalid`);
     }
 
-    const keyWrappingKey = deriveBucketKey(this.masterSecret, tier, bucketId);
+    const keyWrappingKey = await deriveBucketKey(
+      this.masterSecret,
+      tier,
+      bucketId,
+    );
     const expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
 
-    const publicKeyPem = this.convertToPem(userPublicKeyB64);
-    const pubKey = createPublicKey(publicKeyPem);
-
-    const encryptedKey = publicEncrypt(
-      {
-        key: pubKey,
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
-      },
-      keyWrappingKey,
-    );
+    const pubKey = await importRsaPublicKey(userPublicKeyB64);
+    const encryptedKey = await rsaOaepEncrypt(pubKey, keyWrappingKey);
 
     return {
-      encryptedDek: encryptedKey.toString("base64"), // Actually the KEK, not DEK
+      encryptedDek: toBase64(encryptedKey), // Actually the KEK, not DEK
       keyId: `${tier}:${bucketId}`,
       bucketId,
       expiresAt: expiresAt.toISOString(),
@@ -359,12 +352,12 @@ export class SubscriptionServer {
    * @param contentId - Optional content ID for validation (compared against token.contentId)
    * @returns Unlock response with DEK wrapped for the reader
    */
-  unlockWithToken(
+  async unlockWithToken(
     tokenPayload: UnlockTokenPayload,
     wrappedDekB64: string,
     userPublicKeyB64: string,
     contentId?: string,
-  ): UnlockResponse {
+  ): Promise<UnlockResponse> {
     const { tier } = tokenPayload;
 
     // Validate contentId matches (token always has contentId)
@@ -376,7 +369,7 @@ export class SubscriptionServer {
 
     // Parse the wrapped DEK to extract the bucket ID from the keyId
     // The wrappedDek comes from the article, which has keyId like "premium:123456"
-    const wrappedDekBuffer = Buffer.from(wrappedDekB64, "base64");
+    const wrappedDekBytes = fromBase64(wrappedDekB64);
 
     // For token-based unlock, we need to try current and adjacent buckets
     // since the article might have been encrypted in a different bucket
@@ -394,25 +387,16 @@ export class SubscriptionServer {
 
     for (const bucketId of bucketsToTry) {
       try {
-        const keyWrappingKey = deriveBucketKey(
+        const keyWrappingKey = await deriveBucketKey(
           this.masterSecret,
           tier,
           bucketId,
         );
-        const dek = unwrapDek(wrappedDekBuffer, keyWrappingKey);
+        const dek = await unwrapDek(wrappedDekBytes, keyWrappingKey);
 
         // Success! Re-wrap for user
-        const publicKeyPem = this.convertToPem(userPublicKeyB64);
-        const pubKey = createPublicKey(publicKeyPem);
-
-        const encryptedDek = publicEncrypt(
-          {
-            key: pubKey,
-            padding: constants.RSA_PKCS1_OAEP_PADDING,
-            oaepHash: "sha256",
-          },
-          dek,
-        );
+        const pubKey = await importRsaPublicKey(userPublicKeyB64);
+        const encryptedDek = await rsaOaepEncrypt(pubKey, dek);
 
         const expiresAt = getBucketExpiration(
           bucketId,
@@ -420,7 +404,7 @@ export class SubscriptionServer {
         );
 
         return {
-          encryptedDek: encryptedDek.toString("base64"),
+          encryptedDek: toBase64(encryptedDek),
           keyId: `${tier}:${bucketId}`,
           bucketId,
           expiresAt: expiresAt.toISOString(),
@@ -434,23 +418,6 @@ export class SubscriptionServer {
     throw new Error(
       `Failed to unlock with token for tier '${tier}': ${lastError?.message}`,
     );
-  }
-
-  /**
-   * Convert Base64 SPKI to PEM format for Node.js crypto.
-   */
-  private convertToPem(publicKeyB64: string): string {
-    const keyDer = Buffer.from(publicKeyB64, "base64");
-    const base64Lines: string[] = [];
-    const base64 = keyDer.toString("base64");
-
-    for (let i = 0; i < base64.length; i += 64) {
-      base64Lines.push(base64.slice(i, i + 64));
-    }
-
-    return `-----BEGIN PUBLIC KEY-----\n${base64Lines.join(
-      "\n",
-    )}\n-----END PUBLIC KEY-----`;
   }
 }
 
@@ -479,17 +446,17 @@ export function createSubscriptionServer(
  * @deprecated Use createSubscriptionServer({ masterSecret, bucketPeriodSeconds }) instead
  */
 export function createSubscriptionServer(
-  masterSecret: string | Buffer,
+  masterSecret: string | Uint8Array,
   bucketPeriodSeconds?: number,
 ): SubscriptionServer;
 export function createSubscriptionServer(
-  optionsOrSecret: SubscriptionServerOptions | string | Buffer,
+  optionsOrSecret: SubscriptionServerOptions | string | Uint8Array,
   bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS,
 ): SubscriptionServer {
   // Handle both signatures
   if (
     typeof optionsOrSecret === "object" &&
-    !Buffer.isBuffer(optionsOrSecret)
+    !(optionsOrSecret instanceof Uint8Array)
   ) {
     return new SubscriptionServer(optionsOrSecret);
   }
@@ -498,7 +465,7 @@ export function createSubscriptionServer(
   const secret =
     typeof optionsOrSecret === "string"
       ? optionsOrSecret
-      : optionsOrSecret.toString("base64");
+      : toBase64(optionsOrSecret);
 
   return new SubscriptionServer({
     masterSecret: secret,
