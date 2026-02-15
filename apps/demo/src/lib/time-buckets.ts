@@ -101,29 +101,29 @@ export function isBucketValid(bucketId: string): boolean {
  * @param bucketId - Time bucket identifier
  * @returns 256-bit AES key material
  */
-export function deriveBucketKey(tier: string, bucketId: string): Buffer {
+export async function deriveBucketKey(tier: string, bucketId: string): Promise<Uint8Array> {
   return deriveBucketKeyBase(MASTER_SECRET, tier, bucketId);
 }
 
 /**
  * Get bucket keys for current and next time windows.
  */
-export function getCurrentBucketKeys(tier: string): {
-  current: { bucketId: string; key: Buffer; expiresAt: Date };
-  next: { bucketId: string; key: Buffer; expiresAt: Date };
-} {
+export async function getCurrentBucketKeys(tier: string): Promise<{
+  current: { bucketId: string; key: Uint8Array; expiresAt: Date };
+  next: { bucketId: string; key: Uint8Array; expiresAt: Date };
+}> {
   const currentBucket = getCurrentBucket();
   const nextBucket = getNextBucket();
   
   return {
     current: {
       bucketId: currentBucket,
-      key: deriveBucketKey(tier, currentBucket),
+      key: await deriveBucketKey(tier, currentBucket),
       expiresAt: getBucketExpiration(currentBucket)
     },
     next: {
       bucketId: nextBucket,
-      key: deriveBucketKey(tier, nextBucket),
+      key: await deriveBucketKey(tier, nextBucket),
       expiresAt: getBucketExpiration(nextBucket)
     }
   };

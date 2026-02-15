@@ -58,8 +58,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Get current bucket keys
-    const { current, next } = getCurrentBucketKeys(tier);
+    const { current, next } = await getCurrentBucketKeys(tier);
     const config = getConfig();
+
+    // Helper to convert Uint8Array to base64
+    const toBase64 = (bytes: Uint8Array) => {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    };
 
     // Return keys to CMS
     return NextResponse.json({
@@ -68,12 +77,12 @@ export async function POST(request: NextRequest) {
       bucketPeriodSeconds: config.bucketPeriodSeconds,
       current: {
         bucketId: current.bucketId,
-        key: current.key.toString("base64"),
+        key: toBase64(current.key),
         expiresAt: current.expiresAt.toISOString(),
       },
       next: {
         bucketId: next.bucketId,
-        key: next.key.toString("base64"),
+        key: toBase64(next.key),
         expiresAt: next.expiresAt.toISOString(),
       },
       authenticatedWith: authResult.method,

@@ -42,7 +42,7 @@ export function isValidTier(tier: string): tier is SubscriptionTier {
  * Get the DEK for a subscription tier at a specific time bucket.
  * The DEK is derived using HKDF from master secret + bucket ID.
  */
-export function getSubscriptionKey(tier: string, bucketId?: string): Buffer {
+export async function getSubscriptionKey(tier: string, bucketId?: string): Promise<Uint8Array> {
   if (!isValidTier(tier)) {
     throw new Error(`Unknown subscription tier: ${tier}`);
   }
@@ -54,10 +54,10 @@ export function getSubscriptionKey(tier: string, bucketId?: string): Buffer {
  * Get DEKs for both current and next time buckets.
  * Used by CMS to encrypt content for both windows (handles clock drift).
  */
-export function getSubscriptionKeysForEncryption(tier: string): {
-  current: { bucketId: string; dek: Buffer; expiresAt: Date };
-  next: { bucketId: string; dek: Buffer; expiresAt: Date };
-} {
+export async function getSubscriptionKeysForEncryption(tier: string): Promise<{
+  current: { bucketId: string; dek: Uint8Array; expiresAt: Date };
+  next: { bucketId: string; dek: Uint8Array; expiresAt: Date };
+}> {
   if (!isValidTier(tier)) {
     throw new Error(`Unknown subscription tier: ${tier}`);
   }
@@ -68,12 +68,12 @@ export function getSubscriptionKeysForEncryption(tier: string): {
   return {
     current: {
       bucketId: currentBucket,
-      dek: deriveBucketKeyFromServer(MASTER_SECRET, tier, currentBucket),
+      dek: await deriveBucketKeyFromServer(MASTER_SECRET, tier, currentBucket),
       expiresAt: getBucketExpiration(currentBucket, BUCKET_PERIOD_SECONDS),
     },
     next: {
       bucketId: nextBucket,
-      dek: deriveBucketKeyFromServer(MASTER_SECRET, tier, nextBucket),
+      dek: await deriveBucketKeyFromServer(MASTER_SECRET, tier, nextBucket),
       expiresAt: getBucketExpiration(nextBucket, BUCKET_PERIOD_SECONDS),
     },
   };
@@ -83,12 +83,18 @@ export function getSubscriptionKeysForEncryption(tier: string): {
  * Get the DEK for a specific article.
  * Article keys are static (not bucket-based) for permanent access.
  */
-export function getArticleKey(articleId: string): Buffer {
+export function getArticleKey(articleId: string): Uint8Array {
   const keyData = ARTICLE_KEYS[articleId];
   if (!keyData) {
     throw new Error(`No article-specific key for: ${articleId}`);
   }
-  return Buffer.from(keyData.dek, "base64");
+  // Decode base64 to Uint8Array
+  const binaryString = atob(keyData.dek);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
 }
 
 /**
