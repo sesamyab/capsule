@@ -47,7 +47,7 @@ export async function getSubscriptionKey(tier: string, bucketId?: string): Promi
     throw new Error(`Unknown subscription tier: ${tier}`);
   }
   const bucket = bucketId ?? getCurrentBucket(BUCKET_PERIOD_SECONDS);
-  return deriveBucketKeyFromServer(MASTER_SECRET, tier, bucket);
+  return await deriveBucketKeyFromServer(MASTER_SECRET, tier, bucket);
 }
 
 /**
