@@ -1,5 +1,11 @@
 # @sesamy/capsule-server
 
+## 0.5.0
+
+### Minor Changes
+
+- [#8](https://github.com/sesamyab/capsule/pull/8) [`523fb7e`](https://github.com/sesamyab/capsule/commit/523fb7eb29e4c00be9fe10a331ba7cd9157c3516) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Use web crypto
+
 ## 0.4.0
 
 ### Minor Changes
