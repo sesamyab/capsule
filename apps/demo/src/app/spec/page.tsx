@@ -835,7 +835,7 @@ const token = await tokenManager.generate({
 
 // /.well-known/jwks.json endpoint
 export async function GET() {
-  return Response.json(tokenManager.getJwks());
+  return Response.json(await tokenManager.getJwks());
 }
 
 // Returns:

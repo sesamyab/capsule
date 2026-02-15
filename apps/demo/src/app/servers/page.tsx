@@ -861,7 +861,7 @@ const token = await tokenManager.generate({
 import { tokenManager } from '@/lib/tokens';
 
 export async function GET() {
-  return Response.json(tokenManager.getJwks());
+  return Response.json(await tokenManager.getJwks());
 }
 
 // Returns:
@@ -906,8 +906,8 @@ const previousManager = new AsymmetricTokenManager({
 export async function GET() {
   return Response.json({
     keys: [
-      ...currentManager.getJwks().keys,   // Current signing key
-      ...previousManager.getJwks().keys,  // Previous (still validating old tokens)
+      ...(await currentManager.getJwks()).keys,   // Current signing key
+      ...(await previousManager.getJwks()).keys,  // Previous (still validating old tokens)
     ]
   });
 }

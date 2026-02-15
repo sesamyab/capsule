@@ -27,7 +27,7 @@
  * const token = await tokens.generate({ tier: 'premium', contentId: 'article-123', expiresIn: '7d' });
  *
  * // Get JWKS for /.well-known/jwks.json endpoint
- * const jwks = tokens.getJwks();
+ * const jwks = await tokens.getJwks();
  * ```
  */
 
@@ -46,10 +46,8 @@ import {
   toHex,
   encodeUtf8,
   decodeUtf8,
+  WebCryptoKey,
 } from "./web-crypto";
-
-// Type alias for Web Crypto CryptoKey (for cross-platform DTS compatibility)
-type WebCryptoKey = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
 
 /** Ed25519 key pair for signing */
 export interface SigningKeyPair {

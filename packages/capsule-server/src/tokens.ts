@@ -231,7 +231,16 @@ export class TokenManager {
 
     // Verify signature
     const expectedSig = await this.computeSignature(payloadB64);
-    const providedSig = fromBase64Url(signatureB64);
+    let providedSig: Uint8Array;
+    try {
+      providedSig = fromBase64Url(signatureB64);
+    } catch {
+      return {
+        valid: false,
+        error: "malformed",
+        message: "Invalid signature encoding",
+      };
+    }
 
     if (!timingSafeEqual(expectedSig, providedSig)) {
       return { valid: false, error: "invalid", message: "Invalid signature" };

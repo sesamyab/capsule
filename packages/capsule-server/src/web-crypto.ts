@@ -11,57 +11,70 @@
 // Type aliases for Web Crypto API (for cross-platform DTS compatibility)
 type WebCrypto = typeof globalThis.crypto;
 type WebSubtleCrypto = WebCrypto["subtle"];
-type WebCryptoKey = Awaited<ReturnType<WebSubtleCrypto["importKey"]>>;
+export type WebCryptoKey = Awaited<ReturnType<WebSubtleCrypto["importKey"]>>;
 type WebKeyUsage =
-  | "decrypt"
-  | "deriveBits"
-  | "deriveKey"
-  | "encrypt"
-  | "sign"
-  | "unwrapKey"
-  | "verify"
-  | "wrapKey";
-// Simplified JWK interface for Ed25519 public keys
-interface WebJsonWebKey {
-  kty?: string;
-  crv?: string;
-  x?: string;
-  y?: string;
-  d?: string;
-  [key: string]: unknown;
-}
+    | "decrypt"
+    | "deriveBits"
+    | "deriveKey"
+    | "encrypt"
+    | "sign"
+    | "unwrapKey"
+    | "verify"
+    | "wrapKey";
+// Simplified JWK type for Ed25519 public keys
+type WebJsonWebKey = {
+    kty?: string;
+    crv?: string;
+    x?: string;
+    y?: string;
+    d?: string;
+    [key: string]: unknown;
+};
 
 /** Get the global crypto object (works in Node.js, CF Workers, browsers) */
 function getCrypto(): WebCrypto {
-  if (typeof globalThis.crypto !== "undefined") {
-    return globalThis.crypto;
-  }
-  throw new Error(
-    "Web Crypto API not available. Ensure you're running Node.js 18+ or a modern runtime.",
-  );
+    if (typeof globalThis.crypto !== "undefined") {
+        return globalThis.crypto;
+    }
+    // Fallback for Node.js 18+ (requires explicit import)
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        return require("node:crypto").webcrypto;
+    } catch {
+        throw new Error(
+            "Web Crypto API not available. Ensure you're running Node.js 18+ or a modern runtime.",
+        );
+    }
 }
 
 /**
  * Generate cryptographically secure random bytes.
  */
 export function getRandomBytes(length: number): Uint8Array {
-  const crypto = getCrypto();
-  return crypto.getRandomValues(new Uint8Array(length));
+    const crypto = getCrypto();
+    return crypto.getRandomValues(new Uint8Array(length));
 }
 
 /**
  * Convert Uint8Array to hex string.
  */
 export function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+    return Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
 }
 
 /**
  * Convert hex string to Uint8Array.
+ * @throws Error if hex string has odd length or contains non-hex characters
  */
 export function fromHex(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new Error("Invalid hex string: length must be even");
+  }
+  if (!/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error("Invalid hex string: contains non-hex characters");
+  }
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
@@ -77,63 +90,69 @@ export function toBase64(bytes: Uint8Array): string {
   if (typeof Buffer !== "undefined") {
     return Buffer.from(bytes).toString("base64");
   }
-  return btoa(String.fromCharCode(...bytes));
+  // Chunk to avoid exceeding max call stack size with spread operator
+  const CHUNK_SIZE = 0x8000; // 32KB chunks
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK_SIZE));
+  }
+  return btoa(binary);
 }
 
 /**
  * Convert base64 to Uint8Array.
  */
 export function fromBase64(base64: string): Uint8Array {
-  if (typeof Buffer !== "undefined") {
-    return new Uint8Array(Buffer.from(base64, "base64"));
-  }
-  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    if (typeof Buffer !== "undefined") {
+        return new Uint8Array(Buffer.from(base64, "base64"));
+    }
+    return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 }
 
 /**
  * Convert Uint8Array to base64url.
  */
 export function toBase64Url(bytes: Uint8Array): string {
-  return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+    return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
 /**
  * Convert base64url to Uint8Array.
  */
 export function fromBase64Url(base64url: string): Uint8Array {
-  // Pad with = to make it valid base64
-  const padded = base64url.replace(/-/g, "+").replace(/_/g, "/");
-  const padding = (4 - (padded.length % 4)) % 4;
-  const base64 = padded + "=".repeat(padding);
-  return fromBase64(base64);
+    // Pad with = to make it valid base64
+    const padded = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = (4 - (padded.length % 4)) % 4;
+    const base64 = padded + "=".repeat(padding);
+    return fromBase64(base64);
 }
 
 /**
  * Convert string to Uint8Array (UTF-8).
  */
 export function encodeUtf8(str: string): Uint8Array {
-  return new TextEncoder().encode(str);
+    return new TextEncoder().encode(str);
 }
 
 /**
  * Convert Uint8Array to string (UTF-8).
  */
 export function decodeUtf8(bytes: Uint8Array): string {
-  return new TextDecoder().decode(bytes);
+    return new TextDecoder().decode(bytes);
 }
 
 /**
  * Concatenate multiple Uint8Arrays.
  */
 export function concatBytes(...arrays: Uint8Array[]): Uint8Array {
-  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
+    const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const arr of arrays) {
+        result.set(arr, offset);
+        offset += arr.length;
+    }
+    return result;
 }
 
 // ============================================================================
@@ -153,31 +172,31 @@ export const AES_KEY_SIZE = 32;
  * Import raw bytes as an AES-GCM key.
  */
 export async function importAesKey(
-  keyBytes: Uint8Array,
-  usages: WebKeyUsage[] = ["encrypt", "decrypt"],
+    keyBytes: Uint8Array,
+    usages: WebKeyUsage[] = ["encrypt", "decrypt"],
 ): Promise<WebCryptoKey> {
-  const crypto = getCrypto();
-  return crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "AES-GCM", length: 256 },
-    false,
-    usages,
-  );
+    const crypto = getCrypto();
+    return crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "AES-GCM", length: 256 },
+        false,
+        usages,
+    );
 }
 
 /**
  * Generate a random 256-bit AES key.
  */
 export function generateAesKeyBytes(): Uint8Array {
-  return getRandomBytes(AES_KEY_SIZE);
+    return getRandomBytes(AES_KEY_SIZE);
 }
 
 /**
  * Generate a random IV for AES-GCM.
  */
 export function generateIv(): Uint8Array {
-  return getRandomBytes(GCM_IV_SIZE);
+    return getRandomBytes(GCM_IV_SIZE);
 }
 
 /**
@@ -189,27 +208,27 @@ export function generateIv(): Uint8Array {
  * @returns Encrypted content (ciphertext + auth tag) and IV
  */
 export async function aesGcmEncrypt(
-  content: Uint8Array,
-  key: Uint8Array | WebCryptoKey,
-  iv?: Uint8Array,
+    content: Uint8Array,
+    key: Uint8Array | WebCryptoKey,
+    iv?: Uint8Array,
 ): Promise<{ encryptedContent: Uint8Array; iv: Uint8Array }> {
-  const crypto = getCrypto();
-  const actualIv = iv ?? generateIv();
-  const cryptoKey =
-    typeof key === "object" && "algorithm" in key
-      ? key
-      : await importAesKey(key as Uint8Array, ["encrypt"]);
+    const crypto = getCrypto();
+    const actualIv = iv ?? generateIv();
+    const cryptoKey =
+        typeof key === "object" && "algorithm" in key
+            ? key
+            : await importAesKey(key as Uint8Array, ["encrypt"]);
 
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: actualIv, tagLength: GCM_TAG_LENGTH * 8 },
-    cryptoKey,
-    content,
-  );
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: actualIv, tagLength: GCM_TAG_LENGTH * 8 },
+        cryptoKey,
+        content,
+    );
 
-  return {
-    encryptedContent: new Uint8Array(encrypted),
-    iv: actualIv,
-  };
+    return {
+        encryptedContent: new Uint8Array(encrypted),
+        iv: actualIv,
+    };
 }
 
 /**
@@ -221,23 +240,23 @@ export async function aesGcmEncrypt(
  * @returns Decrypted plaintext
  */
 export async function aesGcmDecrypt(
-  encryptedContent: Uint8Array,
-  key: Uint8Array | WebCryptoKey,
-  iv: Uint8Array,
+    encryptedContent: Uint8Array,
+    key: Uint8Array | WebCryptoKey,
+    iv: Uint8Array,
 ): Promise<Uint8Array> {
-  const crypto = getCrypto();
-  const cryptoKey =
-    typeof key === "object" && "algorithm" in key
-      ? key
-      : await importAesKey(key as Uint8Array, ["decrypt"]);
+    const crypto = getCrypto();
+    const cryptoKey =
+        typeof key === "object" && "algorithm" in key
+            ? key
+            : await importAesKey(key as Uint8Array, ["decrypt"]);
 
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv, tagLength: GCM_TAG_LENGTH * 8 },
-    cryptoKey,
-    encryptedContent,
-  );
+    const decrypted = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv, tagLength: GCM_TAG_LENGTH * 8 },
+        cryptoKey,
+        encryptedContent,
+    );
 
-  return new Uint8Array(decrypted);
+    return new Uint8Array(decrypted);
 }
 
 // ============================================================================
@@ -248,31 +267,31 @@ export async function aesGcmDecrypt(
  * Import raw bytes as an HMAC-SHA256 key.
  */
 export async function importHmacKey(keyBytes: Uint8Array): Promise<WebCryptoKey> {
-  const crypto = getCrypto();
-  return crypto.subtle.importKey(
-    "raw",
-    keyBytes,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
+    const crypto = getCrypto();
+    return crypto.subtle.importKey(
+        "raw",
+        keyBytes,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign", "verify"],
+    );
 }
 
 /**
  * Compute HMAC-SHA256.
  */
 export async function hmacSha256(
-  key: Uint8Array | WebCryptoKey,
-  data: Uint8Array,
+    key: Uint8Array | WebCryptoKey,
+    data: Uint8Array,
 ): Promise<Uint8Array> {
-  const crypto = getCrypto();
-  const cryptoKey =
-    typeof key === "object" && "algorithm" in key
-      ? key
-      : await importHmacKey(key as Uint8Array);
+    const crypto = getCrypto();
+    const cryptoKey =
+        typeof key === "object" && "algorithm" in key
+            ? key
+            : await importHmacKey(key as Uint8Array);
 
-  const signature = await crypto.subtle.sign("HMAC", cryptoKey, data);
-  return new Uint8Array(signature);
+    const signature = await crypto.subtle.sign("HMAC", cryptoKey, data);
+    return new Uint8Array(signature);
 }
 
 /**
@@ -280,15 +299,15 @@ export async function hmacSha256(
  * Returns true if equal, false otherwise.
  */
 export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
+    if (a.length !== b.length) {
+        return false;
+    }
 
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a[i] ^ b[i];
-  }
-  return result === 0;
+    let result = 0;
+    for (let i = 0; i < a.length; i++) {
+        result |= a[i] ^ b[i];
+    }
+    return result === 0;
 }
 
 // ============================================================================
@@ -299,7 +318,7 @@ export function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
  * HKDF-Extract: Extract a pseudorandom key from input keying material.
  */
 async function hkdfExtract(ikm: Uint8Array, salt: Uint8Array): Promise<Uint8Array> {
-  return hmacSha256(salt, ikm);
+    return hmacSha256(salt, ikm);
 }
 
 /**
@@ -312,6 +331,14 @@ async function hkdfExpand(
 ): Promise<Uint8Array> {
   const hashLen = 32; // SHA-256 output length
   const n = Math.ceil(length / hashLen);
+
+  // RFC 5869: output length must be <= 255 * HashLen
+  if (n > 255) {
+    throw new Error(
+      `HKDF output length ${length} exceeds maximum ${255 * hashLen} bytes (RFC 5869)`,
+    );
+  }
+
   const okm = new Uint8Array(n * hashLen);
 
   let t: Uint8Array = new Uint8Array(0);
@@ -329,16 +356,16 @@ async function hkdfExpand(
  * Derives a key from input keying material using HMAC-SHA256.
  */
 export async function hkdf(
-  ikm: Uint8Array,
-  salt: Uint8Array | string,
-  info: Uint8Array | string,
-  length: number,
+    ikm: Uint8Array,
+    salt: Uint8Array | string,
+    info: Uint8Array | string,
+    length: number,
 ): Promise<Uint8Array> {
-  const saltBytes = typeof salt === "string" ? encodeUtf8(salt) : salt;
-  const infoBytes = typeof info === "string" ? encodeUtf8(info) : info;
+    const saltBytes = typeof salt === "string" ? encodeUtf8(salt) : salt;
+    const infoBytes = typeof info === "string" ? encodeUtf8(info) : info;
 
-  const prk = await hkdfExtract(ikm, saltBytes);
-  return hkdfExpand(prk, infoBytes, length);
+    const prk = await hkdfExtract(ikm, saltBytes);
+    return hkdfExpand(prk, infoBytes, length);
 }
 
 // ============================================================================
@@ -349,53 +376,53 @@ export async function hkdf(
  * Import an RSA public key from SPKI format (DER bytes or PEM string).
  */
 export async function importRsaPublicKey(
-  key: Uint8Array | string,
+    key: Uint8Array | string,
 ): Promise<WebCryptoKey> {
-  const crypto = getCrypto();
+    const crypto = getCrypto();
 
-  let keyData: Uint8Array;
-  if (typeof key === "string") {
-    // Parse PEM format
-    const pemHeader = "-----BEGIN PUBLIC KEY-----";
-    const pemFooter = "-----END PUBLIC KEY-----";
+    let keyData: Uint8Array;
+    if (typeof key === "string") {
+        // Parse PEM format
+        const pemHeader = "-----BEGIN PUBLIC KEY-----";
+        const pemFooter = "-----END PUBLIC KEY-----";
 
-    if (key.includes(pemHeader)) {
-      const pemContent = key
-        .replace(pemHeader, "")
-        .replace(pemFooter, "")
-        .replace(/\s/g, "");
-      keyData = fromBase64(pemContent);
+        if (key.includes(pemHeader)) {
+            const pemContent = key
+                .replace(pemHeader, "")
+                .replace(pemFooter, "")
+                .replace(/\s/g, "");
+            keyData = fromBase64(pemContent);
+        } else {
+            // Assume base64-encoded SPKI
+            keyData = fromBase64(key);
+        }
     } else {
-      // Assume base64-encoded SPKI
-      keyData = fromBase64(key);
+        keyData = key;
     }
-  } else {
-    keyData = key;
-  }
 
-  return crypto.subtle.importKey(
-    "spki",
-    keyData,
-    { name: "RSA-OAEP", hash: "SHA-256" },
-    false,
-    ["encrypt"],
-  );
+    return crypto.subtle.importKey(
+        "spki",
+        keyData,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        false,
+        ["encrypt"],
+    );
 }
 
 /**
  * Encrypt data with RSA-OAEP.
  */
 export async function rsaOaepEncrypt(
-  publicKey: WebCryptoKey,
-  data: Uint8Array,
+    publicKey: WebCryptoKey,
+    data: Uint8Array,
 ): Promise<Uint8Array> {
-  const crypto = getCrypto();
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "RSA-OAEP" },
-    publicKey,
-    data,
-  );
-  return new Uint8Array(encrypted);
+    const crypto = getCrypto();
+    const encrypted = await crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        publicKey,
+        data,
+    );
+    return new Uint8Array(encrypted);
 }
 
 // ============================================================================
@@ -403,161 +430,161 @@ export async function rsaOaepEncrypt(
 // ============================================================================
 
 /** Ed25519 key pair */
-export interface Ed25519KeyPair {
-  /** Private key in PKCS8 DER format */
-  privateKey: Uint8Array;
-  /** Public key in SPKI DER format */
-  publicKey: Uint8Array;
-}
+export type Ed25519KeyPair = {
+    /** Private key in PKCS8 DER format */
+    privateKey: Uint8Array;
+    /** Public key in SPKI DER format */
+    publicKey: Uint8Array;
+};
 
 /**
  * Generate an Ed25519 key pair.
  */
 export async function generateEd25519KeyPair(): Promise<Ed25519KeyPair> {
-  const crypto = getCrypto();
+    const crypto = getCrypto();
 
-  const keyPair = (await crypto.subtle.generateKey(
-    { name: "Ed25519" },
-    true, // extractable
-    ["sign", "verify"],
-  )) as { privateKey: WebCryptoKey; publicKey: WebCryptoKey };
+    const keyPair = (await crypto.subtle.generateKey(
+        { name: "Ed25519" },
+        true, // extractable
+        ["sign", "verify"],
+    )) as { privateKey: WebCryptoKey; publicKey: WebCryptoKey };
 
-  const privateKey = new Uint8Array(
-    await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
-  );
-  const publicKey = new Uint8Array(
-    await crypto.subtle.exportKey("spki", keyPair.publicKey),
-  );
+    const privateKey = new Uint8Array(
+        await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
+    );
+    const publicKey = new Uint8Array(
+        await crypto.subtle.exportKey("spki", keyPair.publicKey),
+    );
 
-  return { privateKey, publicKey };
+    return { privateKey, publicKey };
 }
 
 /**
  * Import an Ed25519 private key from PKCS8 format.
  */
 export async function importEd25519PrivateKey(
-  key: Uint8Array | string,
+    key: Uint8Array | string,
 ): Promise<WebCryptoKey> {
-  const crypto = getCrypto();
+    const crypto = getCrypto();
 
-  let keyData: Uint8Array;
-  if (typeof key === "string") {
-    // Parse PEM format
-    const pemHeader = "-----BEGIN PRIVATE KEY-----";
-    const pemFooter = "-----END PRIVATE KEY-----";
+    let keyData: Uint8Array;
+    if (typeof key === "string") {
+        // Parse PEM format
+        const pemHeader = "-----BEGIN PRIVATE KEY-----";
+        const pemFooter = "-----END PRIVATE KEY-----";
 
-    if (key.includes(pemHeader)) {
-      const pemContent = key
-        .replace(pemHeader, "")
-        .replace(pemFooter, "")
-        .replace(/\s/g, "");
-      keyData = fromBase64(pemContent);
+        if (key.includes(pemHeader)) {
+            const pemContent = key
+                .replace(pemHeader, "")
+                .replace(pemFooter, "")
+                .replace(/\s/g, "");
+            keyData = fromBase64(pemContent);
+        } else {
+            keyData = fromBase64(key);
+        }
     } else {
-      keyData = fromBase64(key);
+        keyData = key;
     }
-  } else {
-    keyData = key;
-  }
 
-  return crypto.subtle.importKey(
-    "pkcs8",
-    keyData,
-    { name: "Ed25519" },
-    false,
-    ["sign"],
-  );
+    return crypto.subtle.importKey(
+        "pkcs8",
+        keyData,
+        { name: "Ed25519" },
+        false,
+        ["sign"],
+    );
 }
 
 /**
  * Import an Ed25519 public key from SPKI format.
  */
 export async function importEd25519PublicKey(
-  key: Uint8Array | string,
+    key: Uint8Array | string,
 ): Promise<WebCryptoKey> {
-  const crypto = getCrypto();
+    const crypto = getCrypto();
 
-  let keyData: Uint8Array;
-  if (typeof key === "string") {
-    // Parse PEM format
-    const pemHeader = "-----BEGIN PUBLIC KEY-----";
-    const pemFooter = "-----END PUBLIC KEY-----";
+    let keyData: Uint8Array;
+    if (typeof key === "string") {
+        // Parse PEM format
+        const pemHeader = "-----BEGIN PUBLIC KEY-----";
+        const pemFooter = "-----END PUBLIC KEY-----";
 
-    if (key.includes(pemHeader)) {
-      const pemContent = key
-        .replace(pemHeader, "")
-        .replace(pemFooter, "")
-        .replace(/\s/g, "");
-      keyData = fromBase64(pemContent);
+        if (key.includes(pemHeader)) {
+            const pemContent = key
+                .replace(pemHeader, "")
+                .replace(pemFooter, "")
+                .replace(/\s/g, "");
+            keyData = fromBase64(pemContent);
+        } else {
+            keyData = fromBase64(key);
+        }
     } else {
-      keyData = fromBase64(key);
+        keyData = key;
     }
-  } else {
-    keyData = key;
-  }
 
-  return crypto.subtle.importKey(
-    "spki",
-    keyData,
-    { name: "Ed25519" },
-    true, // extractable for JWK export
-    ["verify"],
-  );
+    return crypto.subtle.importKey(
+        "spki",
+        keyData,
+        { name: "Ed25519" },
+        true, // extractable for JWK export
+        ["verify"],
+    );
 }
 
 /**
  * Sign data with Ed25519.
  */
 export async function ed25519Sign(
-  privateKey: WebCryptoKey,
-  data: Uint8Array,
+    privateKey: WebCryptoKey,
+    data: Uint8Array,
 ): Promise<Uint8Array> {
-  const crypto = getCrypto();
-  const signature = await crypto.subtle.sign("Ed25519", privateKey, data);
-  return new Uint8Array(signature);
+    const crypto = getCrypto();
+    const signature = await crypto.subtle.sign("Ed25519", privateKey, data);
+    return new Uint8Array(signature);
 }
 
 /**
  * Verify an Ed25519 signature.
  */
 export async function ed25519Verify(
-  publicKey: WebCryptoKey,
-  signature: Uint8Array,
-  data: Uint8Array,
+    publicKey: WebCryptoKey,
+    signature: Uint8Array,
+    data: Uint8Array,
 ): Promise<boolean> {
-  const crypto = getCrypto();
-  return crypto.subtle.verify("Ed25519", publicKey, signature, data);
+    const crypto = getCrypto();
+    return crypto.subtle.verify("Ed25519", publicKey, signature, data);
 }
 
 /**
  * Export an Ed25519 public key as JWK.
  */
 export async function exportEd25519PublicKeyAsJwk(
-  publicKey: WebCryptoKey,
+    publicKey: WebCryptoKey,
 ): Promise<WebJsonWebKey> {
-  const crypto = getCrypto();
-  return crypto.subtle.exportKey("jwk", publicKey) as Promise<WebJsonWebKey>;
+    const crypto = getCrypto();
+    return crypto.subtle.exportKey("jwk", publicKey) as Promise<WebJsonWebKey>;
 }
 
 /**
  * Convert PKCS8 private key to PEM format.
  */
 export function privateKeyToPem(pkcs8: Uint8Array): string {
-  const base64 = toBase64(pkcs8);
-  const lines: string[] = [];
-  for (let i = 0; i < base64.length; i += 64) {
-    lines.push(base64.slice(i, i + 64));
-  }
-  return `-----BEGIN PRIVATE KEY-----\n${lines.join("\n")}\n-----END PRIVATE KEY-----`;
+    const base64 = toBase64(pkcs8);
+    const lines: string[] = [];
+    for (let i = 0; i < base64.length; i += 64) {
+        lines.push(base64.slice(i, i + 64));
+    }
+    return `-----BEGIN PRIVATE KEY-----\n${lines.join("\n")}\n-----END PRIVATE KEY-----`;
 }
 
 /**
  * Convert SPKI public key to PEM format.
  */
 export function publicKeyToPem(spki: Uint8Array): string {
-  const base64 = toBase64(spki);
-  const lines: string[] = [];
-  for (let i = 0; i < base64.length; i += 64) {
-    lines.push(base64.slice(i, i + 64));
-  }
-  return `-----BEGIN PUBLIC KEY-----\n${lines.join("\n")}\n-----END PUBLIC KEY-----`;
+    const base64 = toBase64(spki);
+    const lines: string[] = [];
+    for (let i = 0; i < base64.length; i += 64) {
+        lines.push(base64.slice(i, i + 64));
+    }
+    return `-----BEGIN PUBLIC KEY-----\n${lines.join("\n")}\n-----END PUBLIC KEY-----`;
 }
