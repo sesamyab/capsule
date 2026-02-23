@@ -5,12 +5,13 @@ Browser-side decryption library for the Capsule secure article-locking system.
 ## Features
 
 - **Zero-Config Setup**: Keys auto-generated on first use, no manual initialization required
+- **Tier Key Caching**: Fetch tier key once, decrypt all articles in that tier locally (zero per-article network calls)
 - **High-Level API**: Unlock content with a single function call, or go low-level for full control
 - **HTML Processing**: Automatically finds encrypted elements, decrypts, and renders content
 - **Script Execution**: Embedded `<script>` tags in decrypted content are executed (configurable)
 - **Custom Events**: Listen for `capsule:unlock`, `capsule:error`, and `capsule:state` events
 - **DEK Caching**: Encrypted DEKs cached in memory, sessionStorage, or IndexedDB
-- **Auto-Renewal**: DEKs automatically renewed before expiry
+- **Auto-Renewal**: DEKs and tier keys automatically renewed before expiry
 - **Secure Key Storage**: RSA private keys stored with `extractable: false` in IndexedDB
 - **Web Crypto API**: Uses native browser cryptography for maximum security
 
@@ -78,6 +79,66 @@ Add encrypted content to your page with the `data-capsule` attribute:
 
 When unlocked, the element's content is replaced with the decrypted HTML.
 
+## How Unlock Works
+
+Capsule supports two key modes, selected automatically based on the server's response:
+
+### Tier Key Mode (`keyType: "kek"`) — Recommended for Subscribers
+
+The server returns the tier's key-wrapping key (KEK), and the client caches it. All subsequent articles in the same tier are decrypted **locally** with zero network calls:
+
+```
+First article:   Client → Server (fetch tier key) → cache KEK → decrypt locally
+Second article:  Client → decrypt locally (no server call!)
+Third article:   Client → decrypt locally (no server call!)
+```
+
+```typescript
+const capsule = new CapsuleClient({
+  unlock: async ({ keyId, wrappedDek, publicKey, mode }) => {
+    const res = await fetch("/api/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keyId, wrappedDek, publicKey, mode }),
+    });
+    return res.json(); // { encryptedDek, expiresAt, keyType: "kek" }
+  },
+});
+
+// First call fetches tier key, second and beyond are local
+await capsule.unlock(article1); // → 1 server call
+await capsule.unlock(article2); // → 0 server calls
+await capsule.unlock(article3); // → 0 server calls
+```
+
+### Per-Article DEK Mode (`keyType: "dek"`) — Share Links & Purchases
+
+The server unwraps the specific article's DEK and returns it. Each article requires a server call:
+
+```typescript
+// Token-based unlock (share links) always uses per-article DEK mode
+await capsule.unlockWithToken(article, token);
+```
+
+### Pre-fetching Tier Keys
+
+Optionally pre-warm the tier key cache before processing a batch:
+
+```typescript
+// Get a tier keyId from any article
+const tierKeyId = articles[0].wrappedKeys
+  .find(k => !k.keyId.startsWith('article:'))?.keyId;
+
+if (tierKeyId) {
+  await capsule.prefetchTierKey(tierKeyId); // 1 server call
+}
+
+// All unlocks are now local
+const results = await Promise.all(
+  articles.map(a => capsule.unlock(a))
+);
+```
+
 ## Configuration Options
 
 ```typescript
@@ -142,11 +203,37 @@ for (const [id, result] of results) {
 
 #### `unlock(article: EncryptedArticle, preferredKeyType?: 'tier' | 'article'): Promise<string>`
 
-Decrypt an encrypted article, using cached DEK or fetching a new one.
+Decrypt an encrypted article. This is the main method and handles the full flow:
+
+1. **Cached tier key?** → Unwrap DEK locally (zero network)
+2. **Cached DEK?** → Decrypt directly
+3. **Fetch from server** → If server returns `keyType: "kek"`, cache tier key and unwrap locally. If `keyType: "dek"`, decrypt directly.
+
+After the first article in a tier triggers a server call, all subsequent articles in the same tier and time bucket are decrypted locally — no additional server requests.
 
 ```typescript
 const article = JSON.parse(element.dataset.capsule);
 const content = await capsule.unlock(article, "tier");
+```
+
+#### `prefetchTierKey(keyId: string): Promise<{ expiresAt: number; bucketId: string }>`
+
+Pre-fetch and cache a tier's key-wrapping key. Optional — `unlock()` does this automatically on first call. Use this to pre-warm the cache before processing a batch of articles.
+
+```typescript
+// Pre-fetch the tier key from the first article's wrappedKeys
+const tierKeyId = articles[0].wrappedKeys
+  .find(k => !k.keyId.startsWith('article:'))?.keyId;
+
+if (tierKeyId) {
+  await capsule.prefetchTierKey(tierKeyId);
+}
+
+// Now all unlocks are local (zero server calls)
+for (const article of articles) {
+  const content = await capsule.unlock(article);
+  render(content);
+}
 ```
 
 #### `unlockWithToken(article: EncryptedArticle, token: string): Promise<string>`
@@ -257,7 +344,7 @@ document.addEventListener(
 
 ## Unlock Function
 
-The `unlock` function is called when content needs to be decrypted but no cached DEK is available:
+The `unlock` function is called when content needs to be decrypted but no cached key is available:
 
 ```typescript
 type UnlockFunction = (params: {
@@ -265,25 +352,37 @@ type UnlockFunction = (params: {
   wrappedDek: string; // CMK-encrypted DEK from the article
   publicKey: string; // User's public key (Base64 SPKI)
   articleId: string; // Article being unlocked
+  mode?: "tier"; // When present, request the tier's KEK instead of a per-article DEK
 }) => Promise<{
-  encryptedDek: string; // DEK encrypted with user's public key
-  expiresAt: string | number; // When the DEK expires
-  bucketId?: string; // Optional bucket ID for time-based keys
+  encryptedDek: string; // Key encrypted with user's public key (DEK or KEK)
+  expiresAt: string | number; // When the key expires
+  bucketId?: string; // Bucket ID for time-based keys
   bucketPeriodSeconds?: number;
+  keyType?: "kek" | "dek"; // What encryptedDek contains (see below)
 }>;
 ```
+
+### Response `keyType` Field
+
+| `keyType` | What `encryptedDek` contains | Client behavior |
+|-----------|------------------------------|------------------|
+| `"kek"` | Tier key-wrapping key (AES-256) | Cache tier key, unwrap all article DEKs locally |
+| `"dek"` | Article's data encryption key | Decrypt content directly |
+| _(absent)_ | Article's DEK (backward compat) | Decrypt content directly |
+
+When the server returns `keyType: "kek"`, the client caches the tier key and uses it to locally unwrap every article's `wrappedDek` — no per-article server calls needed.
 
 Example implementation:
 
 ```typescript
-const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey }) => {
+const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey, mode }) => {
   const response = await fetch("/api/unlock", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${getAuthToken()}`,
     },
-    body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+    body: JSON.stringify({ keyId, wrappedDek, publicKey, mode }),
   });
 
   if (!response.ok) {

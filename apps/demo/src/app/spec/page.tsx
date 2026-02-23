@@ -55,20 +55,26 @@ const wrappedKeys = {
 
         <h3>2. HTML Embedding</h3>
         <p>
-          Encrypted content is embedded directly in the server-rendered HTML,
-          enabling offline access and browser caching. Each article includes the
-          ciphertext and wrapped keys for the supported unlock paths.
+          Encrypted content is embedded in the server-rendered HTML using an
+          inert <code>&lt;template&gt;</code> element for encrypted data and a
+          sibling placeholder for the locked-state UI. The template is fully
+          inert — no images load, no scripts run, no screen reader noise, no
+          layout impact. On unlock, the client reads from the template, decrypts,
+          replaces the placeholder, and removes the template.
         </p>
-        <CodeBlock>{`<template
-  id="encrypted-article-123"
-  data-encrypted-content="base64-encoded-ciphertext"
-  data-iv="base64-encoded-iv"
-  data-wrapped-keys='{
-    "premium:123456": "base64-wrapped-dek",
-    "premium:123457": "base64-wrapped-dek",
-    "article:crypto-guide": "base64-wrapped-dek"
-  }'
-/>`}</CodeBlock>
+        <CodeBlock>{`<!-- Encrypted data (inert) -->
+<template
+  data-capsule='{"articleId":"article-123","encryptedContent":"base64...","iv":"base64...","wrappedKeys":[
+    {"keyId":"premium:123456","wrappedDek":"base64..."},
+    {"keyId":"premium:123457","wrappedDek":"base64..."},
+    {"keyId":"article:crypto-guide","wrappedDek":"base64..."}
+  ]}'
+  data-capsule-id="article-123"
+></template>
+<!-- Visible placeholder (replaced on unlock) -->
+<div data-capsule-placeholder="article-123">
+  <p>Subscribe to unlock this article...</p>
+</div>`}</CodeBlock>
 
         <h3>3. Client Key Generation</h3>
         <p>

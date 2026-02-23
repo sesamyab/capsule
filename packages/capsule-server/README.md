@@ -197,19 +197,76 @@ const server = createSubscriptionServer({
 
 ### Unlock Endpoint
 
+The subscription server supports two unlock modes:
+
+**Tier Key Mode (recommended for subscribers):** Returns the tier's key-wrapping key (KEK) so the client can unwrap any article's DEK locally — one server call for all articles in a tier.
+
+**Per-article DEK Mode:** Unwraps a single article's DEK and re-wraps it for the user. Used for share links or single purchases.
+
 ```typescript
 app.post("/api/unlock", async (req) => {
   // Validate user subscription here!
-  const { keyId, wrappedDek, publicKey } = req.body;
+  const { keyId, wrappedDek, publicKey, mode } = req.body;
 
-  return server.unlockForUser(
+  // Parse keyId (e.g., "premium:123456")
+  const colonIndex = keyId.lastIndexOf(":");
+  const tier = keyId.substring(0, colonIndex);
+  const bucketId = keyId.substring(colonIndex + 1);
+
+  // TIER KEY MODE: Return the KEK ("unlock once, access all")
+  if (mode === "tier") {
+    const result = await server.getTierKeyForUser(tier, bucketId, publicKey);
+    return res.json({ ...result, keyType: "kek" });
+  }
+
+  // PER-ARTICLE DEK MODE: Return the unwrapped DEK
+  const result = await server.unlockForUser(
     { keyId, wrappedDek },
     publicKey,
     // Optional: lookup for static keys (per-article purchase)
     (keyId) => staticKeyStore.get(keyId),
   );
+  return res.json({ ...result, keyType: "dek" });
 });
 ```
+
+### Tier Key Endpoint
+
+`getTierKeyForUser()` enables "unlock once, access all" for tier subscribers:
+
+```typescript
+// The client fetches this ONCE per tier per bucket period.
+// After receiving the KEK, it can unwrap any article's wrappedDek locally.
+const result = await server.getTierKeyForUser(
+  "premium",    // tier name
+  "123456",     // bucket ID (from the article's keyId)
+  userPublicKey // Base64 SPKI
+);
+
+// result:
+// {
+//   encryptedDek: "...",  // Actually the KEK, RSA-OAEP encrypted for the user
+//   keyId: "premium:123456",
+//   bucketId: "123456",
+//   expiresAt: "2026-02-23T12:00:30.000Z"
+// }
+```
+
+**How the client uses it:**
+1. RSA-unwrap the KEK with its private key → AES tier key
+2. For each article: AES-GCM unwrap the `wrappedDek` locally → article DEK
+3. AES-GCM decrypt article content with the DEK
+4. Zero server calls for articles 2, 3, 4, ...
+
+### Response `keyType` Field
+
+The unlock endpoint should include `keyType` in its response so the client knows what it received:
+
+| `keyType` | What `encryptedDek` contains | Client behavior |
+|-----------|------------------------------|------------------|
+| `"kek"`   | Tier key-wrapping key (AES-256) | Cache tier key, unwrap DEKs locally |
+| `"dek"`   | Article's data encryption key | Decrypt content directly |
+| _(absent)_ | Article's DEK (backward compat) | Decrypt content directly |
 
 ## Share Links & Pre-signed Tokens
 
@@ -419,6 +476,30 @@ Content → [AES-256-GCM] → Encrypted Content
 - Different users can unlock using different wrapped keys
 - No need to re-encrypt content when adding access paths
 
+### Two Unlock Modes
+
+**Tier Key Mode (recommended for subscribers):**
+
+```
+Subscriber opens first premium article:
+  Client  → Server: "Give me the premium tier key for bucket 123456"
+  Server  → Client: AES tier key, RSA-wrapped for this user (keyType: "kek")
+  Client: RSA-unwrap → AES tier key → cache in memory
+
+Subscriber opens second premium article (and third, fourth, ...):
+  Client: Use cached tier key → AES-unwrap wrappedDek → decrypt content
+  (ZERO server calls)
+```
+
+**Per-article DEK Mode (for share links / purchases):**
+
+```
+Each article requires a server call:
+  Client  → Server: wrappedDek + publicKey
+  Server  → Client: RSA-wrapped DEK (keyType: "dek")
+  Client: RSA-unwrap → decrypt content
+```
+
 ### Time-Bucket Keys (TOTP)
 
 When using `TotpKeyProvider`, keys rotate automatically:
@@ -604,11 +685,18 @@ interface SubscriptionServerOptions {
 // For CMS key fetching (if not using TOTP locally)
 server.getBucketKeysResponse(keyId: string): BucketKeysResponse;
 
-// For user unlock
+// For user unlock (per-article DEK mode)
 server.unlockForUser(
   wrappedKey: { keyId, wrappedDek },
   userPublicKey: string,
   staticKeyLookup?: (keyId: string) => Buffer | null
+): Promise<UnlockResponse>;
+
+// For tier key mode ("unlock once, access all")
+server.getTierKeyForUser(
+  tier: string,        // Tier name (e.g., "premium")
+  bucketId: string,    // Bucket ID (from the article's keyId)
+  userPublicKey: string // Base64 SPKI
 ): Promise<UnlockResponse>;
 
 // For token-based unlock (share links)
