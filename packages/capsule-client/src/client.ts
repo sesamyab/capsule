@@ -72,6 +72,9 @@ const RSA_PUBLIC_EXPONENT = new Uint8Array([0x01, 0x00, 0x01]);
 /** DEK storage key prefix */
 const DEK_STORAGE_PREFIX = "capsule-dek:";
 
+/** AES-GCM initialization vector size in bytes (96 bits per NIST) */
+const GCM_IV_BYTES = 12;
+
 /**
  * Main client for Capsule decryption operations.
  *
@@ -98,6 +101,13 @@ export class CapsuleClient {
     new Map();
   private renewalTimers: Map<string, number> = new Map();
   private elementStates: Map<string, ElementState> = new Map();
+
+  // Tier key cache: tier name → { AES CryptoKey, bucketId, expiresAt }
+  private tierKeyCache: Map<
+    string,
+    { key: CryptoKey; bucketId: string; expiresAt: number }
+  > = new Map();
+  private tierRenewalTimers: Map<string, number> = new Map();
 
   /**
    * Create a new CapsuleClient instance.
@@ -307,6 +317,11 @@ export class CapsuleClient {
    * Decrypt content using cached DEK or by fetching a new one.
    * This is the main decryption method that handles the full flow.
    *
+   * For tier keys, this automatically:
+   * 1. Checks for a cached tier key and unwraps DEKs locally (zero network)
+   * 2. Falls back to fetching a tier key from the server
+   * 3. Caches the tier key so subsequent articles decrypt locally
+   *
    * @param article - The encrypted article data
    * @param preferredKeyType - Prefer 'tier' or 'article' keys (default: tier)
    * @returns Decrypted content string
@@ -329,7 +344,13 @@ export class CapsuleClient {
       preferredKeyType,
     );
 
-    // Try cached DEKs first
+    // 1. Try locally with cached tier keys (fastest: zero network, zero I/O)
+    for (const wrappedKey of sortedKeys) {
+      const content = await this.tryLocalTierUnwrap(article, wrappedKey);
+      if (content !== null) return content;
+    }
+
+    // 2. Try cached DEKs (from persistent storage)
     for (const wrappedKey of sortedKeys) {
       const cached = await this.getCachedDek(wrappedKey.keyId);
       if (cached) {
@@ -346,7 +367,7 @@ export class CapsuleClient {
       }
     }
 
-    // Need to fetch new DEK
+    // 3. Need to fetch from server
     if (!this.unlockFn) {
       throw new Error(
         "No unlock function provided. Either pass an unlock function to the constructor, " +
@@ -358,13 +379,37 @@ export class CapsuleClient {
     for (const wrappedKey of sortedKeys) {
       try {
         const publicKey = await this.getPublicKey();
+        const parsed = this.parseKeyId(wrappedKey.keyId);
+
         const response = await this.unlockFn({
           keyId: wrappedKey.keyId,
           wrappedDek: wrappedKey.wrappedDek,
           publicKey,
           articleId: article.articleId,
+          // Request tier key when appropriate
+          ...(parsed.type === "tier" ? { mode: "tier" as const } : {}),
         });
 
+        if (response.keyType === "kek") {
+          // Tier key response: unwrap the KEK, cache it, and locally unwrap the DEK
+          const tierKey = await this.unwrapDek(
+            keyPair.privateKey,
+            response.encryptedDek,
+          );
+          this.cacheTierKey(parsed.baseId, tierKey, response);
+
+          const dek = await this.localUnwrapDek(
+            wrappedKey.wrappedDek,
+            tierKey,
+          );
+          this.log(
+            `Tier key '${parsed.baseId}' cached, article unlocked locally`,
+            "info",
+          );
+          return await this.decryptWithDek(article, dek);
+        }
+
+        // DEK response (standard per-article flow)
         const dek = await this.unwrapDek(
           keyPair.privateKey,
           response.encryptedDek,
@@ -379,6 +424,83 @@ export class CapsuleClient {
     }
 
     throw new Error("Failed to unlock content with any available key");
+  }
+
+  /**
+   * Pre-fetch and cache a tier's key-wrapping key for local DEK unwrapping.
+   *
+   * After calling this, all articles encrypted for this tier can be unlocked
+   * locally without additional server round-trips (until the bucket expires).
+   *
+   * This is optional — `unlock()` automatically requests and caches tier keys.
+   * Use this to pre-warm the cache before processing multiple articles.
+   *
+   * @param keyId - Full key ID including bucket (e.g., "premium:123456")
+   * @returns Expiration info for the cached tier key
+   *
+   * @example
+   * ```ts
+   * // Pre-fetch tier key from first article's wrappedKeys
+   * const tierKeyId = articles[0].wrappedKeys.find(k => !k.keyId.startsWith('article:'))?.keyId;
+   * if (tierKeyId) {
+   *   await capsule.prefetchTierKey(tierKeyId);
+   * }
+   * // Now all unlocks for this tier are local
+   * for (const article of articles) {
+   *   await capsule.unlock(article);
+   * }
+   * ```
+   */
+  async prefetchTierKey(
+    keyId: string,
+  ): Promise<{ expiresAt: number; bucketId: string }> {
+    if (!this.unlockFn) {
+      throw new Error(
+        "No unlock function provided. Pass an unlock function to the constructor.",
+      );
+    }
+
+    const parsed = this.parseKeyId(keyId);
+
+    // Check if already cached and valid
+    const existing = this.tierKeyCache.get(parsed.baseId);
+    if (existing && existing.expiresAt > Date.now()) {
+      return { expiresAt: existing.expiresAt, bucketId: existing.bucketId };
+    }
+
+    const keyPair = await this.ensureKeyPair();
+    const publicKey = await this.getPublicKey();
+
+    const response = await this.unlockFn({
+      keyId,
+      wrappedDek: "",
+      publicKey,
+      articleId: "",
+      mode: "tier",
+    });
+
+    if (response.keyType !== "kek") {
+      throw new Error(
+        "Server did not return a tier key (expected keyType 'kek')",
+      );
+    }
+
+    const tierKey = await this.unwrapDek(
+      keyPair.privateKey,
+      response.encryptedDek,
+    );
+    this.cacheTierKey(parsed.baseId, tierKey, response);
+
+    const expiresAt =
+      typeof response.expiresAt === "string"
+        ? new Date(response.expiresAt).getTime()
+        : response.expiresAt;
+
+    this.log(
+      `Pre-fetched tier key '${parsed.baseId}', expires ${new Date(expiresAt).toISOString()}`,
+      "info",
+    );
+    return { expiresAt, bucketId: response.bucketId || "" };
   }
 
   // =========================================================================
@@ -463,6 +585,7 @@ export class CapsuleClient {
     await this.storage.deleteKeyPair(DEFAULT_KEY_ID);
     this.keyPairPromise = null;
     this.dekCache.clear();
+    this.tierKeyCache.clear();
     return this.getPublicKey();
   }
 
@@ -473,6 +596,7 @@ export class CapsuleClient {
     await this.storage.clearAll();
     this.keyPairPromise = null;
     this.dekCache.clear();
+    this.tierKeyCache.clear();
     this.clearAllRenewalTimers();
 
     // Clear persisted DEKs
@@ -771,6 +895,120 @@ export class CapsuleClient {
     });
   }
 
+  // =========================================================================
+  // Tier Key Management (local DEK unwrapping)
+  // =========================================================================
+
+  /**
+   * Try to unwrap an article's DEK locally using a cached tier key.
+   * Returns decrypted content on success, null if not possible.
+   */
+  private async tryLocalTierUnwrap(
+    article: EncryptedArticle,
+    wrappedKey: WrappedKey,
+  ): Promise<string | null> {
+    const parsed = this.parseKeyId(wrappedKey.keyId);
+    if (parsed.type !== "tier") return null;
+
+    const cached = this.tierKeyCache.get(parsed.baseId);
+    if (!cached || cached.expiresAt <= Date.now()) return null;
+
+    // Extract bucketId from keyId (e.g., "premium:123456" → "123456")
+    const colonIdx = wrappedKey.keyId.lastIndexOf(":");
+    const bucketId =
+      colonIdx > 0 ? wrappedKey.keyId.substring(colonIdx + 1) : null;
+    if (!bucketId || cached.bucketId !== bucketId) return null;
+
+    try {
+      const dek = await this.localUnwrapDek(wrappedKey.wrappedDek, cached.key);
+      this.log(
+        `Local tier unwrap for '${parsed.baseId}:${bucketId}'`,
+        "debug",
+      );
+      return await this.decryptWithDek(article, dek);
+    } catch {
+      this.log(
+        `Local tier unwrap failed for '${parsed.baseId}:${bucketId}'`,
+        "debug",
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Locally unwrap a DEK using a tier key (AES-GCM).
+   *
+   * The wrappedDek format is: IV (12 bytes) + AES-GCM(DEK + auth tag).
+   * This mirrors the server-side wrapDek/unwrapDek from @sesamy/capsule-server.
+   */
+  private async localUnwrapDek(
+    wrappedDekB64: string,
+    tierKey: CryptoKey,
+  ): Promise<CryptoKey> {
+    const wrappedBytes = this.base64ToArrayBuffer(wrappedDekB64) as Uint8Array;
+
+    // Split: first 12 bytes = IV, rest = AES-GCM ciphertext (DEK + auth tag)
+    const iv = wrappedBytes.slice(0, GCM_IV_BYTES);
+    const ciphertext = wrappedBytes.slice(GCM_IV_BYTES);
+
+    // Decrypt the wrapped DEK with the tier key
+    const dekBytes = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      tierKey,
+      ciphertext,
+    );
+
+    // Import the raw DEK as a CryptoKey for content decryption
+    return crypto.subtle.importKey(
+      "raw",
+      dekBytes,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["decrypt"],
+    );
+  }
+
+  /**
+   * Cache a tier key in memory.
+   */
+  private cacheTierKey(
+    tier: string,
+    key: CryptoKey,
+    response: UnlockResponse,
+  ): void {
+    const expiresAt =
+      typeof response.expiresAt === "string"
+        ? new Date(response.expiresAt).getTime()
+        : response.expiresAt;
+    const bucketId = response.bucketId || "";
+
+    this.tierKeyCache.set(tier, { key, bucketId, expiresAt });
+    this.scheduleTierKeyRenewal(tier, expiresAt);
+  }
+
+  /**
+   * Schedule auto-expiry for a cached tier key.
+   */
+  private scheduleTierKeyRenewal(tier: string, expiresAt: number): void {
+    if (this.renewBuffer <= 0) return;
+
+    const existingTimer = this.tierRenewalTimers.get(tier);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timeUntilExpiry = expiresAt - Date.now() - this.renewBuffer;
+    if (timeUntilExpiry <= 0) return;
+
+    const timer = window.setTimeout(() => {
+      this.tierKeyCache.delete(tier);
+      this.tierRenewalTimers.delete(tier);
+      this.log(`Tier key '${tier}' expired, cleared from cache`, "debug");
+    }, timeUntilExpiry);
+
+    this.tierRenewalTimers.set(tier, timer);
+  }
+
   /**
    * Get cached DEK for a key ID.
    */
@@ -889,6 +1127,10 @@ export class CapsuleClient {
       clearTimeout(timer);
     }
     this.renewalTimers.clear();
+    for (const timer of this.tierRenewalTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.tierRenewalTimers.clear();
   }
 
   // =========================================================================

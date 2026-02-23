@@ -6,17 +6,25 @@ An open standard for secure article encryption using envelope encryption (RSA-OA
 
 Capsule provides a complete solution for encrypting and decrypting premium content using envelope encryption:
 
-1. **Server-side**: Encrypts articles using AES-256-GCM with unique Data Encryption Keys (DEKs), then wraps DEKs with the recipient's RSA public key
-2. **Client-side**: Decrypts wrapped DEKs using a non-extractable private RSA key stored in IndexedDB, then decrypts the article content
+1. **Server-side**: Encrypts articles using AES-256-GCM with unique Data Encryption Keys (DEKs), then wraps DEKs with tier-level time-bucket keys
+2. **Client-side**: Fetches the tier key once, then locally unwraps every article's DEK — no per-article server round-trips
 
-### Two Unlock Flows
+### Two Key Modes
 
-Capsule supports two ways to unlock content:
+| Mode | What the client receives | Per-article network? | Use case |
+|---|---|---|---|
+| **Tier Key (KEK)** | Tier's key-wrapping key (`keyType: "kek"`) | **No** — one call, then all articles in that tier decrypt locally | Subscribers with tier access |
+| **Per-article DEK** | Individual article's DEK (`keyType: "dek"`) | Yes, every article | Single-article purchase, share links |
 
-| Flow                  | Use Case                             | User Auth Required |
-| --------------------- | ------------------------------------ | ------------------ |
-| **Subscription Flow** | Logged-in subscribers unlock content | ✅ Yes             |
-| **Share Link Flow**   | Anyone with a link can unlock        | ❌ No              |
+### Three Unlock Flows
+
+Capsule supports three ways to unlock content:
+
+| Flow                  | Use Case                             | User Auth Required | Key Mode |
+| --------------------- | ------------------------------------ | ------------------ | -------- |
+| **Subscription Flow** | Logged-in subscribers unlock content | ✅ Yes             | Tier Key (KEK) |
+| **Share Link Flow**   | Anyone with a link can unlock        | ❌ No              | Per-article DEK |
+| **Single Purchase**   | One-time article purchase            | ✅ Yes             | Per-article DEK |
 
 ## Share Links (Pre-signed Tokens)
 
@@ -202,36 +210,75 @@ pnpm clean            # Clean all node_modules and build outputs
 
 ## Security Model
 
+### Tier Key Flow (Recommended for Subscribers)
+
+Subscribers fetch the tier key **once**, then decrypt every article in that tier locally:
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                     TIER KEY FLOW ("Unlock Once, Access All")                 │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  CMS (build/publish time)              SUBSCRIPTION SERVER                    │
+│  ┌─────────────────────────┐           ┌────────────────────────────────────┐ │
+│  │ 1. Generate unique DEK  │           │ Derives time-bucket keys from      │ │
+│  │ 2. Encrypt article with │           │ master secret + tier + bucket ID   │ │
+│  │    DEK (AES-256-GCM)    │           │ using HKDF                         │ │
+│  │ 3. Wrap DEK with tier's │           └────────────────────────────────────┘ │
+│  │    bucket key (AES-GCM) │                          │                       │
+│  │ 4. Embed in HTML        │                          │                       │
+│  └─────────────────────────┘                          │                       │
+│                                                       │                       │
+│  CLIENT (Browser)                                     │                       │
+│  ┌─────────────────────────────────────────────────────┼─────────────────────┐ │
+│  │                                                     │                     │ │
+│  │  First article in tier:                             │                     │ │
+│  │  ┌─────────────────────────────┐    ┌───────────────┴──────────────────┐  │ │
+│  │  │ Send publicKey + keyId      │───►│ Derive bucket key for tier       │  │ │
+│  │  │ (e.g., "premium:123456")   │    │ RSA-encrypt it for user          │  │ │
+│  │  │ mode: "tier"               │◄───│ Return { encryptedDek,           │  │ │
+│  │  └─────────────────────────────┘    │   keyType: "kek" }              │  │ │
+│  │         │                           └─────────────────────────────────┘  │ │
+│  │         ▼                                                                │ │
+│  │  ┌──────────────────────────────────────┐                                │ │
+│  │  │ RSA-unwrap → AES tier key            │                                │ │
+│  │  │ Cache tier key in memory             │                                │ │
+│  │  │ AES-GCM unwrap article's wrappedDek  │  ← LOCAL, no network           │ │
+│  │  │ AES-GCM decrypt article content      │                                │ │
+│  │  └──────────────────────────────────────┘                                │ │
+│  │                                                                          │ │
+│  │  Every subsequent article in same tier + bucket:                         │ │
+│  │  ┌──────────────────────────────────────┐                                │ │
+│  │  │ Use cached tier key                  │  ← NO SERVER CALL              │ │
+│  │  │ AES-GCM unwrap wrappedDek locally    │                                │ │
+│  │  │ AES-GCM decrypt content              │                                │ │
+│  │  └──────────────────────────────────────┘                                │ │
+│  └──────────────────────────────────────────────────────────────────────────┘ │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Per-Article DEK Flow (Share Links & Purchases)
+
+For single-article access, the server unwraps and re-wraps one DEK at a time:
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                           ENVELOPE ENCRYPTION                            │
+│                     PER-ARTICLE DEK FLOW                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  CLIENT (Browser)                    SERVER                             │
 │  ┌─────────────────┐                ┌─────────────────────────────────┐ │
-│  │ Generate RSA    │                │                                 │ │
-│  │ Key Pair        │                │  1. Generate random AES-256 DEK │ │
-│  │                 │   Public Key   │  2. Encrypt article with DEK    │ │
-│  │ Private Key     │ ────────────►  │  3. Wrap DEK with Public Key    │ │
-│  │ (non-extractable│                │  4. Return encrypted payload    │ │
-│  │  in IndexedDB)  │                │                                 │ │
-│  └─────────────────┘                └─────────────────────────────────┘ │
-│           │                                      │                      │
-│           │                                      │                      │
-│           │         Encrypted Payload            │                      │
-│           │  ◄─────────────────────────────────  │                      │
-│           │   { encryptedContent, iv,            │                      │
-│           │     encryptedDek }                   │                      │
-│           │                                      │                      │
-│           ▼                                                             │
+│  │ Send:           │                │                                 │ │
+│  │  publicKey      │────────────►   │  1. Derive bucket key           │ │
+│  │  wrappedDek     │                │  2. Unwrap DEK with bucket key  │ │
+│  │  keyId          │   ◄────────    │  3. RSA-wrap DEK for user       │ │
+│  └─────────────────┘                │  4. Return { encryptedDek,      │ │
+│           │                         │     keyType: "dek" }            │ │
+│           ▼                         └─────────────────────────────────┘ │
 │  ┌─────────────────┐                                                    │
-│  │ 1. Unwrap DEK   │                                                    │
-│  │    with Private │                                                    │
-│  │    Key          │                                                    │
-│  │ 2. Decrypt      │                                                    │
-│  │    content with │                                                    │
-│  │    AES key      │                                                    │
-│  │ 3. Display      │                                                    │
+│  │ RSA-unwrap DEK  │                                                    │
+│  │ Decrypt content │                                                    │
 │  └─────────────────┘                                                    │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -243,6 +290,7 @@ pnpm clean            # Clean all node_modules and build outputs
 - **AES DEK only exists in memory** - during decryption process only
 - **Each article has a unique DEK** - compromise of one doesn't affect others
 - **Dual key model** - Tier keys (unlock all tier articles) + Article-specific keys (single article)
+- **Tier key caching** - subscriber fetches tier key once, decrypts all articles locally
 - **RSA-OAEP (2048-bit, SHA-256)** for key wrapping
 - **AES-256-GCM** for content encryption with authentication
 

@@ -64,15 +64,17 @@ export interface UnlockParams {
   articleId: string;
   /** Optional: pre-signed token for share link unlock */
   token?: string;
+  /** Optional: request tier key mode for tier-level key access */
+  mode?: "tier";
 }
 
 /**
  * Response from the unlock function.
  */
 export interface UnlockResponse {
-  /** Base64-encoded DEK encrypted with user's public key */
+  /** Base64-encoded key encrypted with user's public key (DEK or KEK depending on keyType) */
   encryptedDek: string;
-  /** When the DEK expires (ISO string or timestamp) */
+  /** When the key expires (ISO string or timestamp) */
   expiresAt: string | number;
   /** Bucket identifier for time-based keys */
   bucketId?: string;
@@ -80,6 +82,13 @@ export interface UnlockResponse {
   bucketPeriodSeconds?: number;
   /** Token ID (for share link unlocks) */
   tokenId?: string;
+  /**
+   * Type of key in encryptedDek:
+   * - 'kek': Key-encrypting key (tier key that can unwrap any article DEK locally)
+   * - 'dek': Data-encryption key (decrypts article content directly)
+   * When absent, treated as 'dek' for backward compatibility.
+   */
+  keyType?: "kek" | "dek";
 }
 
 /**
