@@ -134,6 +134,29 @@ async function verifyRequest(
   // 2. Verify resourceJWT
   const resource = await verifyJwt<DcaResource>(request.resourceJWT, publisherKeyPem);
 
+  // 2b. Bind unsigned request.resource to the signed resourceJWT payload.
+  //     Upstream access logic may read unsigned metadata, so reject mismatches.
+  if (request.resource.domain !== resource.domain) {
+    throw new Error(
+      `resource.domain mismatch: unsigned "${request.resource.domain}" vs signed "${resource.domain}"`,
+    );
+  }
+  if (request.resource.resourceId !== resource.resourceId) {
+    throw new Error(
+      `resource.resourceId mismatch: unsigned "${request.resource.resourceId}" vs signed "${resource.resourceId}"`,
+    );
+  }
+  if (request.resource.renderId !== resource.renderId) {
+    throw new Error(
+      `resource.renderId mismatch: unsigned "${request.resource.renderId}" vs signed "${resource.renderId}"`,
+    );
+  }
+  if (request.resource.issuedAt !== resource.issuedAt) {
+    throw new Error(
+      `resource.issuedAt mismatch: unsigned "${request.resource.issuedAt}" vs signed "${resource.issuedAt}"`,
+    );
+  }
+
   // 3. Verify issuerJWT
   const issuerPayload = await verifyJwt<DcaIssuerJwtPayload>(request.issuerJWT, publisherKeyPem);
 

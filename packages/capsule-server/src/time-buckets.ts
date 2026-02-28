@@ -45,8 +45,7 @@ export function getCurrentPeriod(
 export function getNextPeriod(
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): string {
-  const current = parseInt(getCurrentPeriod(periodDurationSeconds));
-  return (current + 1).toString();
+  return getPeriodId(Date.now() + periodDurationSeconds * 1000, periodDurationSeconds);
 }
 
 /**
@@ -55,8 +54,7 @@ export function getNextPeriod(
 export function getPreviousPeriod(
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): string {
-  const current = parseInt(getCurrentPeriod(periodDurationSeconds));
-  return (current - 1).toString();
+  return getPeriodId(Date.now() - periodDurationSeconds * 1000, periodDurationSeconds);
 }
 
 /**

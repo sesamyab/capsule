@@ -417,8 +417,7 @@ const PERIOD_SECRET = process.env.PERIOD_SECRET
   ? Buffer.from(process.env.PERIOD_SECRET, 'base64')
   : crypto.randomBytes(32);
 
-// Store securely in KMS (AWS Secrets Manager, HashiCorp Vault, etc.)
-console.log('Secret:', PERIOD_SECRET.toString('base64'));`}</CodeBlock>
+// Store securely in KMS (AWS Secrets Manager, HashiCorp Vault, etc.)`}</CodeBlock>
 
         <h3>Period Key Derivation</h3>
         <CodeBlock>{`import { createHmac } from 'crypto';

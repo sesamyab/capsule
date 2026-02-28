@@ -248,7 +248,8 @@ async function render(
   };
 
   // 10. Build HTML strings
-  const dcaDataScript = `<script type="application/json" class="dca-data">${JSON.stringify(dcaData)}</script>`;
+  // Escape closing script tags to prevent script-breakout XSS when embedding JSON in HTML
+  const dcaDataScript = `<script type="application/json" class="dca-data">${JSON.stringify(dcaData).replace(/<\//g, "\\u003c/")}</script>`;
 
   const sealedContentDivs = Object.entries(sealedContent)
     .map(([name, ct]) => `  <div data-dca-content-name="${escapeHtmlAttr(name)}">${ct}</div>`)

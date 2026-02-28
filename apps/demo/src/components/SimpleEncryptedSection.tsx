@@ -60,12 +60,12 @@ export function SimpleEncryptedSection({
           keyId,
           wrappedContentKey,
           publicKey,
-          resourceId: _resourceId,
+          resourceId,
         }) => {
           const response = await fetch("/api/unlock", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
+            body: JSON.stringify({ keyId, wrappedContentKey, publicKey, resourceId }),
           });
 
           if (!response.ok) {

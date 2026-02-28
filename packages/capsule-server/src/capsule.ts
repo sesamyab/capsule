@@ -460,8 +460,14 @@ export class PeriodKeyProvider {
       options.periodSecret instanceof Uint8Array
         ? options.periodSecret
         : fromBase64(options.periodSecret);
-    this.periodDurationSeconds =
+    const duration =
       options.periodDurationSeconds ?? DEFAULT_PERIOD_DURATION_SECONDS;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new RangeError(
+        `periodDurationSeconds must be a positive number, got ${duration}`,
+      );
+    }
+    this.periodDurationSeconds = duration;
   }
 
   /**

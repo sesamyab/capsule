@@ -52,6 +52,8 @@ import {
   derivePeriodKey,
   getPeriodKeys,
   getCurrentPeriod,
+  getNextPeriod,
+  getPreviousPeriod,
   getPeriodExpiration,
   isPeriodValid,
   DEFAULT_PERIOD_DURATION_SECONDS,
@@ -92,8 +94,14 @@ export class SubscriptionServer {
     } else {
       this.periodSecret = fromBase64(options.periodSecret);
     }
-    this.periodDurationSeconds =
+    const duration =
       options.periodDurationSeconds ?? DEFAULT_PERIOD_DURATION_SECONDS;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new RangeError(
+        `periodDurationSeconds must be a positive number, got ${duration}`,
+      );
+    }
+    this.periodDurationSeconds = duration;
   }
 
   /**
@@ -373,14 +381,10 @@ export class SubscriptionServer {
 
     // For token-based unlock, we need to try current and adjacent periods
     // since the article might have been encrypted in a different period
-    const currentPeriodNum = parseInt(
-      getCurrentPeriod(this.periodDurationSeconds),
-      10,
-    );
     const periodsToTry = [
-      currentPeriodNum.toString(),
-      (currentPeriodNum - 1).toString(),
-      (currentPeriodNum + 1).toString(),
+      getCurrentPeriod(this.periodDurationSeconds),
+      getPreviousPeriod(this.periodDurationSeconds),
+      getNextPeriod(this.periodDurationSeconds),
     ];
 
     let lastError: Error | null = null;

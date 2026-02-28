@@ -134,7 +134,6 @@ export {
   getPeriodExpiration,
   getPeriodId,
   isPeriodValid,
-  generatePeriodSecret,
   hkdf,
   DEFAULT_PERIOD_DURATION_SECONDS,
 } from "./time-periods";

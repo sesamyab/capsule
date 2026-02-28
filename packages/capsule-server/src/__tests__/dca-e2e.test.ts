@@ -172,6 +172,30 @@ describe("ECDH P-256 sealing", () => {
         const { algorithm } = await importIssuerPublicKey(pems.publicKeyPem);
         expect(algorithm).toBe("ECDH-P256");
     });
+
+    it("rejects truncated sealed blobs with a deterministic error", async () => {
+        const keyPair = await generateEcdhP256KeyPair();
+        const pems = await exportP256KeyPairPem(keyPair.privateKey, keyPair.publicKey);
+        const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
+
+        // Minimum valid blob is 65 (ephemeral pub) + 12 (IV) + 16 (GCM tag) = 93 bytes
+        const tooShort = toBase64Url(new Uint8Array(92));
+        await expect(unsealEcdhP256(tooShort, privKey)).rejects.toThrow(
+            /Invalid ECDH-P256 sealed blob: expected at least 93 bytes, got 92/,
+        );
+
+        // Empty blob
+        const empty = toBase64Url(new Uint8Array(0));
+        await expect(unsealEcdhP256(empty, privKey)).rejects.toThrow(
+            /Invalid ECDH-P256 sealed blob: expected at least 93 bytes, got 0/,
+        );
+
+        // Just below threshold (header only)
+        const headerOnly = toBase64Url(new Uint8Array(65));
+        await expect(unsealEcdhP256(headerOnly, privKey)).rejects.toThrow(
+            /Invalid ECDH-P256 sealed blob: expected at least 93 bytes, got 65/,
+        );
+    });
 });
 
 // ============================================================================
