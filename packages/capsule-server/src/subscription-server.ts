@@ -2,8 +2,8 @@
  * Subscription Server Utilities
  *
  * For building subscription server endpoints that:
- * 1. Provide bucket keys to CMS (for encryption)
- * 2. Unwrap DEKs for authenticated users (for decryption)
+ * 1. Provide period keys to CMS (for encryption)
+ * 2. Unwrap content keys for authenticated users (for decryption)
  * 3. Handle token-based unlock for pre-signed share links
  *
  * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
@@ -13,8 +13,8 @@
  * import { createSubscriptionServer, createTokenManager } from '@sesamy/capsule-server';
  *
  * const server = createSubscriptionServer({
- *   masterSecret: process.env.MASTER_SECRET,
- *   bucketPeriodSeconds: 30,
+ *   periodSecret: process.env.PERIOD_SECRET,
+ *   periodDurationSeconds: 30,
  * });
  *
  * const tokens = createTokenManager({
@@ -23,7 +23,7 @@
  *
  * // Endpoint for users to unlock content with a token
  * app.post('/api/unlock', async (req, res) => {
- *   const { token, wrappedDek, publicKey } = req.body;
+ *   const { token, wrappedContentKey, publicKey } = req.body;
  *
  *   // Validate token
  *   const validation = await tokens.validate(token);
@@ -34,7 +34,7 @@
  *   // Unlock with token
  *   const result = await server.unlockWithToken(
  *     validation.payload,
- *     wrappedDek,
+ *     wrappedContentKey,
  *     publicKey
  *   );
  *   res.json(result);
@@ -49,81 +49,81 @@ import {
   toBase64,
 } from "./web-crypto";
 import {
-  deriveBucketKey,
-  getBucketKeys,
-  getCurrentBucket,
-  getBucketExpiration,
-  isBucketValid,
-  DEFAULT_BUCKET_PERIOD_SECONDS,
-} from "./time-buckets";
-import { unwrapDek } from "./encryption";
-import type { BucketKey, UnlockResponse, WrappedKey } from "./types";
+  derivePeriodKey,
+  getPeriodKeys,
+  getCurrentPeriod,
+  getPeriodExpiration,
+  isPeriodValid,
+  DEFAULT_PERIOD_DURATION_SECONDS,
+} from "./time-periods";
+import { unwrapContentKey } from "./encryption";
+import type { PeriodKey, UnlockResponse, WrappedKey } from "./types";
 import type { UnlockTokenPayload } from "./tokens";
 
-/** Check if a string looks like a numeric bucket ID */
-function isNumericBucketId(str: string): boolean {
+/** Check if a string looks like a numeric period ID */
+function isNumericPeriodId(str: string): boolean {
   return /^\d+$/.test(str);
 }
 
 /** Options for creating a subscription server */
 export interface SubscriptionServerOptions {
-  /** Master secret for deriving bucket keys (base64 encoded string or Uint8Array) */
-  masterSecret: string | Uint8Array;
-  /** Bucket period in seconds (default: 30) */
-  bucketPeriodSeconds?: number;
+  /** Period secret for deriving period keys (base64 encoded string or Uint8Array) */
+  periodSecret: string | Uint8Array;
+  /** Period duration in seconds (default: 30) */
+  periodDurationSeconds?: number;
 }
 
 /**
  * Subscription Server for Capsule.
  *
- * Manages master secret and provides:
- * - Bucket keys for CMS (time-limited)
+ * Manages period secret and provides:
+ * - Period keys for CMS (time-limited)
  * - DEK unwrapping for authenticated users
  *
  * @see createSubscriptionServer for the recommended way to create an instance
  */
 export class SubscriptionServer {
-  private masterSecret: Uint8Array;
-  private bucketPeriodSeconds: number;
+  private periodSecret: Uint8Array;
+  private periodDurationSeconds: number;
 
   constructor(options: SubscriptionServerOptions) {
-    if (options.masterSecret instanceof Uint8Array) {
-      this.masterSecret = options.masterSecret;
+    if (options.periodSecret instanceof Uint8Array) {
+      this.periodSecret = options.periodSecret;
     } else {
-      this.masterSecret = fromBase64(options.masterSecret);
+      this.periodSecret = fromBase64(options.periodSecret);
     }
-    this.bucketPeriodSeconds =
-      options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
+    this.periodDurationSeconds =
+      options.periodDurationSeconds ?? DEFAULT_PERIOD_DURATION_SECONDS;
   }
 
   /**
-   * Get bucket keys for a key ID (for CMS).
+   * Get period keys for a key ID (for CMS).
    *
-   * Returns current and next bucket keys so CMS can encrypt
-   * content that works across bucket boundaries.
+   * Returns current and next period keys so CMS can encrypt
+   * content that works across period boundaries.
    */
-  async getBucketKeysForCms(
+  async getPeriodKeysForCms(
     keyId: string,
-  ): Promise<{ current: BucketKey; next: BucketKey }> {
-    return getBucketKeys(this.masterSecret, keyId, this.bucketPeriodSeconds);
+  ): Promise<{ current: PeriodKey; next: PeriodKey }> {
+    return getPeriodKeys(this.periodSecret, keyId, this.periodDurationSeconds);
   }
 
   /**
-   * Get bucket keys formatted for API response.
+   * Get period keys formatted for API response.
    */
-  async getBucketKeysResponse(keyId: string): Promise<{
-    current: { bucketId: string; key: string; expiresAt: string };
-    next: { bucketId: string; key: string; expiresAt: string };
+  async getPeriodKeysResponse(keyId: string): Promise<{
+    current: { periodId: string; key: string; expiresAt: string };
+    next: { periodId: string; key: string; expiresAt: string };
   }> {
-    const keys = await this.getBucketKeysForCms(keyId);
+    const keys = await this.getPeriodKeysForCms(keyId);
     return {
       current: {
-        bucketId: keys.current.bucketId,
+        periodId: keys.current.periodId,
         key: toBase64(keys.current.key),
         expiresAt: keys.current.expiresAt.toISOString(),
       },
       next: {
-        bucketId: keys.next.bucketId,
+        periodId: keys.next.periodId,
         key: toBase64(keys.next.key),
         expiresAt: keys.next.expiresAt.toISOString(),
       },
@@ -131,19 +131,19 @@ export class SubscriptionServer {
   }
 
   /**
-   * Validate that a bucket ID is current or adjacent.
+   * Validate that a period ID is current or adjacent.
    */
-  isBucketValid(bucketId: string): boolean {
-    return isBucketValid(bucketId, this.bucketPeriodSeconds);
+  isPeriodValid(periodId: string): boolean {
+    return isPeriodValid(periodId, this.periodDurationSeconds);
   }
 
   /**
-   * Unwrap a DEK and re-wrap it with a user's RSA public key.
+   * Unwrap a content key and re-wrap it with a user's RSA public key.
    *
    * This is the core unlock operation:
-   * 1. Parse the wrapped key to extract keyId and bucket info
-   * 2. Derive the key-wrapping key from master secret
-   * 3. Unwrap the DEK
+   * 1. Parse the wrapped key to extract keyId and period info
+   * 2. Derive the key-wrapping key from period secret
+   * 3. Unwrap the content key
    * 4. Re-wrap with user's RSA public key
    *
    * @param wrappedKey - The wrapped key entry from the article
@@ -157,8 +157,8 @@ export class SubscriptionServer {
       keyId: string,
     ) => Uint8Array | null | Promise<Uint8Array | null>,
   ): Promise<UnlockResponse> {
-    const { keyId, wrappedDek } = wrappedKey;
-    const wrappedDekBytes = fromBase64(wrappedDek);
+    const { keyId, wrappedContentKey } = wrappedKey;
+    const wrappedContentKeyBytes = fromBase64(wrappedContentKey);
 
     let keyWrappingKey: Uint8Array;
     let expiresAt: Date;
@@ -168,16 +168,16 @@ export class SubscriptionServer {
       const staticKey = await Promise.resolve(staticKeyLookup(keyId));
       if (staticKey) {
         keyWrappingKey = staticKey;
-        // Static keys use current bucket expiration for client cache timing
-        const currentBucket = getCurrentBucket(this.bucketPeriodSeconds);
-        expiresAt = getBucketExpiration(
-          currentBucket,
-          this.bucketPeriodSeconds,
+        // Static keys use current period expiration for client cache timing
+        const currentPeriod = getCurrentPeriod(this.periodDurationSeconds);
+        expiresAt = getPeriodExpiration(
+          currentPeriod,
+          this.periodDurationSeconds,
         );
 
         // Unwrap and re-wrap
         return this.unwrapAndRewrap(
-          wrappedDekBytes,
+          wrappedContentKeyBytes,
           keyWrappingKey,
           userPublicKeyB64,
           keyId,
@@ -187,147 +187,147 @@ export class SubscriptionServer {
       }
     }
 
-    // Parse keyId as bucket key: "tier:bucketId" (only if suffix is numeric)
+    // Parse keyId as period key: "contentId:periodId" (only if suffix is numeric)
     const colonIndex = keyId.lastIndexOf(":");
     if (colonIndex === -1) {
       throw new Error(
-        `Invalid keyId format: ${keyId}. Expected 'tier:bucketId' or use staticKeyLookup for static keys.`,
+        `Invalid keyId format: ${keyId}. Expected 'contentId:periodId' or use staticKeyLookup for static keys.`,
       );
     }
 
     const baseKeyId = keyId.substring(0, colonIndex);
     const suffix = keyId.substring(colonIndex + 1);
 
-    // Only treat as bucket key if suffix is numeric
-    if (!isNumericBucketId(suffix)) {
+    // Only treat as period key if suffix is numeric
+    if (!isNumericPeriodId(suffix)) {
       throw new Error(
-        `No static key found for '${keyId}' and suffix '${suffix}' is not a valid bucket ID. Provide a staticKeyLookup function.`,
+        `No static key found for '${keyId}' and suffix '${suffix}' is not a valid period ID. Provide a staticKeyLookup function.`,
       );
     }
 
-    const bucketId = suffix;
+    const periodId = suffix;
 
-    // Time-bucket key - validate and derive
-    if (!this.isBucketValid(bucketId)) {
-      throw new Error(`Bucket ${bucketId} is expired or invalid`);
+    // Time-period key - validate and derive
+    if (!this.isPeriodValid(periodId)) {
+      throw new Error(`Period ${periodId} is expired or invalid`);
     }
-    keyWrappingKey = await deriveBucketKey(
-      this.masterSecret,
+    keyWrappingKey = await derivePeriodKey(
+      this.periodSecret,
       baseKeyId,
-      bucketId,
+      periodId,
     );
-    expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
+    expiresAt = getPeriodExpiration(periodId, this.periodDurationSeconds);
 
     return this.unwrapAndRewrap(
-      wrappedDekBytes,
+      wrappedContentKeyBytes,
       keyWrappingKey,
       userPublicKeyB64,
       keyId,
-      bucketId,
+      periodId,
       expiresAt,
     );
   }
 
   /**
-   * Internal helper to unwrap DEK and re-wrap with user's public key.
+   * Internal helper to unwrap content key and re-wrap with user's public key.
    */
   private async unwrapAndRewrap(
-    wrappedDekBytes: Uint8Array,
+    wrappedContentKeyBytes: Uint8Array,
     keyWrappingKey: Uint8Array,
     userPublicKeyB64: string,
     keyId: string,
-    bucketId: string | undefined,
+    periodId: string | undefined,
     expiresAt: Date,
   ): Promise<UnlockResponse> {
-    // Unwrap the DEK
-    const dek = await unwrapDek(wrappedDekBytes, keyWrappingKey);
+    // Unwrap the content key
+    const contentKey = await unwrapContentKey(wrappedContentKeyBytes, keyWrappingKey);
 
     // Import user's public key and re-wrap DEK with RSA-OAEP
     const pubKey = await importRsaPublicKey(userPublicKeyB64);
-    const encryptedDek = await rsaOaepEncrypt(pubKey, dek);
+    const encryptedContentKey = await rsaOaepEncrypt(pubKey, contentKey);
 
     return {
-      encryptedDek: toBase64(encryptedDek),
+      encryptedContentKey: toBase64(encryptedContentKey),
       keyId,
-      bucketId,
+      periodId,
       expiresAt: expiresAt.toISOString(),
     };
   }
 
   /**
    * Simple unlock when you already have the key-wrapping key.
-   * Used when the unlock logic is separate from bucket key derivation.
+   * Used when the unlock logic is separate from period key derivation.
    */
-  async wrapDekForUser(
-    dek: Uint8Array,
+  async wrapContentKeyForUser(
+    contentKey: Uint8Array,
     userPublicKeyB64: string,
     keyId: string,
     expiresAt: Date,
   ): Promise<UnlockResponse> {
     const pubKey = await importRsaPublicKey(userPublicKeyB64);
-    const encryptedDek = await rsaOaepEncrypt(pubKey, dek);
+    const encryptedContentKey = await rsaOaepEncrypt(pubKey, contentKey);
 
-    // Only extract bucketId if suffix is numeric (otherwise it's a static key like "article:crypto-guide")
-    let bucketId: string | undefined;
+    // Only extract periodId if suffix is numeric (otherwise it's a static key like "article:crypto-guide")
+    let periodId: string | undefined;
     const colonIndex = keyId.lastIndexOf(":");
     if (colonIndex !== -1) {
       const suffix = keyId.substring(colonIndex + 1);
-      if (isNumericBucketId(suffix)) {
-        bucketId = suffix;
+      if (isNumericPeriodId(suffix)) {
+        periodId = suffix;
       }
     }
 
     return {
-      encryptedDek: toBase64(encryptedDek),
+      encryptedContentKey: toBase64(encryptedContentKey),
       keyId,
-      bucketId,
+      periodId,
       expiresAt: expiresAt.toISOString(),
     };
   }
 
   /**
-   * Get the key-wrapping key for a bucket key ID.
+   * Get the key-wrapping key for a period key ID.
    * Useful when you need the raw key for custom logic.
    */
-  async getBucketKey(keyId: string, bucketId: string): Promise<Uint8Array> {
-    return deriveBucketKey(this.masterSecret, keyId, bucketId);
+  async getPeriodKey(keyId: string, periodId: string): Promise<Uint8Array> {
+    return derivePeriodKey(this.periodSecret, keyId, periodId);
   }
 
   /**
-   * Get the key-wrapping key for a tier, wrapped with user's RSA public key.
+   * Get the key-wrapping key for a content ID, wrapped with user's RSA public key.
    *
-   * This enables "unlock once, access all" for tier content:
-   * - Client receives the AES-KW key (not the DEK)
-   * - Client can unwrap any article's DEK locally
+   * This enables "unlock once, access all" for shared content:
+   * - Client receives the AES-KW key (not the content key)
+   * - Client can unwrap any article's content key locally
    * - No per-article unlock requests needed
    *
-   * @param tier - The tier name (e.g., "premium")
-   * @param bucketId - The bucket ID to get the key for
+   * @param contentId - The content identifier (e.g., "premium")
+   * @param periodId - The period ID to get the key for
    * @param userPublicKeyB64 - User's RSA public key (Base64 SPKI format)
    */
-  async getTierKeyForUser(
-    tier: string,
-    bucketId: string,
+  async getSharedKeyForUser(
+    contentId: string,
+    periodId: string,
     userPublicKeyB64: string,
   ): Promise<UnlockResponse> {
-    if (!this.isBucketValid(bucketId)) {
-      throw new Error(`Bucket ${bucketId} is expired or invalid`);
+    if (!this.isPeriodValid(periodId)) {
+      throw new Error(`Period ${periodId} is expired or invalid`);
     }
 
-    const keyWrappingKey = await deriveBucketKey(
-      this.masterSecret,
-      tier,
-      bucketId,
+    const keyWrappingKey = await derivePeriodKey(
+      this.periodSecret,
+      contentId,
+      periodId,
     );
-    const expiresAt = getBucketExpiration(bucketId, this.bucketPeriodSeconds);
+    const expiresAt = getPeriodExpiration(periodId, this.periodDurationSeconds);
 
     const pubKey = await importRsaPublicKey(userPublicKeyB64);
     const encryptedKey = await rsaOaepEncrypt(pubKey, keyWrappingKey);
 
     return {
-      encryptedDek: toBase64(encryptedKey), // Actually the KEK, not DEK
-      keyId: `${tier}:${bucketId}`,
-      bucketId,
+      encryptedContentKey: toBase64(encryptedKey), // Actually the KEK, not content key
+      keyId: `${contentId}:${periodId}`,
+      periodId,
       expiresAt: expiresAt.toISOString(),
     };
   }
@@ -336,10 +336,10 @@ export class SubscriptionServer {
    * Unlock content using a pre-signed token.
    *
    * This is the recommended flow for share links:
-   * 1. Publisher generates token with tier access
+   * 1. Publisher generates token with content access
    * 2. Reader clicks share link, page loads with encrypted content
-   * 3. Client sends token + wrappedDek + publicKey
-   * 4. Server validates token, unwraps DEK, re-wraps for reader
+   * 3. Client sends token + wrappedContentKey + publicKey
+   * 4. Server validates token, unwraps content key, re-wraps for reader
    *
    * Benefits:
    * - Full audit trail (every unlock is logged)
@@ -347,76 +347,76 @@ export class SubscriptionServer {
    * - Supports usage limits and expiration
    *
    * @param tokenPayload - Validated token payload (from TokenManager.validate())
-   * @param wrappedDekB64 - Base64 wrapped DEK from the article
+   * @param wrappedContentKeyB64 - Base64 wrapped content key from the article
    * @param userPublicKeyB64 - Reader's RSA public key (Base64 SPKI)
-   * @param contentId - Optional content ID for validation (compared against token.contentId)
-   * @returns Unlock response with DEK wrapped for the reader
+   * @param expectedContentId - Optional content ID for validation (compared against token.contentId)
+   * @returns Unlock response with content key wrapped for the reader
    */
   async unlockWithToken(
     tokenPayload: UnlockTokenPayload,
-    wrappedDekB64: string,
+    wrappedContentKeyB64: string,
     userPublicKeyB64: string,
-    contentId?: string,
+    expectedContentId?: string,
   ): Promise<UnlockResponse> {
-    const { tier } = tokenPayload;
+    const { contentId } = tokenPayload;
 
-    // Validate contentId matches (token always has contentId)
-    if (contentId && tokenPayload.contentId !== contentId) {
+    // Validate contentId matches
+    if (expectedContentId && contentId !== expectedContentId) {
       throw new Error(
-        `Token is for content '${tokenPayload.contentId}', not '${contentId}'`,
+        `Token is for content '${contentId}', not '${expectedContentId}'`,
       );
     }
 
-    // Parse the wrapped DEK to extract the bucket ID from the keyId
-    // The wrappedDek comes from the article, which has keyId like "premium:123456"
-    const wrappedDekBytes = fromBase64(wrappedDekB64);
+    // Parse the wrapped content key to extract the period ID from the keyId
+    // The wrappedContentKey comes from the article, which has keyId like "premium:123456"
+    const wrappedContentKeyBytes = fromBase64(wrappedContentKeyB64);
 
-    // For token-based unlock, we need to try current and adjacent buckets
-    // since the article might have been encrypted in a different bucket
-    const currentBucketNum = parseInt(
-      getCurrentBucket(this.bucketPeriodSeconds),
+    // For token-based unlock, we need to try current and adjacent periods
+    // since the article might have been encrypted in a different period
+    const currentPeriodNum = parseInt(
+      getCurrentPeriod(this.periodDurationSeconds),
       10,
     );
-    const bucketsToTry = [
-      currentBucketNum.toString(),
-      (currentBucketNum - 1).toString(),
-      (currentBucketNum + 1).toString(),
+    const periodsToTry = [
+      currentPeriodNum.toString(),
+      (currentPeriodNum - 1).toString(),
+      (currentPeriodNum + 1).toString(),
     ];
 
     let lastError: Error | null = null;
 
-    for (const bucketId of bucketsToTry) {
+    for (const periodId of periodsToTry) {
       try {
-        const keyWrappingKey = await deriveBucketKey(
-          this.masterSecret,
-          tier,
-          bucketId,
+        const keyWrappingKey = await derivePeriodKey(
+          this.periodSecret,
+          contentId,
+          periodId,
         );
-        const dek = await unwrapDek(wrappedDekBytes, keyWrappingKey);
+        const contentKey = await unwrapContentKey(wrappedContentKeyBytes, keyWrappingKey);
 
         // Success! Re-wrap for user
         const pubKey = await importRsaPublicKey(userPublicKeyB64);
-        const encryptedDek = await rsaOaepEncrypt(pubKey, dek);
+        const encryptedContentKey = await rsaOaepEncrypt(pubKey, contentKey);
 
-        const expiresAt = getBucketExpiration(
-          bucketId,
-          this.bucketPeriodSeconds,
+        const expiresAt = getPeriodExpiration(
+          periodId,
+          this.periodDurationSeconds,
         );
 
         return {
-          encryptedDek: toBase64(encryptedDek),
-          keyId: `${tier}:${bucketId}`,
-          bucketId,
+          encryptedContentKey: toBase64(encryptedContentKey),
+          keyId: `${contentId}:${periodId}`,
+          periodId,
           expiresAt: expiresAt.toISOString(),
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        // Try next bucket
+        // Try next period
       }
     }
 
     throw new Error(
-      `Failed to unlock with token for tier '${tier}': ${lastError?.message}`,
+      `Failed to unlock with token for contentId '${contentId}': ${lastError?.message}`,
     );
   }
 }
@@ -427,48 +427,19 @@ export class SubscriptionServer {
  * @example
  * ```typescript
  * const server = createSubscriptionServer({
- *   masterSecret: process.env.MASTER_SECRET,
- *   bucketPeriodSeconds: 30,
+ *   periodSecret: process.env.PERIOD_SECRET,
+ *   periodDurationSeconds: 30,
  * });
  *
  * app.post('/api/unlock', async (req, res) => {
- *   const { keyId, wrappedDek, publicKey } = req.body;
- *   const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
+ *   const { keyId, wrappedContentKey, publicKey } = req.body;
+ *   const result = await server.unlockForUser({ keyId, wrappedContentKey }, publicKey);
  *   res.json(result);
  * });
  * ```
  */
 export function createSubscriptionServer(
   options: SubscriptionServerOptions,
-): SubscriptionServer;
-/**
- * Create a subscription server (legacy signature).
- * @deprecated Use createSubscriptionServer({ masterSecret, bucketPeriodSeconds }) instead
- */
-export function createSubscriptionServer(
-  masterSecret: string | Uint8Array,
-  bucketPeriodSeconds?: number,
-): SubscriptionServer;
-export function createSubscriptionServer(
-  optionsOrSecret: SubscriptionServerOptions | string | Uint8Array,
-  bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS,
 ): SubscriptionServer {
-  // Handle both signatures
-  if (
-    typeof optionsOrSecret === "object" &&
-    !(optionsOrSecret instanceof Uint8Array)
-  ) {
-    return new SubscriptionServer(optionsOrSecret);
-  }
-
-  // Legacy signature
-  const secret =
-    typeof optionsOrSecret === "string"
-      ? optionsOrSecret
-      : toBase64(optionsOrSecret);
-
-  return new SubscriptionServer({
-    masterSecret: secret,
-    bucketPeriodSeconds,
-  });
+  return new SubscriptionServer(options);
 }

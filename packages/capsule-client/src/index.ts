@@ -5,7 +5,7 @@
  * - RSA-OAEP key pair generation and storage (auto-creates on first use)
  * - Non-extractable private keys in IndexedDB
  * - AES-256-GCM content decryption
- * - Automatic DEK caching and renewal
+ * - Automatic content key caching and renewal
  * - HTML element processing with script execution
  * - Custom events for unlock lifecycle
  *
@@ -14,11 +14,11 @@
  * import { CapsuleClient } from '@sesamy/capsule';
  *
  * const capsule = new CapsuleClient({
- *   unlock: async ({ keyId, wrappedDek, publicKey }) => {
+ *   unlock: async ({ keyId, wrappedContentKey, publicKey }) => {
  *     const res = await fetch('/api/unlock', {
  *       method: 'POST',
  *       headers: { 'Content-Type': 'application/json' },
- *       body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+ *       body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
  *     });
  *     return res.json();
  *   }
@@ -39,11 +39,11 @@
  * });
  *
  * document.addEventListener('capsule:unlock', (e) => {
- *   console.log('Unlocked:', e.detail.articleId);
+ *   console.log('Unlocked:', e.detail.contentId);
  * });
  *
  * document.addEventListener('capsule:error', (e) => {
- *   console.error('Failed:', e.detail.articleId, e.detail.error);
+ *   console.error('Failed:', e.detail.contentId, e.detail.error);
  * });
  * ```
  *
@@ -51,8 +51,8 @@
  * ```ts
  * const capsule = new CapsuleClient();
  * const publicKey = await capsule.getPublicKey();
- * // ... send publicKey to server, get encryptedDek back ...
- * const content = await capsule.decrypt(encryptedArticle, encryptedDek);
+ * // ... send publicKey to server, get encryptedContentKey back ...
+ * const content = await capsule.decrypt(encryptedArticle, encryptedContentKey);
  * ```
  */
 
@@ -100,10 +100,20 @@ export type {
 
   // Configuration
   CapsuleClientOptions,
-  DekStorageMode,
+  ContentKeyStorageMode,
   ElementState,
 
   // Storage types
   StoredKeyPair,
-  StoredDek,
+  StoredContentKey,
 } from "./types";
+
+// DCA Client
+export {
+  DcaClient,
+  type DcaClientOptions,
+  type DcaParsedPage,
+  type DcaPeriodKeyCache,
+  type DcaData as DcaClientData,
+  type DcaUnlockResponse as DcaClientUnlockResponse,
+} from "./dca-client";

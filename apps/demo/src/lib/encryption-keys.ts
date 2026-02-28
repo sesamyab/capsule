@@ -1,95 +1,95 @@
 /**
- * Server-side encryption keys for different subscription tiers and articles.
+ * Server-side encryption keys for different content IDs and articles.
  * 
- * TIER KEYS: Derived from master secret + time bucket using HKDF via @sesamy/capsule-server.
- * This provides forward secrecy - old bucket keys can't decrypt new content.
+ * SHARED KEYS: Derived from period secret + time period using HKDF via @sesamy/capsule-server.
+ * This provides forward secrecy - old period keys can't decrypt new content.
  * 
- * ARTICLE KEYS: Static per-article DEKs (for permanent article-specific access).
+ * ARTICLE KEYS: Static per-content keys (for permanent article-specific access).
  * In production, these would be stored in a KMS.
  */
 
-import { 
-  deriveBucketKey as deriveBucketKeyFromServer,
-  getCurrentBucket,
-  getNextBucket,
-  getBucketExpiration,
+import {
+  derivePeriodKey as derivePeriodKeyFromServer,
+  getCurrentPeriod,
+  getNextPeriod,
+  getPeriodExpiration,
 } from "@sesamy/capsule-server";
-import { MASTER_SECRET, BUCKET_PERIOD_SECONDS } from "./time-buckets";
+import { PERIOD_SECRET, PERIOD_DURATION_SECONDS } from "./time-periods";
 
-/** Valid subscription tiers */
-export const VALID_TIERS = ["premium", "basic"] as const;
-export type SubscriptionTier = typeof VALID_TIERS[number];
+/** Valid content IDs */
+export const VALID_CONTENT_IDS = ["premium", "basic"] as const;
+export type ContentId = typeof VALID_CONTENT_IDS[number];
 
-// Per-article DEKs (for article-specific access control)
+// Per-content keys (for article-specific access control)
 // These are static - once purchased, the article is accessible forever
-export const ARTICLE_KEYS: Record<string, { dek: string }> = {
+export const ARTICLE_KEYS: Record<string, { contentKey: string }> = {
   "premium-guide": {
-    dek: "xQGvT8HnJkLmPq2Rs3TuVw4XyZ0A1B2C3D4E5F6G7H8=",
+    contentKey: "xQGvT8HnJkLmPq2Rs3TuVw4XyZ0A1B2C3D4E5F6G7H8=",
   },
   "crypto-basics": {
-    dek: "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V=",
+    contentKey: "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V=",
   },
 };
 
 /**
- * Check if a tier is valid.
+ * Check if a content ID is valid.
  */
-export function isValidTier(tier: string): tier is SubscriptionTier {
-  return VALID_TIERS.includes(tier as SubscriptionTier);
+export function isValidContentId(contentId: string): contentId is ContentId {
+  return VALID_CONTENT_IDS.includes(contentId as ContentId);
 }
 
 /**
- * Get the DEK for a subscription tier at a specific time bucket.
- * The DEK is derived using HKDF from master secret + bucket ID.
+ * Get the content key for a content ID at a specific time period.
+ * The content key is derived using HKDF from period secret + period ID.
  */
-export async function getSubscriptionKey(tier: string, bucketId?: string): Promise<Uint8Array> {
-  if (!isValidTier(tier)) {
-    throw new Error(`Unknown subscription tier: ${tier}`);
+export async function getSubscriptionKey(contentId: string, periodId?: string): Promise<Uint8Array> {
+  if (!isValidContentId(contentId)) {
+    throw new Error(`Unknown content ID: ${contentId}`);
   }
-  const bucket = bucketId ?? getCurrentBucket(BUCKET_PERIOD_SECONDS);
-  return await deriveBucketKeyFromServer(MASTER_SECRET, tier, bucket);
+  const period = periodId ?? getCurrentPeriod(PERIOD_DURATION_SECONDS);
+  return await derivePeriodKeyFromServer(PERIOD_SECRET, contentId, period);
 }
 
 /**
- * Get DEKs for both current and next time buckets.
+ * Get DEKs for both current and next time periods.
  * Used by CMS to encrypt content for both windows (handles clock drift).
  */
-export async function getSubscriptionKeysForEncryption(tier: string): Promise<{
-  current: { bucketId: string; dek: Uint8Array; expiresAt: Date };
-  next: { bucketId: string; dek: Uint8Array; expiresAt: Date };
+export async function getSubscriptionKeysForEncryption(contentId: string): Promise<{
+  current: { periodId: string; contentKey: Uint8Array; expiresAt: Date };
+  next: { periodId: string; contentKey: Uint8Array; expiresAt: Date };
 }> {
-  if (!isValidTier(tier)) {
-    throw new Error(`Unknown subscription tier: ${tier}`);
+  if (!isValidContentId(contentId)) {
+    throw new Error(`Unknown content ID: ${contentId}`);
   }
-  
-  const currentBucket = getCurrentBucket(BUCKET_PERIOD_SECONDS);
-  const nextBucket = getNextBucket(BUCKET_PERIOD_SECONDS);
-  
+
+  const currentPeriod = getCurrentPeriod(PERIOD_DURATION_SECONDS);
+  const nextPeriod = getNextPeriod(PERIOD_DURATION_SECONDS);
+
   return {
     current: {
-      bucketId: currentBucket,
-      dek: await deriveBucketKeyFromServer(MASTER_SECRET, tier, currentBucket),
-      expiresAt: getBucketExpiration(currentBucket, BUCKET_PERIOD_SECONDS),
+      periodId: currentPeriod,
+      contentKey: await derivePeriodKeyFromServer(PERIOD_SECRET, contentId, currentPeriod),
+      expiresAt: getPeriodExpiration(currentPeriod, PERIOD_DURATION_SECONDS),
     },
     next: {
-      bucketId: nextBucket,
-      dek: await deriveBucketKeyFromServer(MASTER_SECRET, tier, nextBucket),
-      expiresAt: getBucketExpiration(nextBucket, BUCKET_PERIOD_SECONDS),
+      periodId: nextPeriod,
+      contentKey: await derivePeriodKeyFromServer(PERIOD_SECRET, contentId, nextPeriod),
+      expiresAt: getPeriodExpiration(nextPeriod, PERIOD_DURATION_SECONDS),
     },
   };
 }
 
 /**
- * Get the DEK for a specific article.
- * Article keys are static (not bucket-based) for permanent access.
+ * Get the content key for a specific article.
+ * Article keys are static (not period-based) for permanent access.
  */
-export function getArticleKey(articleId: string): Uint8Array {
-  const keyData = ARTICLE_KEYS[articleId];
+export function getArticleKey(contentId: string): Uint8Array {
+  const keyData = ARTICLE_KEYS[contentId];
   if (!keyData) {
-    throw new Error(`No article-specific key for: ${articleId}`);
+    throw new Error(`No article-specific key for: ${contentId}`);
   }
   // Decode base64 to Uint8Array
-  const binaryString = atob(keyData.dek);
+  const binaryString = atob(keyData.contentKey);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
@@ -100,6 +100,6 @@ export function getArticleKey(articleId: string): Uint8Array {
 /**
  * Check if an article has its own specific key.
  */
-export function hasArticleKey(articleId: string): boolean {
-  return articleId in ARTICLE_KEYS;
+export function hasArticleKey(contentId: string): boolean {
+  return contentId in ARTICLE_KEYS;
 }

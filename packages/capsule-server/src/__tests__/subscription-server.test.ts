@@ -3,7 +3,7 @@ import {
   SubscriptionServer,
   createSubscriptionServer,
 } from "../subscription-server";
-import { generateDek, wrapDek } from "../encryption";
+import { generateContentKey, wrapContentKey } from "../encryption";
 import { toBase64 } from "../web-crypto";
 
 // Generate a test RSA key pair using Web Crypto
@@ -39,8 +39,8 @@ function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 describe("SubscriptionServer", () => {
-  const masterSecret = new TextEncoder().encode(
-    "test-master-secret-for-capsule-tests"
+  const periodSecret = new TextEncoder().encode(
+    "test-period-secret-for-capsule-tests"
   );
   let testKeyPair: Awaited<ReturnType<typeof generateTestKeyPair>>;
 
@@ -57,78 +57,78 @@ describe("SubscriptionServer", () => {
 
   describe("createSubscriptionServer", () => {
     it("creates a SubscriptionServer instance", () => {
-      const server = createSubscriptionServer({ masterSecret });
+      const server = createSubscriptionServer({ periodSecret });
       expect(server).toBeInstanceOf(SubscriptionServer);
     });
 
-    it("accepts base64 encoded master secret", () => {
+    it("accepts base64 encoded period secret", () => {
       const server = createSubscriptionServer({
-        masterSecret: toBase64(masterSecret),
+        periodSecret: toBase64(periodSecret),
       });
       expect(server).toBeInstanceOf(SubscriptionServer);
     });
   });
 
-  describe("getBucketKeysForCms", () => {
-    it("returns current and next bucket keys", async () => {
+  describe("getPeriodKeysForCms", () => {
+    it("returns current and next period keys", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      const keys = await server.getBucketKeysForCms("premium");
+      const keys = await server.getPeriodKeysForCms("premium");
 
-      expect(keys.current.bucketId).toBe("56802240");
-      expect(keys.next.bucketId).toBe("56802241");
+      expect(keys.current.periodId).toBe("56802240");
+      expect(keys.next.periodId).toBe("56802241");
       expect(keys.current.key).toBeInstanceOf(Uint8Array);
       expect(keys.current.key.length).toBe(32);
     });
   });
 
-  describe("getBucketKeysResponse", () => {
+  describe("getPeriodKeysResponse", () => {
     it("returns keys formatted for API response", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      const response = await server.getBucketKeysResponse("premium");
+      const response = await server.getPeriodKeysResponse("premium");
 
       expect(typeof response.current.key).toBe("string"); // Base64
       expect(typeof response.current.expiresAt).toBe("string"); // ISO date
-      expect(response.current.bucketId).toBe("56802240");
+      expect(response.current.periodId).toBe("56802240");
     });
   });
 
-  describe("isBucketValid", () => {
-    it("validates current bucket", () => {
+  describe("isPeriodValid", () => {
+    it("validates current period", () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      expect(server.isBucketValid("56802240")).toBe(true); // current
-      expect(server.isBucketValid("56802241")).toBe(true); // next
-      expect(server.isBucketValid("56802239")).toBe(true); // previous
-      expect(server.isBucketValid("56802238")).toBe(false); // too old
+      expect(server.isPeriodValid("56802240")).toBe(true); // current
+      expect(server.isPeriodValid("56802241")).toBe(true); // next
+      expect(server.isPeriodValid("56802239")).toBe(true); // previous
+      expect(server.isPeriodValid("56802238")).toBe(false); // too old
     });
   });
 
   describe("unlockForUser", () => {
-    it("unlocks with bucket key", async () => {
+    it("unlocks with period key", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      // Create a wrapped DEK using the current bucket key
-      const dek = generateDek();
-      const bucketKey = await server.getBucketKey("premium", "56802240");
-      const wrappedDekBuffer = await wrapDek(dek, bucketKey);
+      // Create a wrapped content key using the current period key
+      const contentKey = generateContentKey();
+      const periodKey = await server.getPeriodKey("premium", "56802240");
+      const wrappedContentKeyBuffer = await wrapContentKey(contentKey, periodKey);
 
       const wrappedKey = {
         keyId: "premium:56802240",
-        wrappedDek: toBase64(wrappedDekBuffer),
+        wrappedContentKey: toBase64(wrappedContentKeyBuffer),
       };
 
       const result = await server.unlockForUser(
@@ -137,25 +137,25 @@ describe("SubscriptionServer", () => {
       );
 
       expect(result.keyId).toBe("premium:56802240");
-      expect(result.bucketId).toBe("56802240");
-      expect(typeof result.encryptedDek).toBe("string");
+      expect(result.periodId).toBe("56802240");
+      expect(typeof result.encryptedContentKey).toBe("string");
       expect(typeof result.expiresAt).toBe("string");
     });
 
     it("unlocks with static key via staticKeyLookup", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
       // Create a static key for an article
-      const staticKey = generateDek();
-      const dek = generateDek();
-      const wrappedDekBuffer = await wrapDek(dek, staticKey);
+      const staticKey = generateContentKey();
+      const contentKey = generateContentKey();
+      const wrappedContentKeyBuffer = await wrapContentKey(contentKey, staticKey);
 
       const wrappedKey = {
         keyId: "article:my-article",
-        wrappedDek: toBase64(wrappedDekBuffer),
+        wrappedContentKey: toBase64(wrappedContentKeyBuffer),
       };
 
       const staticKeyLookup = vi.fn().mockReturnValue(staticKey);
@@ -168,22 +168,22 @@ describe("SubscriptionServer", () => {
 
       expect(staticKeyLookup).toHaveBeenCalledWith("article:my-article");
       expect(result.keyId).toBe("article:my-article");
-      expect(result.bucketId).toBeUndefined(); // Static keys don't have bucketId
+      expect(result.periodId).toBeUndefined(); // Static keys don't have periodId
     });
 
     it("supports async staticKeyLookup", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      const staticKey = generateDek();
-      const dek = generateDek();
-      const wrappedDekBuffer = await wrapDek(dek, staticKey);
+      const staticKey = generateContentKey();
+      const contentKey = generateContentKey();
+      const wrappedContentKeyBuffer = await wrapContentKey(contentKey, staticKey);
 
       const wrappedKey = {
         keyId: "article:async-article",
-        wrappedDek: toBase64(wrappedDekBuffer),
+        wrappedContentKey: toBase64(wrappedContentKeyBuffer),
       };
 
       // Async lookup
@@ -198,19 +198,19 @@ describe("SubscriptionServer", () => {
       expect(result.keyId).toBe("article:async-article");
     });
 
-    it("throws for expired bucket", async () => {
+    it("throws for expired period", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      const dek = generateDek();
-      const oldBucketKey = await server.getBucketKey("premium", "56802230"); // Old bucket
-      const wrappedDekBuffer = await wrapDek(dek, oldBucketKey);
+      const contentKey = generateContentKey();
+      const oldPeriodKey = await server.getPeriodKey("premium", "56802230"); // Old period
+      const wrappedContentKeyBuffer = await wrapContentKey(contentKey, oldPeriodKey);
 
       const wrappedKey = {
         keyId: "premium:56802230",
-        wrappedDek: toBase64(wrappedDekBuffer),
+        wrappedContentKey: toBase64(wrappedContentKeyBuffer),
       };
 
       await expect(
@@ -220,36 +220,36 @@ describe("SubscriptionServer", () => {
 
     it("throws for static key without lookup function", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
       const wrappedKey = {
         keyId: "article:no-lookup",
-        wrappedDek: "dummydata",
+        wrappedContentKey: "dummydata",
       };
 
       await expect(
         server.unlockForUser(wrappedKey, testKeyPair.publicKeyB64)
-      ).rejects.toThrow("not a valid bucket ID");
+      ).rejects.toThrow("not a valid period ID");
     });
 
-    it("falls back to bucket key when staticKeyLookup returns null", async () => {
+    it("falls back to period key when staticKeyLookup returns null", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      const dek = generateDek();
-      const bucketKey = await server.getBucketKey("premium", "56802240");
-      const wrappedDekBuffer = await wrapDek(dek, bucketKey);
+      const contentKey = generateContentKey();
+      const periodKey = await server.getPeriodKey("premium", "56802240");
+      const wrappedContentKeyBuffer = await wrapContentKey(contentKey, periodKey);
 
       const wrappedKey = {
         keyId: "premium:56802240",
-        wrappedDek: toBase64(wrappedDekBuffer),
+        wrappedContentKey: toBase64(wrappedContentKeyBuffer),
       };
 
-      // Lookup returns null - should fall back to bucket key
+      // Lookup returns null - should fall back to period key
       const staticKeyLookup = vi.fn().mockReturnValue(null);
 
       const result = await server.unlockForUser(
@@ -259,73 +259,73 @@ describe("SubscriptionServer", () => {
       );
 
       expect(result.keyId).toBe("premium:56802240");
-      expect(result.bucketId).toBe("56802240");
+      expect(result.periodId).toBe("56802240");
     });
   });
 
-  describe("wrapDekForUser", () => {
-    it("wraps DEK with user public key", async () => {
-      const server = createSubscriptionServer({ masterSecret });
+  describe("wrapContentKeyForUser", () => {
+    it("wraps content key with user public key", async () => {
+      const server = createSubscriptionServer({ periodSecret });
 
-      const dek = generateDek();
+      const contentKey = generateContentKey();
       const expiresAt = new Date(Date.now() + 60000);
 
-      const result = await server.wrapDekForUser(
-        dek,
+      const result = await server.wrapContentKeyForUser(
+        contentKey,
         testKeyPair.publicKeyB64,
         "premium:56802240",
         expiresAt
       );
 
       expect(result.keyId).toBe("premium:56802240");
-      expect(result.bucketId).toBe("56802240");
-      expect(typeof result.encryptedDek).toBe("string");
+      expect(result.periodId).toBe("56802240");
+      expect(typeof result.encryptedContentKey).toBe("string");
     });
 
-    it("handles static key IDs correctly (no bucketId)", async () => {
-      const server = createSubscriptionServer({ masterSecret });
+    it("handles static key IDs correctly (no periodId)", async () => {
+      const server = createSubscriptionServer({ periodSecret });
 
-      const dek = generateDek();
+      const contentKey = generateContentKey();
       const expiresAt = new Date(Date.now() + 60000);
 
-      const result = await server.wrapDekForUser(
-        dek,
+      const result = await server.wrapContentKeyForUser(
+        contentKey,
         testKeyPair.publicKeyB64,
         "article:my-guide",
         expiresAt
       );
 
       expect(result.keyId).toBe("article:my-guide");
-      expect(result.bucketId).toBeUndefined();
+      expect(result.periodId).toBeUndefined();
     });
   });
 
-  describe("getTierKeyForUser", () => {
+  describe("getSharedKeyForUser", () => {
     it("returns KEK wrapped with user public key", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
-      const result = await server.getTierKeyForUser(
+      const result = await server.getSharedKeyForUser(
         "premium",
         "56802240",
         testKeyPair.publicKeyB64
       );
 
       expect(result.keyId).toBe("premium:56802240");
-      expect(result.bucketId).toBe("56802240");
-      expect(typeof result.encryptedDek).toBe("string");
+      expect(result.periodId).toBe("56802240");
+      expect(typeof result.encryptedContentKey).toBe("string");
     });
 
-    it("throws for invalid bucket", async () => {
+    it("throws for invalid period", async () => {
       const server = createSubscriptionServer({
-        masterSecret,
-        bucketPeriodSeconds: 30,
+        periodSecret,
+        periodDurationSeconds: 30,
       });
 
       await expect(
-        server.getTierKeyForUser(
+        server.getSharedKeyForUser(
           "premium",
           "56802230",
           testKeyPair.publicKeyB64
@@ -334,21 +334,21 @@ describe("SubscriptionServer", () => {
     });
   });
 
-  describe("getBucketKey", () => {
-    it("returns the derived bucket key", async () => {
-      const server = createSubscriptionServer({ masterSecret });
+  describe("getPeriodKey", () => {
+    it("returns the derived period key", async () => {
+      const server = createSubscriptionServer({ periodSecret });
 
-      const key = await server.getBucketKey("premium", "12345");
+      const key = await server.getPeriodKey("premium", "12345");
 
       expect(key).toBeInstanceOf(Uint8Array);
       expect(key.length).toBe(32);
     });
 
     it("returns same key for same inputs", async () => {
-      const server = createSubscriptionServer({ masterSecret });
+      const server = createSubscriptionServer({ periodSecret });
 
-      const key1 = await server.getBucketKey("premium", "12345");
-      const key2 = await server.getBucketKey("premium", "12345");
+      const key1 = await server.getPeriodKey("premium", "12345");
+      const key2 = await server.getPeriodKey("premium", "12345");
 
       expect(arraysEqual(key1, key2)).toBe(true);
     });

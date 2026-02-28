@@ -42,8 +42,8 @@ describe("AsymmetricTokenManager", () => {
       });
 
       const token = await manager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
@@ -51,8 +51,7 @@ describe("AsymmetricTokenManager", () => {
 
       expect(result.valid).toBe(true);
       if (result.valid) {
-        expect(result.payload.tier).toBe("premium");
-        expect(result.payload.contentId).toBe("article-123");
+        expect(result.payload.contentId).toBe("premium");
         expect(result.payload.iss).toBe("https://test.example.com");
         expect(result.payload.kid).toBe("test-key");
         expect(result.payload.alg).toBe("EdDSA");
@@ -69,8 +68,8 @@ describe("AsymmetricTokenManager", () => {
       });
 
       const token = await manager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         url: "https://example.com/article/123",
         userId: "user-456",
         maxUses: 5,
@@ -99,15 +98,15 @@ describe("AsymmetricTokenManager", () => {
       });
 
       const token = await manager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
       // Tamper with the payload
       const [payloadB64, sig] = token.split(".");
       const payload = JSON.parse(decodeUtf8(fromBase64Url(payloadB64)));
-      payload.tier = "enterprise"; // Attempt to upgrade tier
+      payload.contentId = "enterprise"; // Attempt to upgrade content access
       const tamperedPayload = toBase64Url(
         encodeUtf8(JSON.stringify(payload)),
       );
@@ -132,8 +131,8 @@ describe("AsymmetricTokenManager", () => {
 
       // Generate token that expires in 1 second
       const token = await manager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: -1, // Already expired
       });
 
@@ -179,8 +178,8 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
       const oldToken = await oldManager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "30d",
       });
 
@@ -204,8 +203,8 @@ describe("AsymmetricTokenManager", () => {
 
       // New manager should also validate new tokens
       const newToken = await newManager.generate({
-        tier: "basic",
-        contentId: "article-456",
+        contentId: "basic",
+
         expiresIn: "7d",
       });
 
@@ -240,8 +239,8 @@ describe("AsymmetricTokenManager", () => {
         issuer: "https://test.example.com",
       });
       const unknownToken = await unknownManager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
@@ -299,15 +298,14 @@ describe("AsymmetricTokenManager", () => {
       });
 
       const token = await manager.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
       const payload = manager.peek(token);
       expect(payload).not.toBeNull();
-      expect(payload?.tier).toBe("premium");
-      expect(payload?.contentId).toBe("article-123");
+      expect(payload?.contentId).toBe("premium");
     });
 
     it("returns null for invalid tokens", async () => {

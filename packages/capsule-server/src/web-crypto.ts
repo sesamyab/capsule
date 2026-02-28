@@ -205,12 +205,14 @@ export function generateIv(): Uint8Array {
  * @param content - Plaintext content to encrypt
  * @param key - 256-bit AES key (raw bytes or WebCryptoKey)
  * @param iv - 96-bit initialization vector (generated if not provided)
+ * @param aad - Optional additional authenticated data (integrity-bound but not encrypted)
  * @returns Encrypted content (ciphertext + auth tag) and IV
  */
 export async function aesGcmEncrypt(
     content: Uint8Array,
     key: Uint8Array | WebCryptoKey,
     iv?: Uint8Array,
+    aad?: Uint8Array,
 ): Promise<{ encryptedContent: Uint8Array; iv: Uint8Array }> {
     const crypto = getCrypto();
     const actualIv = iv ?? generateIv();
@@ -219,8 +221,15 @@ export async function aesGcmEncrypt(
             ? key
             : await importAesKey(key as Uint8Array, ["encrypt"]);
 
+    const params = {
+        name: "AES-GCM" as const,
+        iv: actualIv,
+        tagLength: GCM_TAG_LENGTH * 8,
+        ...(aad ? { additionalData: aad } : {}),
+    };
+
     const encrypted = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: actualIv, tagLength: GCM_TAG_LENGTH * 8 },
+        params,
         cryptoKey,
         content,
     );
@@ -237,12 +246,14 @@ export async function aesGcmEncrypt(
  * @param encryptedContent - Ciphertext + auth tag
  * @param key - 256-bit AES key (raw bytes or WebCryptoKey)
  * @param iv - Initialization vector used for encryption
+ * @param aad - Optional additional authenticated data (must match what was used for encryption)
  * @returns Decrypted plaintext
  */
 export async function aesGcmDecrypt(
     encryptedContent: Uint8Array,
     key: Uint8Array | WebCryptoKey,
     iv: Uint8Array,
+    aad?: Uint8Array,
 ): Promise<Uint8Array> {
     const crypto = getCrypto();
     const cryptoKey =
@@ -250,8 +261,15 @@ export async function aesGcmDecrypt(
             ? key
             : await importAesKey(key as Uint8Array, ["decrypt"]);
 
+    const params = {
+        name: "AES-GCM" as const,
+        iv,
+        tagLength: GCM_TAG_LENGTH * 8,
+        ...(aad ? { additionalData: aad } : {}),
+    };
+
     const decrypted = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv, tagLength: GCM_TAG_LENGTH * 8 },
+        params,
         cryptoKey,
         encryptedContent,
     );
@@ -587,4 +605,249 @@ export function publicKeyToPem(spki: Uint8Array): string {
         lines.push(base64.slice(i, i + 64));
     }
     return `-----BEGIN PUBLIC KEY-----\n${lines.join("\n")}\n-----END PUBLIC KEY-----`;
+}
+
+/**
+ * Parse a PEM-encoded key into raw DER bytes.
+ */
+export function parsePem(pem: string): Uint8Array {
+    const pemHeader = /-----BEGIN [A-Z ]+-----/;
+    const pemFooter = /-----END [A-Z ]+-----/;
+    const b64 = pem.replace(pemHeader, "").replace(pemFooter, "").replace(/\s/g, "");
+    return fromBase64(b64);
+}
+
+// ============================================================================
+// SHA-256
+// ============================================================================
+
+/**
+ * Compute SHA-256 hash of data.
+ */
+export async function sha256(data: Uint8Array): Promise<Uint8Array> {
+    const crypto = getCrypto();
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return new Uint8Array(hash);
+}
+
+// ============================================================================
+// ECDH P-256 Operations (for DCA issuer key sealing)
+// ============================================================================
+
+/**
+ * Generate an ECDH P-256 key pair.
+ * Returns extractable keys so the public key can be exported.
+ */
+export async function generateEcdhP256KeyPair(): Promise<{
+    privateKey: WebCryptoKey;
+    publicKey: WebCryptoKey;
+}> {
+    const crypto = getCrypto();
+    const keyPair = (await crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveBits"],
+    )) as { privateKey: WebCryptoKey; publicKey: WebCryptoKey };
+    return keyPair;
+}
+
+/**
+ * Export an ECDH P-256 public key as uncompressed raw bytes (65 bytes: 0x04 || x || y).
+ */
+export async function exportEcdhP256PublicKeyRaw(key: WebCryptoKey): Promise<Uint8Array> {
+    const crypto = getCrypto();
+    const raw = await crypto.subtle.exportKey("raw", key);
+    return new Uint8Array(raw);
+}
+
+/**
+ * Import an ECDH P-256 public key from uncompressed raw bytes (65 bytes).
+ */
+export async function importEcdhP256PublicKeyRaw(raw: Uint8Array): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    return crypto.subtle.importKey(
+        "raw",
+        raw,
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        [],
+    );
+}
+
+/**
+ * Import an ECDH P-256 public key from SPKI PEM or DER.
+ */
+export async function importEcdhP256PublicKey(key: Uint8Array | string): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    const keyData = typeof key === "string" ? parsePem(key) : key;
+    return crypto.subtle.importKey(
+        "spki",
+        keyData,
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        [],
+    );
+}
+
+/**
+ * Import an ECDH P-256 private key from PKCS8 PEM or DER.
+ */
+export async function importEcdhP256PrivateKey(key: Uint8Array | string): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    const keyData = typeof key === "string" ? parsePem(key) : key;
+    return crypto.subtle.importKey(
+        "pkcs8",
+        keyData,
+        { name: "ECDH", namedCurve: "P-256" },
+        false,
+        ["deriveBits"],
+    );
+}
+
+/**
+ * Derive the raw ECDH shared secret (x-coordinate, 32 bytes for P-256).
+ */
+export async function ecdhDeriveBits(
+    privateKey: WebCryptoKey,
+    publicKey: WebCryptoKey,
+): Promise<Uint8Array> {
+    const crypto = getCrypto();
+    const bits = await crypto.subtle.deriveBits(
+        { name: "ECDH", public: publicKey },
+        privateKey,
+        256,
+    );
+    return new Uint8Array(bits);
+}
+
+// ============================================================================
+// ECDSA P-256 Operations (ES256 for DCA JWTs)
+// ============================================================================
+
+/**
+ * Generate an ECDSA P-256 key pair for ES256 signing.
+ */
+export async function generateEcdsaP256KeyPair(): Promise<{
+    privateKey: WebCryptoKey;
+    publicKey: WebCryptoKey;
+}> {
+    const crypto = getCrypto();
+    const keyPair = (await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["sign", "verify"],
+    )) as { privateKey: WebCryptoKey; publicKey: WebCryptoKey };
+    return keyPair;
+}
+
+/**
+ * Import an ECDSA P-256 private key from PKCS8 PEM or DER.
+ */
+export async function importEcdsaP256PrivateKey(key: Uint8Array | string): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    const keyData = typeof key === "string" ? parsePem(key) : key;
+    return crypto.subtle.importKey(
+        "pkcs8",
+        keyData,
+        { name: "ECDSA", namedCurve: "P-256" },
+        false,
+        ["sign"],
+    );
+}
+
+/**
+ * Import an ECDSA P-256 public key from SPKI PEM or DER.
+ */
+export async function importEcdsaP256PublicKey(key: Uint8Array | string): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    const keyData = typeof key === "string" ? parsePem(key) : key;
+    return crypto.subtle.importKey(
+        "spki",
+        keyData,
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["verify"],
+    );
+}
+
+/**
+ * Sign data with ECDSA P-256 (ES256). Returns 64-byte IEEE P1363 signature (r || s).
+ */
+export async function ecdsaP256Sign(
+    privateKey: WebCryptoKey,
+    data: Uint8Array,
+): Promise<Uint8Array> {
+    const crypto = getCrypto();
+    const sig = await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        privateKey,
+        data,
+    );
+    return new Uint8Array(sig);
+}
+
+/**
+ * Verify an ECDSA P-256 (ES256) signature.
+ */
+export async function ecdsaP256Verify(
+    publicKey: WebCryptoKey,
+    signature: Uint8Array,
+    data: Uint8Array,
+): Promise<boolean> {
+    const crypto = getCrypto();
+    return crypto.subtle.verify(
+        { name: "ECDSA", hash: "SHA-256" },
+        publicKey,
+        signature,
+        data,
+    );
+}
+
+/**
+ * Export an ECDSA/ECDH P-256 key pair to PEM format.
+ */
+export async function exportP256KeyPairPem(
+    privateKey: WebCryptoKey,
+    publicKey: WebCryptoKey,
+): Promise<{ privateKeyPem: string; publicKeyPem: string }> {
+    const crypto = getCrypto();
+    const privDer = new Uint8Array(await crypto.subtle.exportKey("pkcs8", privateKey));
+    const pubDer = new Uint8Array(await crypto.subtle.exportKey("spki", publicKey));
+    return {
+        privateKeyPem: privateKeyToPem(privDer),
+        publicKeyPem: publicKeyToPem(pubDer),
+    };
+}
+
+/**
+ * Import an RSA-OAEP private key from PKCS8 PEM or DER.
+ */
+export async function importRsaPrivateKey(
+    key: Uint8Array | string,
+): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    const keyData = typeof key === "string" ? parsePem(key) : key;
+    return crypto.subtle.importKey(
+        "pkcs8",
+        keyData,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        false,
+        ["decrypt"],
+    );
+}
+
+/**
+ * Decrypt data with RSA-OAEP.
+ */
+export async function rsaOaepDecrypt(
+    privateKey: WebCryptoKey,
+    data: Uint8Array,
+): Promise<Uint8Array> {
+    const crypto = getCrypto();
+    const decrypted = await crypto.subtle.decrypt(
+        { name: "RSA-OAEP" },
+        privateKey,
+        data,
+    );
+    return new Uint8Array(decrypted);
 }

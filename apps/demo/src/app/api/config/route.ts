@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getConfig, getCurrentBucket, getNextBucket, getBucketExpiration } from "@/lib/time-buckets";
+import { getConfig, getCurrentPeriod, getNextPeriod, getPeriodExpiration } from "@/lib/time-periods";
 
 /**
  * GET /api/config
@@ -9,35 +9,35 @@ import { getConfig, getCurrentBucket, getNextBucket, getBucketExpiration } from 
  */
 export async function GET() {
   const config = getConfig();
-  const currentBucket = getCurrentBucket();
-  const nextBucket = getNextBucket();
-  
+  const currentPeriod = getCurrentPeriod();
+  const nextPeriod = getNextPeriod();
+
   return NextResponse.json({
     keyExchange: {
       method: config.method,
-      bucketPeriodSeconds: config.bucketPeriodSeconds,
-      description: config.method === "totp" 
-        ? "TOTP mode: Keys derived locally using shared secret. Both CMS and subscription server must share the same secret."
+      periodDurationSeconds: config.periodDurationSeconds,
+      description: config.method === "period"
+        ? "period mode: Keys derived locally using shared secret. Both CMS and subscription server must share the same secret."
         : "API mode: CMS fetches keys from subscription server. Server controls rotation period."
     },
-    currentBucket: {
-      id: currentBucket,
-      counter: parseInt(currentBucket), // TOTP counter (Unix seconds / period)
-      expiresAt: getBucketExpiration(currentBucket).toISOString(),
-      expiresIn: Math.round((getBucketExpiration(currentBucket).getTime() - Date.now()) / 1000) + " seconds",
-      info: "TOTP counter = floor(Unix time / period). Used as HKDF input to derive AES key."
+    currentPeriod: {
+      id: currentPeriod,
+      counter: parseInt(currentPeriod), // Period counter (Unix seconds / period)
+      expiresAt: getPeriodExpiration(currentPeriod).toISOString(),
+      expiresIn: Math.round((getPeriodExpiration(currentPeriod).getTime() - Date.now()) / 1000) + " seconds",
+      info: "Period counter = floor(Unix time / period). Used as HKDF input to derive AES key."
     },
-    nextBucket: {
-      id: nextBucket,
-      counter: parseInt(nextBucket),
-      expiresAt: getBucketExpiration(nextBucket).toISOString()
+    nextPeriod: {
+      id: nextPeriod,
+      counter: parseInt(nextPeriod),
+      expiresAt: getPeriodExpiration(nextPeriod).toISOString()
     },
     environment: {
       hasCustomSecret: config.hasCustomSecret,
       envVars: {
-        CAPSULE_KEY_METHOD: "Set to 'totp' or 'api' (default: totp)",
-        CAPSULE_BUCKET_PERIOD: "Bucket period in seconds (default: 30)",
-        CAPSULE_MASTER_SECRET: "Base64-encoded shared secret (auto-generated if not set)"
+        CAPSULE_KEY_METHOD: "Set to 'period' or 'api' (default: period)",
+        CAPSULE_BUCKET_PERIOD: "Period duration in seconds (default: 30)",
+        PERIOD_SECRET: "Base64-encoded shared secret (auto-generated if not set)"
       }
     }
   });

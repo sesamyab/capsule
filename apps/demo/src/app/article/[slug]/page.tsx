@@ -80,7 +80,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
           <section className="premium-section">
             {/* Encrypted content embedded in the page for offline/cached decryption */}
             <EncryptedSection
-              articleId={article.id}
+              resourceId={article.id}
               encryptedData={encryptedData}
             />
           </section>
@@ -108,7 +108,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
               or via email. Recipients can unlock the content without logging
               in.
             </p>
-            <ShareButton contentId={article.id} tier="premium" />
+            <ShareButton resourceId={article.id} />
           </section>
         </article>
       </main>

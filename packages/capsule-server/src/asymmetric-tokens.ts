@@ -24,7 +24,7 @@
  * });
  *
  * // Generate tokens
- * const token = await tokens.generate({ tier: 'premium', contentId: 'article-123', expiresIn: '7d' });
+ * const token = await tokens.generate({ contentId: 'premium', expiresIn: '7d' });
  *
  * // Get JWKS for /.well-known/jwks.json endpoint
  * const jwks = await tokens.getJwks();
@@ -92,9 +92,7 @@ export interface AsymmetricTokenPayload {
   kid: string;
   /** Algorithm used */
   alg: "EdDSA";
-  /** Tier this token grants access to */
-  tier: string;
-  /** Publisher's content ID */
+  /** Content identifier this token grants access to */
   contentId: string;
   /** Optional: full URL for the content */
   url?: string;
@@ -112,7 +110,6 @@ export interface AsymmetricTokenPayload {
 
 /** Options for generating a token */
 export interface AsymmetricGenerateOptions {
-  tier: string;
   contentId: string;
   url?: string;
   userId?: string;
@@ -295,7 +292,6 @@ export class AsymmetricTokenManager {
       iss: this.issuer,
       kid: this.keyId,
       alg: "EdDSA",
-      tier: options.tier,
       contentId: options.contentId,
       iat: now,
       exp: now + expiresInSeconds,

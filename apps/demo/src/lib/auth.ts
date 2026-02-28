@@ -7,7 +7,7 @@
  */
 
 import { generateKeyPairSync, sign, verify } from "crypto";
-import { constantTimeCompare } from "./time-buckets";
+import { constantTimeCompare } from "./time-periods";
 
 /**
  * API Key for CMS authentication (Option 1).
@@ -176,7 +176,7 @@ export function createJwt(
   const payload: JwtPayload = {
     iss: issuer,
     aud: audience,
-    sub: "bucket-keys",
+    sub: "period-keys",
     iat: now,
     exp: now + expiresInSeconds,
   };

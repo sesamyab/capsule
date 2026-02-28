@@ -17,18 +17,18 @@ The CMS server just needs a way to get keys - it doesn't care about tiers or how
 ```typescript
 import {
   createCmsServer,
-  createTotpKeyProvider,
+  createPeriodKeyProvider,
   createSubscriptionServer,
 } from "@sesamy/capsule-server";
 
-// Create a TOTP key provider (derives keys from master secret)
-const totp = createTotpKeyProvider({
-  masterSecret: process.env.MASTER_SECRET, // Base64-encoded 256-bit secret
+// Create a period key provider (derives keys from period secret)
+const keyProvider = createPeriodKeyProvider({
+  periodSecret: process.env.PERIOD_SECRET, // Base64-encoded 256-bit secret
 });
 
 // CMS side: encrypt content
 const cms = createCmsServer({
-  getKeys: (keyIds) => totp.getKeys(keyIds),
+  getKeys: (keyIds) => keyProvider.getKeys(keyIds),
 });
 
 const encrypted = await cms.encrypt("article-123", premiumContent, {
@@ -37,7 +37,7 @@ const encrypted = await cms.encrypt("article-123", premiumContent, {
 
 // Subscription side: handle unlock requests
 const server = createSubscriptionServer({
-  masterSecret: process.env.MASTER_SECRET,
+  periodSecret: process.env.PERIOD_SECRET,
 });
 
 // In your unlock endpoint
@@ -65,10 +65,10 @@ const cms = createCmsServer({
   },
 });
 
-// Option 2: Use TOTP key provider (derive keys locally)
-const totp = createTotpKeyProvider({ masterSecret: process.env.MASTER_SECRET });
+// Option 2: Use period key provider (derive keys locally)
+const keyProvider = createPeriodKeyProvider({ periodSecret: process.env.PERIOD_SECRET });
 const cms = createCmsServer({
-  getKeys: (keyIds) => totp.getKeys(keyIds),
+  getKeys: (keyIds) => keyProvider.getKeys(keyIds),
 });
 ```
 
@@ -84,7 +84,7 @@ const encrypted = await cms.encrypt("article-123", content, {
 
 ```json
 {
-  "articleId": "article-123",
+  "resourceId": "article-123",
   "encryptedContent": "base64...", // AES-256-GCM encrypted content
   "iv": "base64...", // 12-byte initialization vector
   "wrappedKeys": [
@@ -115,7 +115,7 @@ const html = await cms.encrypt(id, content, {
   htmlClass: "premium-content",
   placeholder: "<p>Subscribe to unlock...</p>",
 });
-// Result: <div class="premium-content" data-capsule='{"articleId":...}' data-capsule-id="article-123">
+// Result: <div class="premium-content" data-capsule='{"resourceId":...}' data-capsule-id="article-123">
 //           <p>Subscribe to unlock...</p>
 //         </div>
 
@@ -129,20 +129,20 @@ const { data, json, attribute, html } = await cms.encryptForTemplate(
 );
 ```
 
-## TOTP Key Provider
+## Period Key Provider
 
-For deriving time-bucket keys locally from a shared master secret:
+For deriving time-bucket keys locally from a shared period secret:
 
 ```typescript
-import { createTotpKeyProvider } from "@sesamy/capsule-server";
+import { createPeriodKeyProvider } from "@sesamy/capsule-server";
 
-const totp = createTotpKeyProvider({
-  masterSecret: process.env.MASTER_SECRET,
-  bucketPeriodSeconds: 30, // Optional, default 30
+const keyProvider = createPeriodKeyProvider({
+  periodSecret: process.env.PERIOD_SECRET,
+  periodDurationSeconds: 30, // Optional, default 30
 });
 
 // Get keys for given IDs (returns current + next bucket for each)
-const keys = await totp.getKeys(["premium", "enterprise"]);
+const keys = await keyProvider.getKeys(["premium", "enterprise"]);
 // Returns: [
 //   { keyId: 'premium:1737158400', key: Buffer, expiresAt: Date },
 //   { keyId: 'premium:1737158430', key: Buffer, expiresAt: Date },
@@ -151,7 +151,7 @@ const keys = await totp.getKeys(["premium", "enterprise"]);
 // ]
 
 // For per-article purchase keys (static, no expiration)
-const articleKey = await totp.getArticleKey("article-123");
+const articleKey = await keyProvider.getArticleKey("article-123");
 // Returns: { keyId: 'article:article-123', key: Buffer }
 ```
 
@@ -160,14 +160,14 @@ const articleKey = await totp.getArticleKey("article-123");
 ```typescript
 const cms = createCmsServer({
   getKeys: async (keyIds) => {
-    const keys = await totp.getKeys(
+    const keys = await keyProvider.getKeys(
       keyIds.filter((id) => !id.startsWith("article:")),
     );
 
     // Add article keys if requested
     for (const id of keyIds.filter((id) => id.startsWith("article:"))) {
-      const articleId = id.slice(8);
-      keys.push(await totp.getArticleKey(articleId));
+      const resourceId = id.slice(8);
+      keys.push(await keyProvider.getArticleKey(resourceId));
     }
 
     return keys;
@@ -190,8 +190,8 @@ Handles unlock requests from users.
 import { createSubscriptionServer } from "@sesamy/capsule-server";
 
 const server = createSubscriptionServer({
-  masterSecret: process.env.MASTER_SECRET,
-  bucketPeriodSeconds: 30,
+  periodSecret: process.env.PERIOD_SECRET,
+  periodDurationSeconds: 30,
 });
 ```
 
@@ -327,14 +327,14 @@ Capsule supports pre-signed tokens for sharing content without requiring user au
 import { createTokenManager } from "@sesamy/capsule-server";
 
 const tokens = createTokenManager({
-  secret: process.env.TOKEN_SECRET, // Separate from master secret
+  secret: process.env.TOKEN_SECRET, // Separate from period secret
 });
 
 // Generate a share token
 const token = tokens.generate({
   tier: "premium", // Required: which tier to grant access to
   expiresIn: "7d", // Required: "1h", "24h", "7d", "30d"
-  articleId: "crypto-guide", // Optional: restrict to specific article
+  resourceId: "crypto-guide", // Optional: restrict to specific article
   maxUses: 1000, // Optional: limit total uses
   userId: "publisher-123", // Optional: for attribution
   meta: { campaign: "twitter" }, // Optional: custom metadata
@@ -348,7 +348,7 @@ const shareUrl = `https://example.com/article/crypto-guide?token=${token}`;
 
 ```typescript
 app.post("/api/unlock", async (req) => {
-  const { token, wrappedDek, publicKey, articleId } = req.body;
+  const { token, wrappedDek, publicKey, resourceId } = req.body;
 
   // Validate the token
   const validation = tokens.validate(token);
@@ -360,7 +360,7 @@ app.post("/api/unlock", async (req) => {
   console.log("Unlock via share link", {
     tokenId: validation.payload.tid,
     tier: validation.payload.tier,
-    articleId,
+    resourceId,
   });
 
   // Optional: check usage count from Redis/DB
@@ -376,7 +376,7 @@ app.post("/api/unlock", async (req) => {
     validation.payload,
     wrappedDek,
     publicKey,
-    articleId,
+    resourceId,
   );
 
   return res.json({ ...result, tokenId: validation.payload.tid });
@@ -392,7 +392,7 @@ interface UnlockTokenPayload {
   v: 1; // Version
   tid: string; // Unique token ID (for tracking/revocation)
   tier: string; // Tier this grants access to
-  articleId?: string; // Specific article (if restricted)
+  resourceId?: string; // Specific article (if restricted)
   userId?: string; // Creator attribution
   maxUses?: number; // Usage limit
   iat: number; // Issued at (Unix timestamp)
@@ -406,15 +406,15 @@ interface UnlockTokenPayload {
 ```typescript
 // 1. Publisher generates share link
 app.post("/api/share", async (req, res) => {
-  const { tier, articleId, expiresIn, maxUses } = req.body;
+  const { tier, resourceId, expiresIn, maxUses } = req.body;
 
-  const token = tokens.generate({ tier, articleId, expiresIn, maxUses });
+  const token = tokens.generate({ tier, resourceId, expiresIn, maxUses });
   const payload = tokens.peek(token);
 
   res.json({
     token,
     tokenId: payload.tid,
-    shareUrl: `https://example.com/article/${articleId}?token=${token}`,
+    shareUrl: `https://example.com/article/${resourceId}?token=${token}`,
     expiresAt: new Date(payload.exp * 1000).toISOString(),
   });
 });
@@ -424,7 +424,7 @@ app.post("/api/share", async (req, res) => {
 
 // 3. Server validates and unlocks
 app.post("/api/unlock", async (req, res) => {
-  const { token, wrappedDek, publicKey, articleId } = req.body;
+  const { token, wrappedDek, publicKey, resourceId } = req.body;
 
   if (token) {
     const validation = tokens.validate(token);
@@ -436,7 +436,7 @@ app.post("/api/unlock", async (req, res) => {
     await analytics.log("share_link_unlock", {
       tokenId: validation.payload.tid,
       tier: validation.payload.tier,
-      articleId,
+      resourceId,
       ip: req.ip,
     });
 
@@ -504,7 +504,7 @@ Each article requires a server call:
 
 When using `TotpKeyProvider`, keys rotate automatically:
 
-- Keys are derived from `masterSecret + keyId + bucketId` using HKDF
+- Keys are derived from `periodSecret + keyId + bucketId` using HKDF
 - Bucket ID changes every `bucketPeriodSeconds` (default: 30s)
 - Provider returns current AND next bucket (handles clock drift)
 - When bucket expires, old wrapped keys become invalid (forward secrecy)
@@ -515,14 +515,14 @@ When using `TotpKeyProvider`, keys rotate automatically:
 
 ```typescript
 // lib/capsule.ts
-import { createCmsServer, createTotpKeyProvider } from "@sesamy/capsule-server";
+import { createCmsServer, createPeriodKeyProvider } from "@sesamy/capsule-server";
 
-const totp = createTotpKeyProvider({
-  masterSecret: process.env.MASTER_SECRET!,
+const keyProvider = createPeriodKeyProvider({
+  periodSecret: process.env.PERIOD_SECRET!,
 });
 
 export const cms = createCmsServer({
-  getKeys: (keyIds) => totp.getKeys(keyIds),
+  getKeys: (keyIds) => keyProvider.getKeys(keyIds),
 });
 
 // app/article/[slug]/page.tsx
@@ -551,8 +551,8 @@ export default async function ArticlePage({ params }) {
 // src/pages/article/[slug].astro
 import { createCmsServer, createTotpKeyProvider } from '@sesamy/capsule-server';
 
-const totp = createTotpKeyProvider({
-  masterSecret: import.meta.env.MASTER_SECRET,
+const totp = createPeriodKeyProvider({
+  periodSecret: import.meta.env.PERIOD_SECRET,
 });
 
 const cms = createCmsServer({
@@ -584,18 +584,18 @@ const { attribute } = await cms.encryptForTemplate(
 import express from "express";
 import {
   createCmsServer,
-  createTotpKeyProvider,
+  createPeriodKeyProvider,
   createSubscriptionServer,
 } from "@sesamy/capsule-server";
 
 const app = express();
 
-const totp = createTotpKeyProvider({
-  masterSecret: process.env.MASTER_SECRET!,
+const keyProvider = createPeriodKeyProvider({
+  periodSecret: process.env.PERIOD_SECRET!,
 });
-const cms = createCmsServer({ getKeys: (keyIds) => totp.getKeys(keyIds) });
+const cms = createCmsServer({ getKeys: (keyIds) => keyProvider.getKeys(keyIds) });
 const server = createSubscriptionServer({
-  masterSecret: process.env.MASTER_SECRET!,
+  periodSecret: process.env.PERIOD_SECRET!,
 });
 
 // Encrypt content
@@ -618,10 +618,10 @@ app.post("/api/unlock", async (req, res) => {
 
 ## Security Notes
 
-- **Master secret**: Store in KMS (AWS Secrets Manager, HashiCorp Vault, etc.)
+- **Period secret**: Store in KMS (AWS Secrets Manager, HashiCorp Vault, etc.)
 - **Bucket period**: Determines maximum revocation delay (shorter = faster revocation, more wrapped keys)
 - **Per-article keys**: Are static (no automatic revocation) - use for permanent purchases
-- **Key isolation**: CMS only needs key IDs, not the master secret (if using external key provider)
+- **Key isolation**: CMS only needs key IDs, not the period secret (if using external key provider)
 - **User validation**: Always validate subscription before calling `unlockForUser()`
 
 ## API Reference
@@ -645,29 +645,29 @@ interface KeyEntry {
 }
 
 // Encrypt content
-cms.encrypt(articleId, content, { keyIds, format?, ... }): Promise<EncryptedArticle | string>;
+cms.encrypt(resourceId, content, { keyIds, format?, ... }): Promise<EncryptedArticle | string>;
 
 // Get all formats for templates
-cms.encryptForTemplate(articleId, content, { keyIds }): Promise<{ data, json, attribute, html }>;
+cms.encryptForTemplate(resourceId, content, { keyIds }): Promise<{ data, json, attribute, html }>;
 ```
 
-### TotpKeyProvider
+### PeriodKeyProvider
 
 ```typescript
-import { createTotpKeyProvider, TotpKeyProvider } from '@sesamy/capsule-server';
+import { createPeriodKeyProvider, PeriodKeyProvider } from '@sesamy/capsule-server';
 
-const totp = createTotpKeyProvider(options: TotpKeyProviderOptions);
+const keyProvider = createPeriodKeyProvider(options: PeriodKeyProviderOptions);
 
-interface TotpKeyProviderOptions {
-  masterSecret: Buffer | string;   // Required
-  bucketPeriodSeconds?: number;    // Default: 30
+interface PeriodKeyProviderOptions {
+  periodSecret: Buffer | string;      // Required
+  periodDurationSeconds?: number;     // Default: 30
 }
 
 // Get time-bucket keys (current + next for each keyId)
-totp.getKeys(keyIds: string[]): Promise<KeyEntry[]>;
+keyProvider.getKeys(keyIds: string[]): Promise<KeyEntry[]>;
 
 // Get static article key
-totp.getArticleKey(articleId: string): Promise<KeyEntry>;
+keyProvider.getArticleKey(contentId: string): Promise<KeyEntry>;
 ```
 
 ### SubscriptionServer
@@ -678,8 +678,8 @@ import { createSubscriptionServer, SubscriptionServer } from '@sesamy/capsule-se
 const server = createSubscriptionServer(options: SubscriptionServerOptions);
 
 interface SubscriptionServerOptions {
-  masterSecret: string | Buffer;   // Required
-  bucketPeriodSeconds?: number;    // Default: 30
+  periodSecret: string | Buffer;      // Required
+  periodDurationSeconds?: number;     // Default: 30
 }
 
 // For CMS key fetching (if not using TOTP locally)
@@ -704,7 +704,7 @@ server.unlockWithToken(
   tokenPayload: UnlockTokenPayload,
   wrappedDekB64: string,
   userPublicKey: string,
-  articleId?: string
+  resourceId?: string
 ): UnlockResponse;
 ```
 
@@ -725,7 +725,7 @@ tokens.generate(options: GenerateTokenOptions): string;
 interface GenerateTokenOptions {
   tier: string;              // Required: tier to grant access to
   expiresIn: string | number; // Required: "1h", "24h", "7d", or seconds
-  articleId?: string;         // Optional: restrict to article
+  resourceId?: string;         // Optional: restrict to article
   maxUses?: number;           // Optional: usage limit
   userId?: string;            // Optional: creator attribution
   meta?: Record<string, any>; // Optional: custom metadata

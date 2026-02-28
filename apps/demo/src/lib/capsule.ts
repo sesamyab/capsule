@@ -3,35 +3,35 @@
  * Uses the high-level @sesamy/capsule-server API.
  */
 
-import { createCmsServer, createTotpKeyProvider } from "@sesamy/capsule-server";
+import { createCmsServer, createPeriodKeyProvider } from "@sesamy/capsule-server";
 
-/** Bucket period in seconds (30s for demo, longer for production) */
-const BUCKET_PERIOD_SECONDS = 30;
+/** Period duration in seconds (30s for demo, longer for production) */
+const PERIOD_DURATION_SECONDS = 30;
 
 /**
- * Master secret for key derivation.
+ * Period secret for key derivation.
  * In production, use KMS (AWS Secrets Manager, etc.)
  */
-const MASTER_SECRET =
-  process.env.CAPSULE_MASTER_SECRET ||
+const PERIOD_SECRET =
+  process.env.PERIOD_SECRET ||
   Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString(
     "base64",
   );
 
 /**
  * Secret for signing share tokens.
- * In production, use a separate secret from the master secret.
+ * In production, use a separate secret from the period secret.
  */
 const TOKEN_SECRET =
   process.env.CAPSULE_TOKEN_SECRET ||
   "demo-token-secret-do-not-use-in-production!!";
 
 /**
- * TOTP key provider for deriving time-bucket keys.
+ * Period key provider for deriving time-period keys.
  */
-const totp = createTotpKeyProvider({
-  masterSecret: MASTER_SECRET,
-  bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+const keyProvider = createPeriodKeyProvider({
+  periodSecret: PERIOD_SECRET,
+  periodDurationSeconds: PERIOD_DURATION_SECONDS,
 });
 
 /**
@@ -39,29 +39,27 @@ const totp = createTotpKeyProvider({
  *
  * Use this to encrypt article content:
  * ```typescript
- * const encrypted = await cms.encrypt(articleId, content, {
+ * const encrypted = await cms.encrypt(resourceId, content, {
  *   keyIds: ['premium'],
+ *   contentId: 'premium',
  * });
  * ```
  */
 export const cms = createCmsServer({
   getKeys: async (keyIds) => {
-    const keys = await totp.getKeys(
+    const keys = await keyProvider.getKeys(
       keyIds.filter((id) => !id.startsWith("article:")),
     );
 
     // Handle article keys
     for (const id of keyIds.filter((id) => id.startsWith("article:"))) {
-      const articleId = id.slice(8);
-      keys.push(await totp.getArticleKey(articleId));
+      const resourceId = id.slice(8);
+      keys.push(await keyProvider.getArticleKey(resourceId));
     }
 
     return keys;
   },
 });
 
-// Legacy alias
-export const capsule = cms;
-
 // Re-export for convenience
-export { BUCKET_PERIOD_SECONDS, MASTER_SECRET, TOKEN_SECRET, totp };
+export { PERIOD_DURATION_SECONDS, PERIOD_SECRET, TOKEN_SECRET, keyProvider };

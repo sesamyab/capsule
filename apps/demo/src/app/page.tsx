@@ -52,12 +52,18 @@ export default function Home() {
 
       <section className="how-it-works">
         <h2>How It Works</h2>
+        <p style={{ textAlign: "center", maxWidth: "700px", margin: "0 auto 2rem", opacity: 0.8 }}>
+          Capsule implements <strong>Delegated Content Access (DCA)</strong> — a
+          delegation protocol that separates content encryption (publisher) from
+          access control (issuer). Publishers seal keys with ECDH P-256; issuers
+          unseal them only when access is granted.
+        </p>
         <div className="flow-steps">
           <div className="flow-step">
             <div className="step-number">1</div>
             <div className="step-content">
-              <h4>Pre-encrypt Content</h4>
-              <p>Server encrypts articles with AES-256-GCM keys per subscription tier</p>
+              <h4>Publisher Encrypts</h4>
+              <p>Content encrypted with AES-256-GCM. Keys sealed per issuer using ECDH P-256, with signed integrity proofs.</p>
             </div>
           </div>
           <div className="flow-arrow">→</div>
@@ -65,15 +71,15 @@ export default function Home() {
             <div className="step-number">2</div>
             <div className="step-content">
               <h4>Embed in HTML</h4>
-              <p>Encrypted content embedded in page, works offline and with caching</p>
+              <p>DCA data and sealed content embedded in inert template elements. Works with caching and CDNs.</p>
             </div>
           </div>
           <div className="flow-arrow">→</div>
           <div className="flow-step">
             <div className="step-number">3</div>
             <div className="step-content">
-              <h4>Key Exchange</h4>
-              <p>Browser sends public key, receives wrapped decryption key</p>
+              <h4>Issuer Unlocks</h4>
+              <p>Client sends sealed keys to the issuer. Keys returned via client-bound transport — RSA-OAEP wrapped with the browser&apos;s public key.</p>
             </div>
           </div>
           <div className="flow-arrow">→</div>
@@ -81,10 +87,24 @@ export default function Home() {
             <div className="step-number">4</div>
             <div className="step-content">
               <h4>Decrypt Locally</h4>
-              <p>Client decrypts content using cached keys, even offline</p>
+              <p>Browser unwraps keys with its non-extractable private key stored in IndexedDB, then decrypts content locally.</p>
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="dca-highlight" style={{ padding: "2rem 1rem", textAlign: "center" }}>
+        <h2>Client-Bound Key Management</h2>
+        <p style={{ maxWidth: "700px", margin: "0 auto 1rem" }}>
+          Capsule extends DCA with <strong>client-bound transport</strong>: each
+          browser generates an RSA-OAEP key pair with the private key marked{" "}
+          <code>extractable: false</code>. Unsealed keys are RSA-wrapped before
+          leaving the issuer, so no readable key material ever crosses the
+          network. Even XSS or DevTools cannot extract the private key bytes.
+        </p>
+        <p style={{ maxWidth: "700px", margin: "0 auto", opacity: 0.7, fontSize: "0.9rem" }}>
+          Read more in the <Link href="/spec#delegated-content-access-dca">DCA specification</Link>.
+        </p>
       </section>
 
       <section className="cta-section">

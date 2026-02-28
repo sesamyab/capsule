@@ -1,33 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateCmsRequest } from "@/lib/auth";
-import { getCurrentBucketKeys, getConfig } from "@/lib/time-buckets";
+import { getCurrentPeriodKeys, getConfig } from "@/lib/time-periods";
 
 /**
- * POST /api/cms/bucket-keys
+ * POST /api/cms/period-keys
  *
- * CMS endpoint to fetch current time-bucket keys for encryption.
+ * CMS endpoint to fetch current time-period keys for encryption.
  * Supports both API Key and JWT authentication.
  *
- * Note: In TOTP mode, CMS can derive keys locally and doesn't need this endpoint.
+ * Note: In period mode, CMS can derive keys locally and doesn't need this endpoint.
  * This endpoint is provided for API-mode or for CMS implementations that prefer
  * fetching keys rather than deriving them.
  *
  * Request:
  * - Headers: Authorization: Bearer <api-key or jwt>
- * - Body: { tier: string }
+ * - Body: { contentId: string }
  *
  * Response:
  * {
- *   tier: string,
- *   method: "totp" | "api",
- *   bucketPeriodSeconds: number,
+ *   contentId: string,
+ *   method: "period" | "api",
+ *   periodDurationSeconds: number,
  *   current: {
- *     bucketId: string,
+ *     periodId: string,
  *     key: string (base64),
  *     expiresAt: string (ISO 8601)
  *   },
  *   next: {
- *     bucketId: string,
+ *     periodId: string,
  *     key: string (base64),
  *     expiresAt: string (ISO 8601)
  *   }
@@ -48,17 +48,17 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json();
-    const { tier } = body;
+    const { contentId } = body;
 
-    if (!tier || typeof tier !== "string") {
+    if (!contentId || typeof contentId !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid tier" },
+        { error: "Missing or invalid contentId" },
         { status: 400 }
       );
     }
 
-    // Get current bucket keys
-    const { current, next } = await getCurrentBucketKeys(tier);
+    // Get current period keys
+    const { current, next } = await getCurrentPeriodKeys(contentId);
     const config = getConfig();
 
     // Helper to convert Uint8Array to base64
@@ -72,16 +72,16 @@ export async function POST(request: NextRequest) {
 
     // Return keys to CMS
     return NextResponse.json({
-      tier,
+      contentId,
       method: config.method,
-      bucketPeriodSeconds: config.bucketPeriodSeconds,
+      periodDurationSeconds: config.periodDurationSeconds,
       current: {
-        bucketId: current.bucketId,
+        periodId: current.periodId,
         key: toBase64(current.key),
         expiresAt: current.expiresAt.toISOString(),
       },
       next: {
-        bucketId: next.bucketId,
+        periodId: next.periodId,
         key: toBase64(next.key),
         expiresAt: next.expiresAt.toISOString(),
       },
@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
       cmsId: authResult.cmsId,
     });
   } catch (error) {
-    console.error("Bucket keys error:", error);
+    console.error("Period keys error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET /api/cms/bucket-keys
+ * GET /api/cms/period-keys
  *
  * Returns the current key exchange configuration (no auth required).
  * Useful for CMS to determine which method to use.
@@ -108,10 +108,10 @@ export async function GET() {
 
   return NextResponse.json({
     method: config.method,
-    bucketPeriodSeconds: config.bucketPeriodSeconds,
+    periodDurationSeconds: config.periodDurationSeconds,
     description:
-      config.method === "totp"
-        ? "TOTP mode: CMS should derive keys locally using shared secret"
+      config.method === "period"
+        ? "period mode: CMS should derive keys locally using shared secret"
         : "API mode: CMS should fetch keys from this endpoint",
   });
 }

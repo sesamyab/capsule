@@ -118,7 +118,7 @@ export interface TokenManagerOptions {
 export type UsageTracker = (
   tokenId: string,
   payload: UnlockTokenPayload,
-  context: { articleId?: string; ip?: string },
+  context: { resourceId?: string; ip?: string },
 ) => Promise<{ allowed: boolean; currentUses?: number }>;
 
 /**

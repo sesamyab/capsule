@@ -139,8 +139,8 @@ describe("JwksTokenValidator", () => {
         iss: "https://untrusted.example.com",
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -166,8 +166,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "RS256", // Not supported
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -197,8 +197,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: now + 3600,
         iat: now,
       });
@@ -209,8 +209,7 @@ describe("JwksTokenValidator", () => {
         expect(result.issuer).toBe(TEST_ISSUER);
         expect(result.keyId).toBe(TEST_KEY_ID);
         expect(result.expired).toBe(false);
-        expect(result.payload.tier).toBe("premium");
-        expect(result.payload.contentId).toBe("article-1");
+        expect(result.payload.contentId).toBe("premium");
       }
     });
 
@@ -232,8 +231,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: now - 100, // Expired 100 seconds ago
         iat: now - 3700,
       });
@@ -270,8 +269,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -300,8 +299,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: "unknown-key-id", // Not in JWKS
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -330,8 +329,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -360,8 +359,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -372,7 +371,7 @@ describe("JwksTokenValidator", () => {
       expect(wrongContentResult.valid).toBe(false);
 
       const correctContentResult = await validator.validate(token, {
-        contentId: "article-1",
+        contentId: "premium",
       });
       expect(correctContentResult.valid).toBe(true);
     });
@@ -396,8 +395,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });
@@ -428,8 +427,8 @@ describe("JwksTokenValidator", () => {
         iss: TEST_ISSUER,
         kid: TEST_KEY_ID,
         alg: "EdDSA",
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         exp: Math.floor(Date.now() / 1000) + 3600,
         iat: Math.floor(Date.now() / 1000),
       });

@@ -2,31 +2,31 @@
  * CMS Content Encryptor
  *
  * Provides envelope encryption for article content:
- * 1. Content is encrypted ONCE with a unique DEK (AES-256-GCM)
- * 2. The DEK is wrapped with MULTIPLE key-wrapping keys for different unlock paths
+ * 1. Content is encrypted ONCE with a unique content key (AES-256-GCM)
+ * 2. The content key is wrapped with MULTIPLE key-wrapping keys for different unlock paths
  *
- * Supports two modes for obtaining bucket keys:
- * - TOTP: Derive keys locally from master secret (no network calls)
+ * Supports two modes for obtaining period keys:
+ * - Period: Derive keys locally from period secret (no network calls)
  * - API: Fetch keys from subscription server
  *
  * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
  */
 
-import { encryptContent, wrapDek, generateDek } from "./encryption";
-import { getBucketKeys, DEFAULT_BUCKET_PERIOD_SECONDS } from "./time-buckets";
+import { encryptContent, wrapContentKey, generateContentKey } from "./encryption";
+import { getPeriodKeys, DEFAULT_PERIOD_DURATION_SECONDS } from "./time-periods";
 import { fromBase64, toBase64 } from "./web-crypto";
 import type {
   EncryptedArticle,
   WrappedKey,
   KeyWrapConfig,
   CmsEncryptorOptions,
-  BucketKey,
+  PeriodKey,
 } from "./types";
 
-/** API response type for bucket keys */
-interface BucketKeysApiResponse {
-  current: { bucketId: string; key: string; expiresAt: string };
-  next: { bucketId: string; key: string; expiresAt: string };
+/** API response type for period keys */
+interface PeriodKeysApiResponse {
+  current: { periodId: string; key: string; expiresAt: string };
+  next: { periodId: string; key: string; expiresAt: string };
 }
 
 /**
@@ -35,40 +35,40 @@ interface BucketKeysApiResponse {
  * Use this in your CMS to encrypt article content with envelope encryption.
  */
 export class CmsEncryptor {
-  private masterSecret: Uint8Array | null;
+  private periodSecret: Uint8Array | null;
   private subscriptionServerUrl: string | null;
   private apiKey: string | null;
-  private bucketPeriodSeconds: number;
+  private periodDurationSeconds: number;
 
   constructor(options: CmsEncryptorOptions = {}) {
-    this.masterSecret = options.masterSecret
-      ? fromBase64(options.masterSecret)
+    this.periodSecret = options.periodSecret
+      ? fromBase64(options.periodSecret)
       : null;
     this.subscriptionServerUrl = options.subscriptionServerUrl ?? null;
     this.apiKey = options.apiKey ?? null;
-    this.bucketPeriodSeconds =
-      options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
+    this.periodDurationSeconds =
+      options.periodDurationSeconds ?? DEFAULT_PERIOD_DURATION_SECONDS;
 
     // Validate configuration
-    if (!this.masterSecret && !this.subscriptionServerUrl) {
+    if (!this.periodSecret && !this.subscriptionServerUrl) {
       throw new Error(
-        "CmsEncryptor requires either masterSecret (TOTP mode) or subscriptionServerUrl (API mode)",
+        "CmsEncryptor requires either periodSecret (period mode) or subscriptionServerUrl (API mode)",
       );
     }
   }
 
   /**
-   * Get bucket keys for a key ID.
+   * Get period keys for a key ID.
    *
-   * In TOTP mode: derives from master secret locally.
+   * In period mode: derives from period secret locally.
    * In API mode: fetches from subscription server (with 10s timeout).
    */
-  async getBucketKeys(
+  async getPeriodKeys(
     keyId: string,
-  ): Promise<{ current: BucketKey; next: BucketKey }> {
-    if (this.masterSecret) {
-      // TOTP mode - derive locally
-      return getBucketKeys(this.masterSecret, keyId, this.bucketPeriodSeconds);
+  ): Promise<{ current: PeriodKey; next: PeriodKey }> {
+    if (this.periodSecret) {
+      // period mode - derive locally
+      return getPeriodKeys(this.periodSecret, keyId, this.periodDurationSeconds);
     }
 
     // API mode - fetch from subscription server
@@ -83,7 +83,7 @@ export class CmsEncryptor {
 
     try {
       const response = await fetch(
-        `${this.subscriptionServerUrl}/api/cms/bucket-keys`,
+        `${this.subscriptionServerUrl}/api/cms/period-keys`,
         {
           method: "POST",
           headers: {
@@ -97,18 +97,18 @@ export class CmsEncryptor {
 
       if (!response.ok) {
         const error = await response.text();
-        throw new Error(`Failed to fetch bucket keys: ${error}`);
+        throw new Error(`Failed to fetch period keys: ${error}`);
       }
 
-      const data = (await response.json()) as BucketKeysApiResponse;
+      const data = (await response.json()) as PeriodKeysApiResponse;
       return {
         current: {
-          bucketId: data.current.bucketId,
+          periodId: data.current.periodId,
           key: fromBase64(data.current.key),
           expiresAt: new Date(data.current.expiresAt),
         },
         next: {
-          bucketId: data.next.bucketId,
+          periodId: data.next.periodId,
           key: fromBase64(data.next.key),
           expiresAt: new Date(data.next.expiresAt),
         },
@@ -128,40 +128,43 @@ export class CmsEncryptor {
   /**
    * Encrypt article content with envelope encryption.
    *
-   * The content is encrypted once with a unique DEK, then the DEK is wrapped
+   * The content is encrypted once with a unique content key, then the content key is wrapped
    * with multiple key-wrapping keys for different unlock paths.
    *
-   * @param articleId - Unique article identifier
+   * @param resourceId - Unique resource identifier (specific page/article)
    * @param content - Plaintext content to encrypt
    * @param keyConfigs - Array of key-wrapping configurations
+   * @param contentId - Optional generic content tier identifier (e.g., "premium")
    * @returns Encrypted article with wrapped keys
    */
   async encryptArticle(
-    articleId: string,
+    resourceId: string,
     content: string,
     keyConfigs: KeyWrapConfig[],
+    contentId?: string,
   ): Promise<EncryptedArticle> {
     if (keyConfigs.length === 0) {
       throw new Error("At least one key configuration is required");
     }
 
-    // Generate unique DEK for this article
-    const dek = generateDek();
+    // Generate unique content key for this article
+    const contentKey = generateContentKey();
 
-    // Encrypt content ONCE with the DEK
-    const { encryptedContent, iv } = await encryptContent(content, dek);
+    // Encrypt content ONCE with the content key
+    const { encryptedContent, iv } = await encryptContent(content, contentKey);
 
-    // Wrap the DEK with each key-wrapping key (serialize dates to ISO strings)
+    // Wrap the content key with each key-wrapping key (serialize dates to ISO strings)
     const wrappedKeys: WrappedKey[] = await Promise.all(
       keyConfigs.map(async (config) => ({
         keyId: config.keyId,
-        wrappedDek: toBase64(await wrapDek(dek, config.key)),
+        wrappedContentKey: toBase64(await wrapContentKey(contentKey, config.key)),
         expiresAt: config.expiresAt?.toISOString(),
       })),
     );
 
     return {
-      articleId,
+      resourceId,
+      contentId,
       encryptedContent: toBase64(encryptedContent),
       iv: toBase64(iv),
       wrappedKeys,
@@ -169,59 +172,59 @@ export class CmsEncryptor {
   }
 
   /**
-   * Encrypt article with tier-based time-bucket keys.
+   * Encrypt article with tier-based time-period keys.
    *
-   * Automatically gets current and next bucket keys for the specified tier,
+   * Automatically gets current and next period keys for the specified tier,
    * plus any additional static keys (e.g., per-article keys).
    *
-   * @param articleId - Unique article identifier
+   * @param resourceId - Unique resource identifier (specific page/article)
    * @param content - Plaintext content to encrypt
    * @param tier - Subscription tier (e.g., "premium")
    * @param additionalKeys - Optional additional key configurations (e.g., per-article keys)
    */
   async encryptArticleWithTier(
-    articleId: string,
+    resourceId: string,
     content: string,
     tier: string,
     additionalKeys: KeyWrapConfig[] = [],
   ): Promise<EncryptedArticle> {
-    // Get time-bucket keys for this tier
-    const bucketKeys = await this.getBucketKeys(tier);
+    // Get time-period keys for this tier
+    const periodKeys = await this.getPeriodKeys(tier);
 
     const keyConfigs: KeyWrapConfig[] = [
-      // Current bucket key
+      // Current period key
       {
-        keyId: `${tier}:${bucketKeys.current.bucketId}`,
-        key: bucketKeys.current.key,
-        expiresAt: bucketKeys.current.expiresAt,
+        keyId: `${tier}:${periodKeys.current.periodId}`,
+        key: periodKeys.current.key,
+        expiresAt: periodKeys.current.expiresAt,
       },
-      // Next bucket key (handles clock drift)
+      // Next period key (handles clock drift)
       {
-        keyId: `${tier}:${bucketKeys.next.bucketId}`,
-        key: bucketKeys.next.key,
-        expiresAt: bucketKeys.next.expiresAt,
+        keyId: `${tier}:${periodKeys.next.periodId}`,
+        key: periodKeys.next.key,
+        expiresAt: periodKeys.next.expiresAt,
       },
       // Additional keys (e.g., per-article access)
       ...additionalKeys,
     ];
 
-    return this.encryptArticle(articleId, content, keyConfigs);
+    return this.encryptArticle(resourceId, content, keyConfigs, tier);
   }
 }
 
 /**
- * Create a simple encryptor for TOTP mode.
+ * Create a simple encryptor for period mode.
  */
-export function createTotpEncryptor(
-  masterSecret: string | Uint8Array,
-  bucketPeriodSeconds: number = DEFAULT_BUCKET_PERIOD_SECONDS,
+export function createPeriodEncryptor(
+  periodSecret: string | Uint8Array,
+  periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): CmsEncryptor {
   const secret =
-    typeof masterSecret === "string" ? masterSecret : toBase64(masterSecret);
+    typeof periodSecret === "string" ? periodSecret : toBase64(periodSecret);
 
   return new CmsEncryptor({
-    masterSecret: secret,
-    bucketPeriodSeconds,
+    periodSecret: secret,
+    periodDurationSeconds,
   });
 }
 

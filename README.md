@@ -96,7 +96,7 @@ const token = tokens.generate({
   tier: "premium",
   expiresIn: "7d",
   maxUses: 1000, // Optional: limit uses
-  articleId: "my-article", // Optional: restrict to article
+  resourceId: "my-article", // Optional: restrict to article
 });
 
 const shareUrl = `https://example.com/article/my-article?token=${token}`;
@@ -222,7 +222,7 @@ Subscribers fetch the tier key **once**, then decrypt every article in that tier
 │  CMS (build/publish time)              SUBSCRIPTION SERVER                    │
 │  ┌─────────────────────────┐           ┌────────────────────────────────────┐ │
 │  │ 1. Generate unique DEK  │           │ Derives time-bucket keys from      │ │
-│  │ 2. Encrypt article with │           │ master secret + tier + bucket ID   │ │
+│  │ 2. Encrypt article with │           │ period secret + tier + bucket ID   │ │
 │  │    DEK (AES-256-GCM)    │           │ using HKDF                         │ │
 │  │ 3. Wrap DEK with tier's │           └────────────────────────────────────┘ │
 │  │    bucket key (AES-GCM) │                          │                       │

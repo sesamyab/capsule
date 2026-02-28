@@ -132,7 +132,7 @@ export default function DemoPage() {
           </li>
           <li>
             <strong>Click unlock:</strong> Your public key is sent to the server, which 
-            returns the encrypted decryption key for the premium tier.
+            returns the encrypted decryption key for the "premium" content ID.
           </li>
           <li>
             <strong>Decrypt locally:</strong> Your browser unwraps the key and decrypts 

@@ -2,35 +2,37 @@
  * Type definitions for Capsule server-side encryption.
  */
 
-/** Bucket key information */
-export type BucketKey = {
-  /** Bucket identifier (TOTP counter value) */
-  bucketId: string;
-  /** 256-bit AES key for this bucket */
+/** Period key information */
+export type PeriodKey = {
+  /** Period identifier (time-based counter value) */
+  periodId: string;
+  /** 256-bit AES key for this period */
   key: Uint8Array;
-  /** When this bucket expires */
+  /** When this period expires */
   expiresAt: Date;
 };
 
-/** Key wrapping entry - DEK wrapped with a specific key */
+/** Key wrapping entry - content key wrapped with a specific key */
 export type WrappedKey = {
   /** The key ID used to wrap (e.g., "premium:123456" or "article:crypto-guide") */
   keyId: string;
-  /** Base64-encoded wrapped DEK */
-  wrappedDek: string;
-  /** When this wrapped key expires (for time-bucket keys) - ISO string */
+  /** Base64-encoded wrapped content key */
+  wrappedContentKey: string;
+  /** When this wrapped key expires (for time-period keys) - ISO string */
   expiresAt?: string;
 };
 
 /** Encrypted article with envelope encryption */
 export type EncryptedArticle = {
-  /** Unique article identifier */
-  articleId: string;
+  /** Unique resource identifier (specific page/article) */
+  resourceId: string;
+  /** Generic content tier identifier (e.g., "premium") used for key derivation and caching */
+  contentId?: string;
   /** Base64-encoded encrypted content (AES-256-GCM ciphertext + auth tag) */
   encryptedContent: string;
   /** Base64-encoded IV used for encryption */
   iv: string;
-  /** Multiple wrapped versions of the content DEK for different unlock paths */
+  /** Multiple wrapped versions of the content key for different unlock paths */
   wrappedKeys: WrappedKey[];
 };
 
@@ -40,7 +42,7 @@ export type KeyWrapConfig = {
   keyId: string;
   /** 256-bit AES key-wrapping key */
   key: Uint8Array;
-  /** Expiration time (for time-bucket keys) */
+  /** Expiration time (for time-period keys) */
   expiresAt?: Date;
 };
 
@@ -50,10 +52,10 @@ export type CmsEncryptorOptions = {
   subscriptionServerUrl?: string;
   /** API key for subscription server authentication */
   apiKey?: string;
-  /** Master secret for TOTP mode (base64 encoded) */
-  masterSecret?: string;
-  /** Bucket period in seconds (default: 30) */
-  bucketPeriodSeconds?: number;
+  /** Period secret for period mode (base64 encoded) */
+  periodSecret?: string;
+  /** Period duration in seconds (default: 30) */
+  periodDurationSeconds?: number;
 };
 
 /** Subscription server client options */
@@ -64,22 +66,22 @@ export type SubscriptionClientOptions = {
   apiKey: string;
 };
 
-/** Response from subscription server for bucket keys */
-export type BucketKeysResponse = {
-  /** Current bucket key */
-  current: BucketKey;
-  /** Next bucket key (for clock drift handling) */
-  next: BucketKey;
+/** Response from subscription server for period keys */
+export type PeriodKeysResponse = {
+  /** Current period key */
+  current: PeriodKey;
+  /** Next period key (for clock drift handling) */
+  next: PeriodKey;
 };
 
 /** Response from unlocking with a user's public key */
 export type UnlockResponse = {
-  /** Base64-encoded RSA-OAEP wrapped DEK */
-  encryptedDek: string;
+  /** Base64-encoded RSA-OAEP wrapped content key */
+  encryptedContentKey: string;
   /** Key ID that was used */
   keyId: string;
-  /** Bucket ID (for time-bucket keys) */
-  bucketId?: string;
-  /** When the client should re-request (bucket expiration) */
+  /** Period ID (for time-period keys) */
+  periodId?: string;
+  /** When the client should re-request (period expiration) */
   expiresAt: string;
 };

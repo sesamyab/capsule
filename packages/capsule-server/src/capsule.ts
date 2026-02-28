@@ -8,7 +8,7 @@
  * Keys are fetched via an async `getKeys` function that you provide.
  * This could:
  * - Fetch from your subscription server
- * - Use TOTP derivation (see `createTotpKeyProvider`)
+ * - Use period key derivation (see `createPeriodKeyProvider`)
  * - Return hardcoded/cached keys
  *
  * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
@@ -34,17 +34,17 @@
  * });
  * ```
  *
- * @example Using TOTP Key Provider
+ * @example Using Period Key Provider
  * ```typescript
- * import { createCmsServer, createTotpKeyProvider } from '@sesamy/capsule-server';
+ * import { createCmsServer, createPeriodKeyProvider } from '@sesamy/capsule-server';
  *
- * const totp = createTotpKeyProvider({
- *   masterSecret: process.env.MASTER_SECRET,
- *   bucketPeriodSeconds: 30,
+ * const keyProvider = createPeriodKeyProvider({
+ *   periodSecret: process.env.PERIOD_SECRET,
+ *   periodDurationSeconds: 30,
  * });
  *
  * const cms = createCmsServer({
- *   getKeys: (keyIds) => totp.getKeys(keyIds),
+ *   getKeys: (keyIds) => keyProvider.getKeys(keyIds),
  * });
  *
  * const encrypted = await cms.encrypt('article-123', content, {
@@ -53,12 +53,12 @@
  * ```
  */
 
-import { encryptContent, wrapDek, generateDek } from "./encryption";
+import { encryptContent, wrapContentKey, generateContentKey } from "./encryption";
 import {
-  deriveBucketKey,
-  getBucketKeys,
-  DEFAULT_BUCKET_PERIOD_SECONDS,
-} from "./time-buckets";
+  derivePeriodKey,
+  getPeriodKeys,
+  DEFAULT_PERIOD_DURATION_SECONDS,
+} from "./time-periods";
 import { fromBase64, toBase64 } from "./web-crypto";
 import type { EncryptedArticle, WrappedKey } from "./types";
 
@@ -70,7 +70,7 @@ export interface KeyEntry {
   keyId: string;
   /** 256-bit AES key (Uint8Array or base64 string) */
   key: Uint8Array | string;
-  /** Optional expiration time (for time-bucket keys) */
+  /** Optional expiration time (for time-period keys) */
   expiresAt?: Date | string;
 }
 
@@ -103,10 +103,10 @@ export interface CmsServerOptions {
    * }
    * ```
    *
-   * @example Use TOTP provider
+   * @example Use period key provider
    * ```typescript
-   * const totp = createTotpKeyProvider({ masterSecret: '...' });
-   * getKeys: (keyIds) => totp.getKeys(keyIds)
+   * const keyProvider = createPeriodKeyProvider({ periodSecret: '...' });
+   * getKeys: (keyIds) => keyProvider.getKeys(keyIds)
    * ```
    */
   getKeys: KeyProvider;
@@ -122,7 +122,7 @@ export interface CmsServerOptions {
  */
 export interface EncryptOptions {
   /**
-   * Key IDs to encrypt with. The DEK will be wrapped with each key.
+   * Key IDs to encrypt with. The content key will be wrapped with each key.
    *
    * @example
    * ```typescript
@@ -130,6 +130,15 @@ export interface EncryptOptions {
    * ```
    */
   keyIds: string[];
+
+  /**
+   * Generic content tier identifier (e.g., "premium", "paywall/basic/bodytext").
+   * Used for key derivation and caching — multiple resources share the same contentId
+   * so browsers can cache one key and unlock many articles.
+   *
+   * If not provided, defaults to the first entry in keyIds.
+   */
+  contentId?: string;
 
   /**
    * Output format:
@@ -160,7 +169,7 @@ export type EncryptResult<T extends EncryptOptions["format"]> = T extends "html"
  * CMS Server for content encryption.
  *
  * Encrypts content with envelope encryption - the content is encrypted
- * once with a unique DEK (Data Encryption Key), then the DEK is wrapped
+ * once with a unique content key (content key), then the content key is wrapped
  * with multiple key-wrapping keys so different users can unlock it.
  *
  * @see createCmsServer for the recommended way to create an instance
@@ -174,42 +183,44 @@ export class CmsServer {
       throw new Error("CmsServer requires a getKeys function");
     }
     this.getKeys = options.getKeys;
-    this.logger = options.logger ?? (() => {});
+    this.logger = options.logger ?? (() => { });
   }
 
   /**
    * Encrypt content with envelope encryption.
    *
-   * The content is encrypted once with a unique DEK, then the DEK is wrapped
+   * The content is encrypted once with a unique content key, then the content key is wrapped
    * with multiple key-wrapping keys (one for each keyId).
    *
-   * @param articleId - Unique article identifier
+   * @param resourceId - Unique resource identifier (specific page/article)
    * @param content - Plaintext content to encrypt
-   * @param options - Encryption options
+   * @param options - Encryption options (includes contentId for the generic content tier)
    * @returns Encrypted article data
    *
    * @example
    * ```typescript
    * const encrypted = await cms.encrypt('article-123', '<p>Premium content...</p>', {
    *   keyIds: ['premium', 'enterprise'],
+   *   contentId: 'premium',
    * });
    * ```
    *
    * Returns (format: 'json'):
    * ```json
    * {
-   *   "articleId": "article-123",
+   *   "resourceId": "article-123",
+   *   "contentId": "premium",
    *   "encryptedContent": "base64...",  // AES-256-GCM encrypted content
    *   "iv": "base64...",                 // 12-byte initialization vector
    *   "wrappedKeys": [
    *     {
    *       "keyId": "premium:1737158400",
-   *       "wrappedDek": "base64...",     // DEK wrapped with this key
+   *       "wrappedContentKey": "base64...",     // content key wrapped with this key
    *       "expiresAt": "2025-01-18T01:00:00.000Z"
    *     },
    *     {
    *       "keyId": "premium:1737158430",
-   *       "wrappedDek": "base64...",
+   *       "wrappedContentKey": "base64...",
    *       "expiresAt": "2025-01-18T01:00:30.000Z"
    *     }
    *   ]
@@ -217,24 +228,28 @@ export class CmsServer {
    * ```
    */
   async encrypt<T extends EncryptOptions["format"] = "json">(
-    articleId: string,
+    resourceId: string,
     content: string,
     options: EncryptOptions & { format?: T }
   ): Promise<EncryptResult<T>> {
     const {
       keyIds,
+      contentId,
       format = "json",
       htmlTag = "div",
       htmlClass,
       placeholder = "Loading encrypted content...",
     } = options;
 
+    // Default contentId to the first non-article keyId if not provided
+    const resolvedContentId = contentId ?? keyIds.find(id => !id.startsWith("article:")) ?? keyIds[0];
+
     if (!keyIds || keyIds.length === 0) {
       throw new Error("At least one keyId is required");
     }
 
     this.logger(
-      `Encrypting article: ${articleId} with keys: ${keyIds.join(", ")}`,
+      `Encrypting resource: ${resourceId} (contentId: ${resolvedContentId}) with keys: ${keyIds.join(", ")}`,
       "info"
     );
 
@@ -261,17 +276,17 @@ export class CmsServer {
 
     this.logger(`Got ${keyConfigs.length} keys from provider`, "info");
 
-    // Generate unique DEK for this article
-    const dek = generateDek();
+    // Generate unique content key for this article
+    const contentKey = generateContentKey();
 
-    // Encrypt content ONCE with the DEK
-    const { encryptedContent, iv } = await encryptContent(content, dek);
+    // Encrypt content ONCE with the content key
+    const { encryptedContent, iv } = await encryptContent(content, contentKey);
 
-    // Wrap the DEK with each key-wrapping key
+    // Wrap the content key with each key-wrapping key
     const wrappedKeys: WrappedKey[] = await Promise.all(
       keyConfigs.map(async (config) => ({
         keyId: config.keyId,
-        wrappedDek: toBase64(await wrapDek(dek, config.key)),
+        wrappedContentKey: toBase64(await wrapContentKey(contentKey, config.key)),
         expiresAt: config.expiresAt?.toISOString(),
       })),
     );
@@ -280,20 +295,22 @@ export class CmsServer {
      * The encrypted article structure sent to the client:
      *
      * {
-     *   articleId: string,           // Original article ID
+     *   resourceId: string,          // Specific page/article identifier
+     *   contentId: string,           // Generic content tier (e.g., "premium")
      *   encryptedContent: string,    // Base64 AES-256-GCM ciphertext
      *   iv: string,                  // Base64 12-byte IV
      *   wrappedKeys: [               // One entry per key
      *     {
      *       keyId: string,           // Key identifier (e.g., "premium:1234567890")
-     *       wrappedDek: string,      // Base64 AES-KW wrapped DEK
+     *       wrappedContentKey: string,      // Base64 AES-KW wrapped content key
      *       expiresAt?: string,      // ISO 8601 expiration (optional)
      *     }
      *   ]
      * }
      */
     const result: EncryptedArticle = {
-      articleId,
+      resourceId,
+      contentId: resolvedContentId,
       encryptedContent: toBase64(encryptedContent),
       iv: toBase64(iv),
       wrappedKeys,
@@ -307,7 +324,7 @@ export class CmsServer {
       const classAttr = htmlClass ? ` class="${htmlClass}"` : "";
       return `<${htmlTag}${classAttr} data-capsule='${this.escapeHtml(
         json
-      )}' data-capsule-id="${articleId}">${placeholder}</${htmlTag}>` as EncryptResult<T>;
+      )}' data-capsule-id="${resourceId}">${placeholder}</${htmlTag}>` as EncryptResult<T>;
     }
 
     if (format === "html-template") {
@@ -327,7 +344,7 @@ export class CmsServer {
    * - html: Complete HTML element
    */
   async encryptForTemplate(
-    articleId: string,
+    resourceId: string,
     content: string,
     options: Omit<EncryptOptions, "format"> & {
       htmlTag?: string;
@@ -341,7 +358,7 @@ export class CmsServer {
     html: string;
   }> {
     // Encrypt ONCE to get the data
-    const data = await this.encrypt(articleId, content, {
+    const data = await this.encrypt(resourceId, content, {
       ...options,
       format: "json",
     });
@@ -355,7 +372,7 @@ export class CmsServer {
       placeholder = "Loading encrypted content...",
     } = options;
     const classAttr = htmlClass ? ` class="${htmlClass}"` : "";
-    const html = `<${htmlTag}${classAttr} data-capsule='${attribute}' data-capsule-id="${articleId}">${placeholder}</${htmlTag}>`;
+    const html = `<${htmlTag}${classAttr} data-capsule='${attribute}' data-capsule-id="${resourceId}">${placeholder}</${htmlTag}>`;
 
     return {
       data,
@@ -394,11 +411,11 @@ export class CmsServer {
  * });
  * ```
  *
- * @example With TOTP key provider
+ * @example With period key provider
  * ```typescript
- * const totp = createTotpKeyProvider({ masterSecret: process.env.MASTER_SECRET });
+ * const keyProvider = createPeriodKeyProvider({ periodSecret: process.env.PERIOD_SECRET });
  * const cms = createCmsServer({
- *   getKeys: (keyIds) => totp.getKeys(keyIds),
+ *   getKeys: (keyIds) => keyProvider.getKeys(keyIds),
  * });
  * ```
  */
@@ -407,78 +424,78 @@ export function createCmsServer(options: CmsServerOptions): CmsServer {
 }
 
 // ============================================================================
-// TOTP Key Provider
+// Period Key Provider
 // ============================================================================
 
 /**
- * Options for the TOTP key provider.
+ * Options for the period key provider.
  */
-export interface TotpKeyProviderOptions {
+export interface PeriodKeyProviderOptions {
   /**
-   * Master secret for key derivation.
+   * Period secret for key derivation.
    * Can be a Uint8Array or base64-encoded string.
    */
-  masterSecret: Uint8Array | string;
+  periodSecret: Uint8Array | string;
 
   /**
-   * Bucket period in seconds.
+   * Period duration in seconds.
    * Default: 30 seconds.
    */
-  bucketPeriodSeconds?: number;
+  periodDurationSeconds?: number;
 }
 
 /**
- * TOTP-based key provider.
+ * Period-based key provider.
  *
- * Derives time-bucket keys from a master secret using HKDF.
- * For each key ID, returns BOTH current and next bucket keys
+ * Derives time-period keys from a period secret using HKDF.
+ * For each key ID, returns BOTH current and next period keys
  * to handle clock drift between CMS and subscription server.
  */
-export class TotpKeyProvider {
-  private masterSecret: Uint8Array;
-  private bucketPeriodSeconds: number;
+export class PeriodKeyProvider {
+  private periodSecret: Uint8Array;
+  private periodDurationSeconds: number;
 
-  constructor(options: TotpKeyProviderOptions) {
-    this.masterSecret =
-      options.masterSecret instanceof Uint8Array
-        ? options.masterSecret
-        : fromBase64(options.masterSecret);
-    this.bucketPeriodSeconds =
-      options.bucketPeriodSeconds ?? DEFAULT_BUCKET_PERIOD_SECONDS;
+  constructor(options: PeriodKeyProviderOptions) {
+    this.periodSecret =
+      options.periodSecret instanceof Uint8Array
+        ? options.periodSecret
+        : fromBase64(options.periodSecret);
+    this.periodDurationSeconds =
+      options.periodDurationSeconds ?? DEFAULT_PERIOD_DURATION_SECONDS;
   }
 
   /**
    * Get keys for the given key IDs.
    *
    * For each keyId, returns two keys:
-   * - Current bucket key (e.g., "premium:1737158400")
-   * - Next bucket key (e.g., "premium:1737158430")
+   * - Current period key (e.g., "premium:1737158400")
+   * - Next period key (e.g., "premium:1737158430")
    *
-   * This ensures content encrypted near a bucket boundary
-   * can still be decrypted after the bucket rotates.
+   * This ensures content encrypted near a period boundary
+   * can still be decrypted after the period rotates.
    */
   async getKeys(keyIds: string[]): Promise<KeyEntry[]> {
     const entries: KeyEntry[] = [];
 
     for (const keyId of keyIds) {
-      const bucketKeys = await getBucketKeys(
-        this.masterSecret,
+      const periodKeys = await getPeriodKeys(
+        this.periodSecret,
         keyId,
-        this.bucketPeriodSeconds,
+        this.periodDurationSeconds,
       );
 
-      // Add current bucket key
+      // Add current period key
       entries.push({
-        keyId: `${keyId}:${bucketKeys.current.bucketId}`,
-        key: bucketKeys.current.key,
-        expiresAt: bucketKeys.current.expiresAt,
+        keyId: `${keyId}:${periodKeys.current.periodId}`,
+        key: periodKeys.current.key,
+        expiresAt: periodKeys.current.expiresAt,
       });
 
-      // Add next bucket key
+      // Add next period key
       entries.push({
-        keyId: `${keyId}:${bucketKeys.next.bucketId}`,
-        key: bucketKeys.next.key,
-        expiresAt: bucketKeys.next.expiresAt,
+        keyId: `${keyId}:${periodKeys.next.periodId}`,
+        key: periodKeys.next.key,
+        expiresAt: periodKeys.next.expiresAt,
       });
     }
 
@@ -486,62 +503,52 @@ export class TotpKeyProvider {
   }
 
   /**
-   * Derive a static key for an article (no time bucket).
+   * Derive a static key for an article (no time period).
    * Useful for per-article purchase access.
    */
-  async getArticleKey(articleId: string): Promise<KeyEntry> {
-    const key = await deriveBucketKey(this.masterSecret, "article", articleId);
+  async getArticleKey(resourceId: string): Promise<KeyEntry> {
+    const key = await derivePeriodKey(this.periodSecret, "article", resourceId);
     return {
-      keyId: `article:${articleId}`,
+      keyId: `article:${resourceId}`,
       key,
     };
   }
 }
 
 /**
- * Create a TOTP key provider for deriving time-bucket keys.
+ * Create a period key provider for deriving time-period keys.
  *
  * Use this with CmsServer when you want to derive keys locally
- * from a shared master secret (no API calls needed).
+ * from a shared period secret (no API calls needed).
  *
  * @example
  * ```typescript
- * const totp = createTotpKeyProvider({
- *   masterSecret: process.env.MASTER_SECRET,
- *   bucketPeriodSeconds: 30,
+ * const keyProvider = createPeriodKeyProvider({
+ *   periodSecret: process.env.PERIOD_SECRET,
+ *   periodDurationSeconds: 30,
  * });
  *
  * const cms = createCmsServer({
- *   getKeys: (keyIds) => totp.getKeys(keyIds),
+ *   getKeys: (keyIds) => keyProvider.getKeys(keyIds),
  * });
  *
  * // Or combine with article keys:
  * const cms = createCmsServer({
  *   getKeys: async (keyIds) => {
- *     const keys = await totp.getKeys(keyIds);
+ *     const keys = await keyProvider.getKeys(keyIds);
  *     // Add article key if requested
  *     if (keyIds.some(id => id.startsWith('article:'))) {
- *       const articleId = keyIds.find(id => id.startsWith('article:'))!.slice(8);
- *       keys.push(await totp.getArticleKey(articleId));
+ *       const resourceId = keyIds.find(id => id.startsWith('article:'))!.slice(8);
+ *       keys.push(await keyProvider.getArticleKey(resourceId));
  *     }
  *     return keys;
  *   },
  * });
  * ```
  */
-export function createTotpKeyProvider(
-  options: TotpKeyProviderOptions
-): TotpKeyProvider {
-  return new TotpKeyProvider(options);
+export function createPeriodKeyProvider(
+  options: PeriodKeyProviderOptions
+): PeriodKeyProvider {
+  return new PeriodKeyProvider(options);
 }
 
-// ============================================================================
-// Legacy Aliases (Deprecated)
-// ============================================================================
-
-/** @deprecated Use CmsServer instead */
-export const CapsuleServer = CmsServer;
-/** @deprecated Use CmsServerOptions instead */
-export type CapsuleServerOptions = CmsServerOptions;
-/** @deprecated Use createCmsServer instead */
-export const createCapsule = createCmsServer;

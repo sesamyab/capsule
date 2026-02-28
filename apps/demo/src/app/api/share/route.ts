@@ -19,7 +19,6 @@ const tokens = createTokenManager({
  *
  * Request body:
  * {
- *   tier: string (e.g., "premium"),
  *   contentId: string (required, publisher's content ID),
  *   url?: string (optional, full URL for the content),
  *   expiresIn: string (e.g., "24h", "7d"),
@@ -42,16 +41,9 @@ const tokens = createTokenManager({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { tier, contentId, url, expiresIn, maxUses, userId, meta } = body;
+    const { contentId, url, expiresIn, maxUses, userId, meta } = body;
 
     // Validate required fields
-    if (!tier || typeof tier !== "string") {
-      return NextResponse.json(
-        { error: "Missing or invalid tier" },
-        { status: 400 },
-      );
-    }
-
     if (!contentId || typeof contentId !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid contentId" },
@@ -67,9 +59,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate the token
+    // In the demo, all articles use the "premium" tier for encryption.
+    // The contentId in the token must match the tier used during encryption
+    // so the server can derive the correct period key for unlocking.
     const token = await tokens.generate({
-      tier,
-      contentId,
+      tier: "premium",
+      contentId: "premium",
       url,
       expiresIn,
       maxUses,
@@ -99,7 +94,6 @@ export async function POST(request: NextRequest) {
       tokenId: payload.tid,
       issuer: payload.iss,
       keyId: payload.kid,
-      tier,
       contentId,
       expiresIn,
       maxUses,

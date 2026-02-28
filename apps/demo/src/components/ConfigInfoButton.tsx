@@ -5,15 +5,15 @@ import { useState, useEffect } from "react";
 interface Config {
   keyExchange: {
     method: string;
-    bucketPeriodSeconds: number;
+    periodDurationSeconds: number;
     description: string;
   };
-  currentBucket: {
+  currentPeriod: {
     id: string;
     expiresAt: string;
     expiresIn: string;
   };
-  nextBucket: {
+  nextPeriod: {
     id: string;
     expiresAt: string;
   };
@@ -44,7 +44,7 @@ export function ConfigInfoButton() {
     if (isOpen && !config) {
       fetchConfig();
     }
-    
+
     // Auto-refresh while open
     if (isOpen) {
       const interval = setInterval(fetchConfig, 5000);
@@ -100,9 +100,9 @@ export function ConfigInfoButton() {
             backdropFilter: "blur(8px)",
           }}
         >
-          <div style={{ 
-            display: "flex", 
-            justifyContent: "space-between", 
+          <div style={{
+            display: "flex",
+            justifyContent: "space-between",
             alignItems: "center",
             marginBottom: "1rem"
           }}>
@@ -135,12 +135,12 @@ export function ConfigInfoButton() {
                     fontWeight: 600,
                     fontSize: "0.75rem",
                     textTransform: "uppercase",
-                    background: config.keyExchange.method === "totp" ? "#22c55e22" : "#3b82f622",
-                    color: config.keyExchange.method === "totp" ? "#16a34a" : "#2563eb",
-                    border: `1px solid ${config.keyExchange.method === "totp" ? "#22c55e" : "#3b82f6"}`,
+                    background: config.keyExchange.method === "period" ? "#22c55e22" : "#3b82f622",
+                    color: config.keyExchange.method === "period" ? "#16a34a" : "#2563eb",
+                    border: `1px solid ${config.keyExchange.method === "period" ? "#22c55e" : "#3b82f6"}`,
                   }}
                 >
-                  {config.keyExchange.method === "totp" ? "🔄 TOTP Mode" : "📡 API Mode"}
+                  {config.keyExchange.method === "period" ? "🔄 Shared Secret Mode" : "📡 API Mode"}
                 </span>
               </div>
 
@@ -148,27 +148,27 @@ export function ConfigInfoButton() {
               <table style={{ width: "100%", fontSize: "0.8rem" }}>
                 <tbody>
                   <tr>
-                    <td style={{ padding: "4px 0", color: "var(--muted)" }}>Bucket Period:</td>
+                    <td style={{ padding: "4px 0", color: "var(--muted)" }}>Period Duration:</td>
                     <td style={{ padding: "4px 0", textAlign: "right" }}>
-                      <strong>{config.keyExchange.bucketPeriodSeconds}s</strong>
+                      <strong>{config.keyExchange.periodDurationSeconds}s</strong>
                     </td>
                   </tr>
                   <tr>
-                    <td style={{ padding: "4px 0", color: "var(--muted)" }}>TOTP Counter:</td>
+                    <td style={{ padding: "4px 0", color: "var(--muted)" }}>Period Counter:</td>
                     <td style={{ padding: "4px 0", textAlign: "right" }}>
-                      <code style={{ fontSize: "0.75rem" }} title="floor(Unix time / period) - used as HKDF input">{config.currentBucket.id}</code>
+                      <code style={{ fontSize: "0.75rem" }} title="floor(Unix time / period) - used as HKDF input">{config.currentPeriod.id}</code>
                     </td>
                   </tr>
                   <tr>
                     <td style={{ padding: "4px 0", color: "var(--muted)" }}>Expires In:</td>
                     <td style={{ padding: "4px 0", textAlign: "right" }}>
-                      <strong style={{ color: "var(--accent)" }}>{config.currentBucket.expiresIn}</strong>
+                      <strong style={{ color: "var(--accent)" }}>{config.currentPeriod.expiresIn}</strong>
                     </td>
                   </tr>
                   <tr>
                     <td style={{ padding: "4px 0", color: "var(--muted)" }}>Next Counter:</td>
                     <td style={{ padding: "4px 0", textAlign: "right" }}>
-                      <code style={{ fontSize: "0.75rem" }}>{config.nextBucket.id}</code>
+                      <code style={{ fontSize: "0.75rem" }}>{config.nextPeriod.id}</code>
                     </td>
                   </tr>
                   <tr>
@@ -196,7 +196,7 @@ export function ConfigInfoButton() {
                   color: "var(--muted)",
                 }}
               >
-                Key = HKDF(secret, "{config.currentBucket.id}:tier:premium")
+                Key = HKDF(secret, "{config.currentPeriod.id}:contentId:premium")
               </div>
 
               {/* Description */}
@@ -211,23 +211,23 @@ export function ConfigInfoButton() {
                   color: "var(--muted)",
                 }}
               >
-                {config.keyExchange.method === "totp" ? (
+                {config.keyExchange.method === "period" ? (
                   <>
-                    <strong>TOTP Mode:</strong> CMS derives bucket keys locally using shared 
+                    <strong>Shared Secret Mode:</strong> CMS derives period keys locally using a shared
                     secret. No API calls to subscription server for key exchange.
                   </>
                 ) : (
                   <>
-                    <strong>API Mode:</strong> CMS fetches bucket keys from subscription server. 
+                    <strong>API Mode:</strong> CMS fetches period keys from subscription server.
                     Server controls rotation period dynamically.
                   </>
                 )}
               </div>
 
               {/* Refresh indicator */}
-              <div style={{ 
-                marginTop: "0.75rem", 
-                fontSize: "0.7rem", 
+              <div style={{
+                marginTop: "0.75rem",
+                fontSize: "0.7rem",
                 color: "var(--muted)",
                 textAlign: "center"
               }}>

@@ -29,7 +29,7 @@ npm install @sesamy/capsule
 import { CapsuleClient } from "@sesamy/capsule";
 
 const capsule = new CapsuleClient({
-  unlock: async ({ keyId, wrappedDek, publicKey, articleId }) => {
+  unlock: async ({ keyId, wrappedDek, publicKey, resourceId }) => {
     const res = await fetch("/api/unlock", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -55,13 +55,13 @@ const capsule = new CapsuleClient({
 document.addEventListener("capsule:unlock", (e) => {
   console.log(
     "Unlocked:",
-    e.detail.articleId,
+    e.detail.resourceId,
     e.detail.content.substring(0, 100),
   );
 });
 
 document.addEventListener("capsule:error", (e) => {
-  console.error("Failed to unlock:", e.detail.articleId, e.detail.error);
+  console.error("Failed to unlock:", e.detail.resourceId, e.detail.error);
 });
 ```
 
@@ -71,7 +71,7 @@ Add encrypted content to your page with the `data-capsule` attribute:
 
 ```html
 <div
-  data-capsule='{"articleId":"abc123","encryptedContent":"...","iv":"...","wrappedKeys":[...]}'
+  data-capsule='{"resourceId":"abc123","encryptedContent":"...","iv":"...","wrappedKeys":[...]}'
 >
   <p>Loading encrypted content...</p>
 </div>
@@ -180,7 +180,7 @@ const publicKey = await capsule.getPublicKey();
 // Send to server for key registration
 ```
 
-#### `unlockElement(articleId: string): Promise<string>`
+#### `unlockElement(resourceId: string): Promise<string>`
 
 Find an encrypted element by article ID, decrypt it, and render the content.
 
@@ -294,7 +294,7 @@ Generate a new key pair, replacing any existing one.
 
 Clear all stored keys and cached DEKs.
 
-#### `getElementState(articleId: string): ElementState | undefined`
+#### `getElementState(resourceId: string): ElementState | undefined`
 
 Get the current state of an encrypted element ('locked' | 'unlocking' | 'decrypting' | 'unlocked' | 'error').
 
@@ -310,7 +310,7 @@ Fired when content is successfully decrypted.
 document.addEventListener(
   "capsule:unlock",
   (e: CustomEvent<CapsuleUnlockEvent>) => {
-    const { articleId, keyId, content, element } = e.detail;
+    const { resourceId, keyId, content, element } = e.detail;
   },
 );
 ```
@@ -323,7 +323,7 @@ Fired when decryption fails.
 document.addEventListener(
   "capsule:error",
   (e: CustomEvent<CapsuleErrorEvent>) => {
-    const { articleId, error, element } = e.detail;
+    const { resourceId, error, element } = e.detail;
   },
 );
 ```
@@ -336,7 +336,7 @@ Fired when element state changes.
 document.addEventListener(
   "capsule:state",
   (e: CustomEvent<CapsuleStateEvent>) => {
-    const { articleId, previousState, state, element } = e.detail;
+    const { resourceId, previousState, state, element } = e.detail;
     // state: 'locked' | 'unlocking' | 'decrypting' | 'unlocked' | 'error'
   },
 );
@@ -351,7 +351,7 @@ type UnlockFunction = (params: {
   keyId: string; // Key ID from wrappedKeys (e.g., "premium:bucket123")
   wrappedDek: string; // CMK-encrypted DEK from the article
   publicKey: string; // User's public key (Base64 SPKI)
-  articleId: string; // Article being unlocked
+  resourceId: string; // Article being unlocked
   mode?: "tier"; // When present, request the tier's KEK instead of a per-article DEK
 }) => Promise<{
   encryptedDek: string; // Key encrypted with user's public key (DEK or KEK)
@@ -413,7 +413,7 @@ import { CapsuleClient } from "@sesamy/capsule";
 
 // Create client with token-aware unlock function
 const capsule = new CapsuleClient({
-  unlock: async ({ keyId, wrappedDek, publicKey, token, articleId }) => {
+  unlock: async ({ keyId, wrappedDek, publicKey, token, resourceId }) => {
     // Token is automatically passed if using unlockWithToken()
     const response = await fetch("/api/unlock", {
       method: "POST",
@@ -422,7 +422,7 @@ const capsule = new CapsuleClient({
         token, // Pre-signed share token (if present)
         wrappedDek,
         publicKey,
-        articleId,
+        resourceId,
         keyId, // Fallback for non-token unlock
       }),
     });
@@ -439,7 +439,7 @@ async function initPage() {
   const params = new URLSearchParams(window.location.search);
   const token = params.get("token");
 
-  if (token && article.articleId) {
+  if (token && article.resourceId) {
     try {
       const content = await capsule.unlockWithToken(article, token);
       renderContent(content);
@@ -464,7 +464,7 @@ Tokens can include:
 | ----------- | ----------------------------------------------------- |
 | `tier`      | Required. Which tier this grants access to            |
 | `expiresIn` | Required. Token validity: "1h", "24h", "7d", "30d"    |
-| `articleId` | Optional. Restrict to specific article                |
+| `resourceId` | Optional. Restrict to specific article                |
 | `maxUses`   | Optional. Limit total uses across all readers         |
 | `userId`    | Optional. Track which user/publisher created the link |
 

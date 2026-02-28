@@ -14,8 +14,8 @@ export interface EncryptedPayload {
   encryptedContent: string;
   /** Base64-encoded initialization vector (12 bytes for GCM) */
   iv: string;
-  /** Base64-encoded wrapped Data Encryption Key (RSA-OAEP encrypted) */
-  encryptedDek: string;
+  /** Base64-encoded wrapped content key (RSA-OAEP encrypted) */
+  encryptedContentKey: string;
   /** Optional metadata (not encrypted) */
   metadata?: Record<string, unknown>;
 }
@@ -24,10 +24,10 @@ export interface EncryptedPayload {
  * Wrapped key entry for multi-key scenarios.
  */
 export interface WrappedKey {
-  /** Key identifier (e.g., "premium:bucket123" or "article:slug") */
+  /** Key identifier (e.g., "premium:period123" or "article:slug") */
   keyId: string;
-  /** Base64-encoded wrapped DEK (CMK-encrypted) */
-  wrappedDek: string;
+  /** Base64-encoded wrapped content key (CMK-encrypted) */
+  wrappedContentKey: string;
   /** Optional expiration time */
   expiresAt?: string;
 }
@@ -36,13 +36,15 @@ export interface WrappedKey {
  * Encrypted article with envelope encryption (multi-key support).
  */
 export interface EncryptedArticle {
-  /** Unique article identifier */
-  articleId: string;
+  /** Unique resource identifier (specific page/article) */
+  resourceId: string;
+  /** Generic content tier identifier (e.g., "premium") used for key derivation and caching */
+  contentId?: string;
   /** Base64-encoded encrypted content */
   encryptedContent: string;
   /** Base64-encoded IV */
   iv: string;
-  /** Array of wrapped keys for different access tiers */
+  /** Array of wrapped keys for different access levels */
   wrappedKeys: WrappedKey[];
 }
 
@@ -54,18 +56,18 @@ export interface EncryptedArticle {
  * Parameters passed to the unlock function.
  */
 export interface UnlockParams {
-  /** Key ID being requested (e.g., "premium:bucket123") */
+  /** Key ID being requested (e.g., "premium:period123") */
   keyId: string;
   /** Wrapped DEK from the encrypted content (CMK-encrypted) */
-  wrappedDek: string;
-  /** User's public key (Base64 SPKI) to encrypt the DEK for */
+  wrappedContentKey: string;
+  /** User's public key (Base64 SPKI) to encrypt the content key for */
   publicKey: string;
-  /** Article ID being unlocked */
-  articleId: string;
+  /** Resource ID being unlocked (specific page/article) */
+  resourceId: string;
   /** Optional: pre-signed token for share link unlock */
   token?: string;
-  /** Optional: request tier key mode for tier-level key access */
-  mode?: "tier";
+  /** Optional: request shared key mode for shared-level key access */
+  mode?: "shared";
 }
 
 /**
@@ -73,18 +75,18 @@ export interface UnlockParams {
  */
 export interface UnlockResponse {
   /** Base64-encoded key encrypted with user's public key (DEK or KEK depending on keyType) */
-  encryptedDek: string;
+  encryptedContentKey: string;
   /** When the key expires (ISO string or timestamp) */
   expiresAt: string | number;
-  /** Bucket identifier for time-based keys */
-  bucketId?: string;
-  /** Bucket period in seconds */
-  bucketPeriodSeconds?: number;
+  /** Period identifier for time-based keys */
+  periodId?: string;
+  /** Period duration in seconds */
+  periodDurationSeconds?: number;
   /** Token ID (for share link unlocks) */
   tokenId?: string;
   /**
-   * Type of key in encryptedDek:
-   * - 'kek': Key-encrypting key (tier key that can unwrap any article DEK locally)
+   * Type of key in encryptedContentKey:
+   * - 'kek': Key-encrypting key (shared key that can unwrap any content key locally)
    * - 'dek': Data-encryption key (decrypts article content directly)
    * When absent, treated as 'dek' for backward compatibility.
    */
@@ -97,11 +99,11 @@ export interface UnlockResponse {
  *
  * @example
  * ```ts
- * const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey }) => {
+ * const unlock: UnlockFunction = async ({ keyId, wrappedContentKey, publicKey }) => {
  *   const res = await fetch('/api/unlock', {
  *     method: 'POST',
  *     headers: { 'Content-Type': 'application/json' },
- *     body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+ *     body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
  *   });
  *   return res.json();
  * };
@@ -117,8 +119,8 @@ export type UnlockFunction = (params: UnlockParams) => Promise<UnlockResponse>;
  * Base event data for all Capsule events.
  */
 export interface CapsuleEventBase {
-  /** Article ID */
-  articleId: string;
+  /** Resource ID (specific page/article) */
+  resourceId: string;
   /** The container element */
   element: HTMLElement;
 }
@@ -171,7 +173,7 @@ export interface CapsuleEventMap {
 /**
  * DEK storage strategy.
  */
-export type DekStorageMode = "memory" | "session" | "persist";
+export type ContentKeyStorageMode = "memory" | "session" | "persist";
 
 /**
  * State of an encrypted element.
@@ -205,7 +207,7 @@ export type ElementState =
  *   keySize: 4096,
  *   autoProcess: true,
  *   executeScripts: false,
- *   dekStorage: 'session',
+ *   contentKeyStorage: 'session',
  *   selector: '.encrypted-content',
  * });
  * ```
@@ -213,7 +215,7 @@ export type ElementState =
 export interface CapsuleClientOptions {
   /**
    * Async function called to unlock content.
-   * Receives keyId, wrappedDek, publicKey, and articleId.
+   * Receives keyId, wrappedContentKey, publicKey, and contentId.
    * Should authenticate the user and return the encrypted DEK.
    *
    * If not provided, you must call unlock() manually with the encrypted DEK.
@@ -254,7 +256,7 @@ export interface CapsuleClientOptions {
    * - 'persist': DEKs stored in IndexedDB (survives browser restart)
    * @default 'persist'
    */
-  dekStorage?: DekStorageMode;
+  contentKeyStorage?: ContentKeyStorageMode;
 
   /**
    * Time in ms before DEK expiry to auto-renew.
@@ -311,17 +313,17 @@ export interface StoredKeyPair {
 /**
  * Stored DEK information for caching.
  */
-export interface StoredDek {
-  /** Type of key (tier or article) */
-  type: "tier" | "article";
-  /** Base identifier (tier name or article ID) */
+export interface StoredContentKey {
+  /** Type of key (shared or article) */
+  type: "shared" | "article";
+  /** Base identifier (content ID or article ID) */
   baseId: string;
   /** Base64-encoded encrypted DEK (encrypted with user's public key) */
-  encryptedDek: string;
+  encryptedContentKey: string;
   /** Expiration timestamp (ms since epoch) */
   expiresAt: number;
-  /** Bucket identifier for time-based rotation */
-  bucketId?: string;
+  /** Period identifier for time-based rotation */
+  periodId?: string;
 }
 
 // =============================================================================

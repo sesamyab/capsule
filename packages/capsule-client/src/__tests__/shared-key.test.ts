@@ -1,11 +1,11 @@
 /**
- * Tests for tier key flow: "unlock once, access all" within a tier.
+ * Tests for shared key flow: "unlock once, access all" within a content ID.
  *
  * Tests the full lifecycle:
- * 1. Server returns keyType: "kek" (tier key-wrapping key)
- * 2. Client caches the tier key
- * 3. Subsequent articles in the same tier are unwrapped locally (zero network)
- * 4. prefetchTierKey() pre-warms the cache
+ * 1. Server returns keyType: "kek" (shared key-wrapping key)
+ * 2. Client caches the shared key
+ * 3. Subsequent articles in the same content ID are unwrapped locally (zero network)
+ * 4. prefetchSharedKey() pre-warms the cache
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -51,18 +51,18 @@ async function generateRawAesKey(): Promise<{
 }
 
 /**
- * Wrap a DEK with a wrapping key using AES-GCM (same format as capsule-server).
+ * Wrap a content key with a wrapping key using AES-GCM (same format as capsule-server).
  * Returns: IV (12 bytes) + AES-GCM(DEK + auth tag)
  */
-async function wrapDek(
-  dekRaw: Uint8Array,
+async function wrapContentKey(
+  contentKeyRaw: Uint8Array,
   wrappingKey: CryptoKey,
 ): Promise<Uint8Array> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     wrappingKey,
-    dekRaw,
+    contentKeyRaw,
   );
   const result = new Uint8Array(iv.length + ciphertext.byteLength);
   result.set(iv, 0);
@@ -73,53 +73,53 @@ async function wrapDek(
 /**
  * Create a test encrypted article using envelope encryption.
  *
- * @param articleId - Article ID
+ * @param resourceId - Resource ID (specific page/article)
  * @param content - Plaintext content
- * @param tierKey - The tier key-wrapping key (AES-256)
- * @param tier - Tier name (e.g., "premium")
- * @param bucketId - Bucket ID (e.g., "12345")
+ * @param sharedKey - The shared key-wrapping key (AES-256)
+ * @param contentId - Content ID (e.g., "premium")
+ * @param periodId - Period ID (e.g., "12345")
  * @returns EncryptedArticle and the raw DEK
  */
-async function createTierEncryptedArticle(
-  articleId: string,
+async function createSharedEncryptedArticle(
+  resourceId: string,
   content: string,
-  tierKey: CryptoKey,
-  tier: string,
-  bucketId: string,
-): Promise<{ article: EncryptedArticle; dekRaw: Uint8Array }> {
-  // Generate unique DEK for this article
-  const { key: dek, raw: dekRaw } = await generateRawAesKey();
+  sharedKey: CryptoKey,
+  contentId: string,
+  periodId: string,
+): Promise<{ article: EncryptedArticle; contentKeyRaw: Uint8Array }> {
+  // Generate unique content key for this article
+  const { key: contentKey, raw: contentKeyRaw } = await generateRawAesKey();
 
-  // Encrypt content with the DEK
+  // Encrypt content with the content key
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encryptedContent = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
-    dek,
+    contentKey,
     new TextEncoder().encode(content),
   );
 
-  // Wrap the DEK with the tier key (mimics server-side wrapDek)
-  const wrappedDekBytes = await wrapDek(dekRaw, tierKey);
+  // Wrap the content key with the shared key (mimics server-side wrapContentKey)
+  const wrappedContentKeyBytes = await wrapContentKey(contentKeyRaw, sharedKey);
 
   return {
     article: {
-      articleId,
+      resourceId,
       encryptedContent: arrayBufferToBase64(encryptedContent),
       iv: arrayBufferToBase64(iv),
       wrappedKeys: [
         {
-          keyId: `${tier}:${bucketId}`,
-          wrappedDek: arrayBufferToBase64(wrappedDekBytes),
+          keyId: `${contentId}:${periodId}`,
+          wrappedContentKey: arrayBufferToBase64(wrappedContentKeyBytes),
         },
       ],
     },
-    dekRaw,
+    contentKeyRaw,
   };
 }
 
 /**
  * RSA-OAEP encrypt a raw AES key with the client's public key.
- * Mimics server-side getTierKeyForUser response.
+ * Mimics server-side getSharedKeyForUser response.
  */
 async function rsaEncryptKey(
   rawKey: Uint8Array,
@@ -145,38 +145,38 @@ async function rsaEncryptKey(
 // Tests
 // =========================================================================
 
-describe("Tier Key Flow", () => {
+describe("Shared Key Flow", () => {
   beforeEach(() => {
     // @ts-expect-error - replacing global indexedDB
     globalThis.indexedDB = new IDBFactory();
   });
 
   describe("unlock() with keyType: kek", () => {
-    it("fetches tier key and decrypts article locally", async () => {
-      // Set up: create a tier key and encrypted article
-      const { key: tierKey, raw: tierKeyRaw } = await generateRawAesKey();
-      const tier = "premium";
-      const bucketId = "12345";
+    it("fetches shared key and decrypts article locally", async () => {
+      // Set up: create a shared key and encrypted article
+      const { key: sharedKey, raw: sharedKeyRaw } = await generateRawAesKey();
+      const contentId = "premium";
+      const periodId = "12345";
       const originalContent = "Premium article content";
 
-      const { article } = await createTierEncryptedArticle(
+      const { article } = await createSharedEncryptedArticle(
         "article-1",
         originalContent,
-        tierKey,
-        tier,
-        bucketId,
+        sharedKey,
+        contentId,
+        periodId,
       );
 
       const client = new CapsuleClient();
       await client.getPublicKey();
 
-      // Mock unlock function: returns the tier key (KEK), not the article DEK
+      // Mock unlock function: returns the shared key (KEK), not the content key
       const mockUnlock = vi.fn().mockImplementation(async (params) => {
-        const encryptedDek = await rsaEncryptKey(tierKeyRaw, params.publicKey);
+        const encryptedContentKey = await rsaEncryptKey(sharedKeyRaw, params.publicKey);
         return {
-          encryptedDek,
+          encryptedContentKey,
           expiresAt: new Date(Date.now() + 30000).toISOString(),
-          bucketId,
+          periodId,
           keyType: "kek",
         } satisfies UnlockResponse;
       });
@@ -191,30 +191,30 @@ describe("Tier Key Flow", () => {
       expect(mockUnlock).toHaveBeenCalledTimes(1);
       expect(mockUnlock).toHaveBeenCalledWith(
         expect.objectContaining({
-          keyId: `${tier}:${bucketId}`,
-          mode: "tier",
+          keyId: `${contentId}:${periodId}`,
+          mode: "shared",
         }),
       );
     });
 
-    it("uses cached tier key for subsequent articles (zero network)", async () => {
-      const { key: tierKey, raw: tierKeyRaw } = await generateRawAesKey();
-      const tier = "premium";
-      const bucketId = "12345";
+    it("uses cached shared key for subsequent articles (zero network)", async () => {
+      const { key: sharedKey, raw: sharedKeyRaw } = await generateRawAesKey();
+      const contentId = "premium";
+      const periodId = "12345";
 
-      // Create 3 articles encrypted with the same tier key
+      // Create 3 articles encrypted with the same shared key
       const articles = await Promise.all([
-        createTierEncryptedArticle("art-1", "Content 1", tierKey, tier, bucketId),
-        createTierEncryptedArticle("art-2", "Content 2", tierKey, tier, bucketId),
-        createTierEncryptedArticle("art-3", "Content 3", tierKey, tier, bucketId),
+        createSharedEncryptedArticle("art-1", "Content 1", sharedKey, contentId, periodId),
+        createSharedEncryptedArticle("art-2", "Content 2", sharedKey, contentId, periodId),
+        createSharedEncryptedArticle("art-3", "Content 3", sharedKey, contentId, periodId),
       ]);
 
       const mockUnlock = vi.fn().mockImplementation(async (params) => {
-        const encryptedDek = await rsaEncryptKey(tierKeyRaw, params.publicKey);
+        const encryptedContentKey = await rsaEncryptKey(sharedKeyRaw, params.publicKey);
         return {
-          encryptedDek,
+          encryptedContentKey,
           expiresAt: new Date(Date.now() + 30000).toISOString(),
-          bucketId,
+          periodId,
           keyType: "kek",
         } satisfies UnlockResponse;
       });
@@ -229,11 +229,11 @@ describe("Tier Key Flow", () => {
 
       // All decrypted correctly
       expect(results).toEqual(["Content 1", "Content 2", "Content 3"]);
-      // Only 1 server call! Articles 2 and 3 used the cached tier key.
+      // Only 1 server call! Articles 2 and 3 used the cached shared key.
       expect(mockUnlock).toHaveBeenCalledTimes(1);
     });
 
-    it("falls back to per-article DEK when server returns keyType: dek", async () => {
+    it("falls back to per-content key when server returns keyType: dek", async () => {
       const client = new CapsuleClient();
       const clientPubKey = await client.getPublicKey();
       const publicKeyBuffer = base64ToUint8Array(clientPubKey);
@@ -246,34 +246,34 @@ describe("Tier Key Flow", () => {
       );
 
       // Create a standard encrypted article (DEK directly RSA-wrapped)
-      const { key: dek, raw: dekRaw } = await generateRawAesKey();
+      const { key: contentKey, raw: contentKeyRaw } = await generateRawAesKey();
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const encryptedContent = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv },
-        dek,
+        contentKey,
         new TextEncoder().encode("DEK-mode content"),
       );
 
       const rsaWrappedDek = await crypto.subtle.encrypt(
         { name: "RSA-OAEP" },
         publicKey,
-        dekRaw,
+        contentKeyRaw,
       );
 
       const article: EncryptedArticle = {
-        articleId: "dek-article",
+        resourceId: "dek-article",
         encryptedContent: arrayBufferToBase64(encryptedContent),
         iv: arrayBufferToBase64(iv),
         wrappedKeys: [
-          { keyId: "premium:12345", wrappedDek: "irrelevant-for-dek-mode" },
+          { keyId: "premium:12345", wrappedContentKey: "irrelevant-for-dek-mode" },
         ],
       };
 
       const mockUnlock = vi.fn().mockResolvedValue({
-        encryptedDek: arrayBufferToBase64(rsaWrappedDek),
+        encryptedContentKey: arrayBufferToBase64(rsaWrappedDek),
         expiresAt: new Date(Date.now() + 30000).toISOString(),
-        bucketId: "12345",
-        keyType: "dek", // Standard per-article DEK response
+        periodId: "12345",
+        keyType: "dek", // Standard per-content key response
       } satisfies UnlockResponse);
 
       const clientWithUnlock = new CapsuleClient({ unlock: mockUnlock });
@@ -295,33 +295,33 @@ describe("Tier Key Flow", () => {
         ["encrypt"],
       );
 
-      const { key: dek, raw: dekRaw } = await generateRawAesKey();
+      const { key: contentKey, raw: contentKeyRaw } = await generateRawAesKey();
       const iv = crypto.getRandomValues(new Uint8Array(12));
       const encryptedContent = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv },
-        dek,
+        contentKey,
         new TextEncoder().encode("Old server content"),
       );
 
       const rsaWrappedDek = await crypto.subtle.encrypt(
         { name: "RSA-OAEP" },
         publicKey,
-        dekRaw,
+        contentKeyRaw,
       );
 
       const article: EncryptedArticle = {
-        articleId: "legacy-article",
+        resourceId: "legacy-article",
         encryptedContent: arrayBufferToBase64(encryptedContent),
         iv: arrayBufferToBase64(iv),
         wrappedKeys: [
-          { keyId: "premium:12345", wrappedDek: "not-used" },
+          { keyId: "premium:12345", wrappedContentKey: "not-used" },
         ],
       };
 
       const mockUnlock = vi.fn().mockResolvedValue({
-        encryptedDek: arrayBufferToBase64(rsaWrappedDek),
+        encryptedContentKey: arrayBufferToBase64(rsaWrappedDek),
         expiresAt: new Date(Date.now() + 30000).toISOString(),
-        bucketId: "12345",
+        periodId: "12345",
         // No keyType field at all — old server response
       } as UnlockResponse);
 
@@ -332,26 +332,26 @@ describe("Tier Key Flow", () => {
     });
   });
 
-  describe("prefetchTierKey()", () => {
-    it("pre-fetches tier key and enables local unlock", async () => {
-      const { key: tierKey, raw: tierKeyRaw } = await generateRawAesKey();
-      const tier = "premium";
-      const bucketId = "12345";
+  describe("prefetchSharedKey()", () => {
+    it("pre-fetches shared key and enables local unlock", async () => {
+      const { key: sharedKey, raw: sharedKeyRaw } = await generateRawAesKey();
+      const contentId = "premium";
+      const periodId = "12345";
 
-      const { article } = await createTierEncryptedArticle(
+      const { article } = await createSharedEncryptedArticle(
         "prefetch-article",
         "Pre-fetched content",
-        tierKey,
-        tier,
-        bucketId,
+        sharedKey,
+        contentId,
+        periodId,
       );
 
       const mockUnlock = vi.fn().mockImplementation(async (params) => {
-        const encryptedDek = await rsaEncryptKey(tierKeyRaw, params.publicKey);
+        const encryptedContentKey = await rsaEncryptKey(sharedKeyRaw, params.publicKey);
         return {
-          encryptedDek,
+          encryptedContentKey,
           expiresAt: new Date(Date.now() + 30000).toISOString(),
-          bucketId,
+          periodId,
           keyType: "kek",
         } satisfies UnlockResponse;
       });
@@ -359,30 +359,30 @@ describe("Tier Key Flow", () => {
       const client = new CapsuleClient({ unlock: mockUnlock });
 
       // Pre-fetch
-      const result = await client.prefetchTierKey(`${tier}:${bucketId}`);
-      expect(result.bucketId).toBe(bucketId);
+      const result = await client.prefetchSharedKey(`${contentId}:${periodId}`);
+      expect(result.periodId).toBe(periodId);
       expect(result.expiresAt).toBeGreaterThan(Date.now());
 
       // Verify prefetch made one call
       expect(mockUnlock).toHaveBeenCalledTimes(1);
 
-      // Now unlock should use cached tier key (no additional server calls)
+      // Now unlock should use cached shared key (no additional server calls)
       const decrypted = await client.unlock(article);
       expect(decrypted).toBe("Pre-fetched content");
       expect(mockUnlock).toHaveBeenCalledTimes(1); // Still just 1 call
     });
 
     it("returns cached info if already pre-fetched", async () => {
-      const { raw: tierKeyRaw } = await generateRawAesKey();
-      const tier = "premium";
-      const bucketId = "12345";
+      const { raw: sharedKeyRaw } = await generateRawAesKey();
+      const contentId = "premium";
+      const periodId = "12345";
 
       const mockUnlock = vi.fn().mockImplementation(async (params) => {
-        const encryptedDek = await rsaEncryptKey(tierKeyRaw, params.publicKey);
+        const encryptedContentKey = await rsaEncryptKey(sharedKeyRaw, params.publicKey);
         return {
-          encryptedDek,
+          encryptedContentKey,
           expiresAt: new Date(Date.now() + 30000).toISOString(),
-          bucketId,
+          periodId,
           keyType: "kek",
         } satisfies UnlockResponse;
       });
@@ -390,8 +390,8 @@ describe("Tier Key Flow", () => {
       const client = new CapsuleClient({ unlock: mockUnlock });
 
       // Pre-fetch twice
-      await client.prefetchTierKey(`${tier}:${bucketId}`);
-      await client.prefetchTierKey(`${tier}:${bucketId}`);
+      await client.prefetchSharedKey(`${contentId}:${periodId}`);
+      await client.prefetchSharedKey(`${contentId}:${periodId}`);
 
       // Only 1 server call
       expect(mockUnlock).toHaveBeenCalledTimes(1);
@@ -399,90 +399,90 @@ describe("Tier Key Flow", () => {
 
     it("throws if no unlock function provided", async () => {
       const client = new CapsuleClient();
-      await expect(client.prefetchTierKey("premium:12345")).rejects.toThrow(
+      await expect(client.prefetchSharedKey("premium:12345")).rejects.toThrow(
         "No unlock function provided",
       );
     });
 
     it("throws if server returns dek instead of kek", async () => {
       const mockUnlock = vi.fn().mockResolvedValue({
-        encryptedDek: "some-base64",
+        encryptedContentKey: "some-base64",
         expiresAt: new Date(Date.now() + 30000).toISOString(),
-        bucketId: "12345",
+        periodId: "12345",
         keyType: "dek",
       });
 
       const client = new CapsuleClient({ unlock: mockUnlock });
-      await expect(client.prefetchTierKey("premium:12345")).rejects.toThrow(
+      await expect(client.prefetchSharedKey("premium:12345")).rejects.toThrow(
         "expected keyType 'kek'",
       );
     });
   });
 
-  describe("tier key expiry", () => {
-    it("re-fetches tier key after expiry", async () => {
-      const { key: tierKey, raw: tierKeyRaw } = await generateRawAesKey();
-      const tier = "premium";
-      const bucketId = "12345";
+  describe("shared key expiry", () => {
+    it("re-fetches shared key after expiry", async () => {
+      const { key: sharedKey, raw: sharedKeyRaw } = await generateRawAesKey();
+      const contentId = "premium";
+      const periodId = "12345";
 
-      const { article: article1 } = await createTierEncryptedArticle(
+      const { article: article1 } = await createSharedEncryptedArticle(
         "art-1",
         "Content 1",
-        tierKey,
-        tier,
-        bucketId,
+        sharedKey,
+        contentId,
+        periodId,
       );
-      const { article: article2 } = await createTierEncryptedArticle(
+      const { article: article2 } = await createSharedEncryptedArticle(
         "art-2",
         "Content 2",
-        tierKey,
-        tier,
-        bucketId,
+        sharedKey,
+        contentId,
+        periodId,
       );
 
       const mockUnlock = vi.fn().mockImplementation(async (params) => {
-        const encryptedDek = await rsaEncryptKey(tierKeyRaw, params.publicKey);
+        const encryptedContentKey = await rsaEncryptKey(sharedKeyRaw, params.publicKey);
         return {
-          encryptedDek,
+          encryptedContentKey,
           // Already expired
           expiresAt: new Date(Date.now() - 1000).toISOString(),
-          bucketId,
+          periodId,
           keyType: "kek",
         } satisfies UnlockResponse;
       });
 
       const client = new CapsuleClient({ unlock: mockUnlock, renewBuffer: 0 });
 
-      // First unlock: fetches tier key
+      // First unlock: fetches shared key
       await client.unlock(article1);
       expect(mockUnlock).toHaveBeenCalledTimes(1);
 
-      // Second unlock: tier key is expired, must fetch again
+      // Second unlock: shared key is expired, must fetch again
       await client.unlock(article2);
       expect(mockUnlock).toHaveBeenCalledTimes(2);
     });
   });
 
-  describe("clearAll clears tier keys", () => {
-    it("clears tier key cache on clearAll", async () => {
-      const { key: tierKey, raw: tierKeyRaw } = await generateRawAesKey();
-      const tier = "premium";
-      const bucketId = "12345";
+  describe("clearAll clears shared keys", () => {
+    it("clears shared key cache on clearAll", async () => {
+      const { key: sharedKey, raw: sharedKeyRaw } = await generateRawAesKey();
+      const contentId = "premium";
+      const periodId = "12345";
 
-      const { article } = await createTierEncryptedArticle(
+      const { article } = await createSharedEncryptedArticle(
         "art-1",
         "Content 1",
-        tierKey,
-        tier,
-        bucketId,
+        sharedKey,
+        contentId,
+        periodId,
       );
 
       const mockUnlock = vi.fn().mockImplementation(async (params) => {
-        const encryptedDek = await rsaEncryptKey(tierKeyRaw, params.publicKey);
+        const encryptedContentKey = await rsaEncryptKey(sharedKeyRaw, params.publicKey);
         return {
-          encryptedDek,
+          encryptedContentKey,
           expiresAt: new Date(Date.now() + 30000).toISOString(),
-          bucketId,
+          periodId,
           keyType: "kek",
         } satisfies UnlockResponse;
       });

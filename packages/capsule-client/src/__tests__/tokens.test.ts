@@ -15,8 +15,7 @@ describe("parseShareToken", () => {
     tid: "test-token-id",
     iss: "test-issuer",
     kid: "key-2026-01",
-    tier: "premium",
-    contentId: "article-123",
+    contentId: "premium",
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
     ...overrides,
@@ -41,8 +40,7 @@ describe("parseShareToken", () => {
     if (result.valid) {
       expect(result.payload.iss).toBe("test-issuer");
       expect(result.payload.kid).toBe("key-2026-01");
-      expect(result.payload.tier).toBe("premium");
-      expect(result.payload.contentId).toBe("article-123");
+      expect(result.payload.contentId).toBe("premium");
       expect(result.expired).toBe(false);
       expect(result.expiresIn).toBeGreaterThan(0);
     }
@@ -102,7 +100,7 @@ describe("parseShareToken", () => {
   });
 
   it("should reject tokens missing required fields", () => {
-    const incompletePayload = { v: 1, tier: "premium" }; // Missing iss, kid, contentId, exp
+    const incompletePayload = { v: 1, contentId: "premium" }; // Missing iss, kid, exp
     const token = createToken(incompletePayload);
 
     const result = parseShareToken(token);
@@ -125,8 +123,7 @@ describe("validateTokenForContent", () => {
       tid: "test-id",
       iss: "test-issuer",
       kid: "key-1",
-      tier: "premium",
-      contentId: "article-123",
+      contentId: "premium",
       iat: Date.now() / 1000,
       exp: Date.now() / 1000 + 3600,
       ...overrides,
@@ -211,8 +208,7 @@ describe("getShareTokenFromUrl", () => {
       tid: "url-token-id",
       iss: "url-issuer",
       kid: "key-url",
-      tier: "premium",
-      contentId: "url-article",
+      contentId: "premium",
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 3600,
     };
@@ -230,7 +226,7 @@ describe("getShareTokenFromUrl", () => {
     expect(result).not.toBeNull();
     if (result && result.valid) {
       expect(result.token).toBe(token);
-      expect(result.payload.contentId).toBe("url-article");
+      expect(result.payload.contentId).toBe("premium");
       expect(result.payload.iss).toBe("url-issuer");
     }
   });
@@ -287,8 +283,7 @@ describe("TokenValidator", () => {
     tid: "test-token-id",
     iss: testIssuer,
     kid: testKeyId,
-    tier: "premium",
-    contentId: "article-123",
+    contentId: "premium",
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
@@ -306,7 +301,7 @@ describe("TokenValidator", () => {
       if (result.valid) {
         expect(result.trusted).toBe(false); // No trusted keys configured
         expect(result.expired).toBe(false);
-        expect(result.payload.contentId).toBe("article-123");
+        expect(result.payload.contentId).toBe("premium");
       }
     });
 
@@ -508,7 +503,7 @@ describe("TokenValidator", () => {
 
     it("should reject token missing required fields", async () => {
       const validator = new TokenValidator();
-      const incompletePayload = { v: 1, tier: "premium" };
+      const incompletePayload = { v: 1, contentId: "premium" };
       const payloadB64 = btoa(JSON.stringify(incompletePayload))
         .replace(/\+/g, "-")
         .replace(/\//g, "_")

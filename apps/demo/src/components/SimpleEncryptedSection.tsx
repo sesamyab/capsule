@@ -4,7 +4,7 @@
  * SimpleEncryptedSection - Demonstrates the high-level @sesamy/capsule API
  *
  * This is a simplified example showing how easy it is to use the Capsule client.
- * For the full-featured demo with DEK caching visualization, see EncryptedSection.tsx
+ * For the full-featured demo with content key caching visualization, see EncryptedSection.tsx
  */
 
 import { useState, useEffect, useRef } from "react";
@@ -15,7 +15,7 @@ import type {
 } from "@sesamy/capsule";
 
 interface SimpleEncryptedSectionProps {
-  articleId: string;
+  resourceId: string;
   encryptedData: EncryptedArticle | null;
 }
 
@@ -37,7 +37,7 @@ function formatMarkdown(content: string): string {
 }
 
 export function SimpleEncryptedSection({
-  articleId: _articleId,
+  resourceId: _resourceId,
   encryptedData,
 }: SimpleEncryptedSectionProps) {
   const [state, setState] = useState<State>("loading");
@@ -58,14 +58,14 @@ export function SimpleEncryptedSection({
         // Define the unlock function - this is how we fetch DEKs from the server
         const unlock: UnlockFunction = async ({
           keyId,
-          wrappedDek,
+          wrappedContentKey,
           publicKey,
-          articleId: _articleId,
+          resourceId: _resourceId,
         }) => {
           const response = await fetch("/api/unlock", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+            body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
           });
 
           if (!response.ok) {
@@ -80,7 +80,7 @@ export function SimpleEncryptedSection({
         const client = new CapsuleClient({
           unlock,
           executeScripts: true,
-          dekStorage: "persist",
+          contentKeyStorage: "persist",
           renewBuffer: 5000,
         });
 
@@ -114,11 +114,11 @@ export function SimpleEncryptedSection({
       // This single call handles everything:
       // 1. Gets public key (creates if needed)
       // 2. Calls unlock function to fetch DEK
-      // 3. Caches the DEK
+      // 3. Caches the content key
       // 4. Decrypts the content
-      const decrypted = await clientRef.current.unlock(encryptedData, "tier");
+      const decrypted = await clientRef.current.unlock(encryptedData, "shared");
 
-      // Get which key was used (first tier key in this case)
+      // Get which key was used (first shared key in this case)
       const usedKey = encryptedData.wrappedKeys.find(
         (k) => !k.keyId.startsWith("article:")
       );

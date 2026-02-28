@@ -39,9 +39,7 @@ export interface ShareTokenPayload {
   iss: string;
   /** Key ID used for signing */
   kid: string;
-  /** Tier this token grants access to */
-  tier: string;
-  /** Publisher's content ID */
+  /** Content identifier this token grants access to */
   contentId: string;
   /** Full URL for the content (optional) */
   url?: string;
@@ -90,7 +88,7 @@ export interface TokenParseError {
  *   if (result.valid) {
  *     if (result.expired) {
  *       showError('This share link has expired');
- *     } else if (result.payload.contentId !== currentArticleId) {
+ *     } else if (result.payload.contentId !== currentResourceId) {
  *       // Redirect to correct content
  *       window.location.href = result.payload.url || `/article/${result.payload.contentId}`;
  *     } else {
@@ -124,7 +122,8 @@ export function parseShareToken(token: string): ParsedToken | TokenParseError {
       typeof payload.v !== "number" ||
       typeof payload.iss !== "string" ||
       typeof payload.kid !== "string" ||
-      typeof payload.tier !== "string" ||
+      typeof payload.iss !== "string" ||
+      typeof payload.kid !== "string" ||
       typeof payload.contentId !== "string" ||
       typeof payload.exp !== "number"
     ) {
@@ -260,12 +259,12 @@ export interface TokenValidationSuccess {
 export interface TokenValidationFailure {
   valid: false;
   error:
-    | "malformed"
-    | "invalid_format"
-    | "invalid_signature"
-    | "untrusted_issuer"
-    | "no_secret"
-    | "expired";
+  | "malformed"
+  | "invalid_format"
+  | "invalid_signature"
+  | "untrusted_issuer"
+  | "no_secret"
+  | "expired";
   message: string;
   /** Payload is available even on failure (for debugging) */
   payload?: ShareTokenPayload;
@@ -464,7 +463,6 @@ export class TokenValidator {
       typeof payload.v !== "number" ||
       typeof payload.iss !== "string" ||
       typeof payload.kid !== "string" ||
-      typeof payload.tier !== "string" ||
       typeof payload.contentId !== "string" ||
       typeof payload.exp !== "number"
     ) {
@@ -644,13 +642,13 @@ export interface JwksValidationSuccess {
 export interface JwksValidationFailure {
   valid: false;
   error:
-    | "malformed"
-    | "invalid_format"
-    | "invalid_signature"
-    | "untrusted_issuer"
-    | "unknown_key"
-    | "jwks_fetch_failed"
-    | "unsupported_algorithm";
+  | "malformed"
+  | "invalid_format"
+  | "invalid_signature"
+  | "untrusted_issuer"
+  | "unknown_key"
+  | "jwks_fetch_failed"
+  | "unsupported_algorithm";
   message: string;
   payload?: ShareTokenPayload & { alg?: string };
 }
@@ -857,7 +855,6 @@ export class JwksTokenValidator {
     if (
       typeof payload.iss !== "string" ||
       typeof payload.kid !== "string" ||
-      typeof payload.tier !== "string" ||
       typeof payload.contentId !== "string" ||
       typeof payload.exp !== "number"
     ) {
