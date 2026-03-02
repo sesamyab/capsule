@@ -190,7 +190,7 @@ async function checkRsaKeys(): Promise<boolean> {
     request.onerror = () => resolve(false);
 
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(RSA_STORE_NAME);
+      request.result.createObjectStore(RSA_STORE_NAME, { keyPath: "id" });
     };
 
     request.onsuccess = () => {
@@ -218,7 +218,7 @@ async function clearRsaKeys(): Promise<void> {
     request.onerror = () => reject(request.error);
 
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(RSA_STORE_NAME);
+      request.result.createObjectStore(RSA_STORE_NAME, { keyPath: "id" });
     };
 
     request.onsuccess = () => {
