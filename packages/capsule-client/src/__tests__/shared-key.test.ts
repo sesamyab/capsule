@@ -501,4 +501,87 @@ describe("Shared Key Flow", () => {
       expect(mockUnlock).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe("malformed keyId rejection", () => {
+    it("rejects keyId with empty contentId segment (e.g., ':123')", async () => {
+      const { key: sharedKey } = await generateRawAesKey();
+      const { article } = await createSharedEncryptedArticle(
+        "art-1",
+        "Content",
+        sharedKey,
+        "", // empty contentId embedded in wrappedKeys keyId
+        "12345",
+      );
+      // Override the keyId to be malformed
+      article.wrappedKeys[0]!.keyId = ":12345";
+
+      const client = new CapsuleClient({
+        unlock: vi.fn(),
+      });
+
+      await expect(client.unlock(article)).rejects.toThrow(
+        /contentId segment is empty/,
+      );
+    });
+
+    it("rejects keyId with empty periodId segment (e.g., 'premium:')", async () => {
+      const { key: sharedKey } = await generateRawAesKey();
+      const { article } = await createSharedEncryptedArticle(
+        "art-1",
+        "Content",
+        sharedKey,
+        "premium",
+        "12345",
+      );
+      article.wrappedKeys[0]!.keyId = "premium:";
+
+      const client = new CapsuleClient({
+        unlock: vi.fn(),
+      });
+
+      await expect(client.unlock(article)).rejects.toThrow(
+        /periodId segment is empty/,
+      );
+    });
+
+    it("rejects article keyId with empty identifier (e.g., 'article:')", async () => {
+      const { key: sharedKey } = await generateRawAesKey();
+      const { article } = await createSharedEncryptedArticle(
+        "art-1",
+        "Content",
+        sharedKey,
+        "premium",
+        "12345",
+      );
+      article.wrappedKeys[0]!.keyId = "article:";
+
+      const client = new CapsuleClient({
+        unlock: vi.fn(),
+      });
+
+      await expect(client.unlock(article)).rejects.toThrow(
+        /missing article identifier/,
+      );
+    });
+
+    it("rejects empty keyId string", async () => {
+      const { key: sharedKey } = await generateRawAesKey();
+      const { article } = await createSharedEncryptedArticle(
+        "art-1",
+        "Content",
+        sharedKey,
+        "premium",
+        "12345",
+      );
+      article.wrappedKeys[0]!.keyId = "";
+
+      const client = new CapsuleClient({
+        unlock: vi.fn(),
+      });
+
+      await expect(client.unlock(article)).rejects.toThrow(
+        /keyId must be a non-empty string/,
+      );
+    });
+  });
 });

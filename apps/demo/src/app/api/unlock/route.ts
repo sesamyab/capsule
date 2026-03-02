@@ -96,6 +96,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate optional resourceId if provided
+    if (resourceId !== undefined && typeof resourceId !== "string") {
+      return NextResponse.json(
+        { error: "Invalid resourceId – must be a string when provided" },
+        { status: 400 },
+      );
+    }
+
     // TOKEN MODE: Pre-signed share link unlock
     if (token) {
       if (!wrappedContentKey || typeof wrappedContentKey !== "string") {
@@ -183,6 +191,13 @@ export async function POST(request: NextRequest) {
 
       const contentId = keyId.substring(0, colonIndex);
       const periodId = keyId.substring(colonIndex + 1);
+
+      if (!contentId || !periodId) {
+        return NextResponse.json(
+          { error: "Invalid shared keyId: both contentId and periodId must be non-empty. Expected 'contentId:periodId'" },
+          { status: 400 },
+        );
+      }
 
       const result = await getServer().getSharedKeyForUser(contentId, periodId, publicKey);
 

@@ -71,14 +71,17 @@ export function getPeriodExpiration(
 
 /**
  * Check if a period is currently valid (current, next, or previous for grace period).
+ *
+ * Uses a single timestamp snapshot to avoid period rollover races.
  */
 export function isPeriodValid(
   periodId: string,
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): boolean {
-  const current = getCurrentPeriod(periodDurationSeconds);
-  const next = getNextPeriod(periodDurationSeconds);
-  const previous = getPreviousPeriod(periodDurationSeconds);
+  const now = Date.now();
+  const current = getPeriodId(now, periodDurationSeconds);
+  const next = getPeriodId(now + periodDurationSeconds * 1000, periodDurationSeconds);
+  const previous = getPeriodId(now - periodDurationSeconds * 1000, periodDurationSeconds);
   return periodId === current || periodId === next || periodId === previous;
 }
 
@@ -118,14 +121,17 @@ export async function getPeriodKey(
 /**
  * Get current and next period keys for a key ID.
  * Used by CMS to wrap content keys for both time windows.
+ *
+ * Uses a single timestamp snapshot to avoid period rollover races.
  */
 export async function getPeriodKeys(
   periodSecret: Uint8Array,
   keyId: string,
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): Promise<{ current: PeriodKey; next: PeriodKey }> {
-  const currentPeriodId = getCurrentPeriod(periodDurationSeconds);
-  const nextPeriodId = getNextPeriod(periodDurationSeconds);
+  const now = Date.now();
+  const currentPeriodId = getPeriodId(now, periodDurationSeconds);
+  const nextPeriodId = getPeriodId(now + periodDurationSeconds * 1000, periodDurationSeconds);
 
   const [current, next] = await Promise.all([
     getPeriodKey(periodSecret, keyId, currentPeriodId, periodDurationSeconds),

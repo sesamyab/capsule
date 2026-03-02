@@ -19,12 +19,28 @@ export const DEFAULT_PERIOD_DURATION_SECONDS = 30;
 export { hkdf };
 
 /**
+ * Validate that periodDurationSeconds is a positive finite number.
+ * @throws if the value is zero, negative, NaN, or Infinity.
+ */
+function validatePeriodDuration(periodDurationSeconds: number): void {
+  if (
+    !Number.isFinite(periodDurationSeconds) ||
+    periodDurationSeconds <= 0
+  ) {
+    throw new RangeError(
+      `periodDurationSeconds must be a positive finite number, got ${periodDurationSeconds}`,
+    );
+  }
+}
+
+/**
  * Get the period ID for a given timestamp.
  */
 export function getPeriodId(
   timestampMs: number = Date.now(),
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): string {
+  validatePeriodDuration(periodDurationSeconds);
   const timestampSec = Math.floor(timestampMs / 1000);
   const periodNum = Math.floor(timestampSec / periodDurationSeconds);
   return periodNum.toString();
@@ -64,24 +80,36 @@ export function getPeriodExpiration(
   periodId: string,
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): Date {
-  const periodNum = parseInt(periodId, 10);
-  if (isNaN(periodNum)) {
+  validatePeriodDuration(periodDurationSeconds);
+  if (!/^-?\d+$/.test(periodId)) {
     throw new Error(`Invalid periodId: "${periodId}"`);
   }
+  const periodNum = Number(periodId);
+  if (!Number.isSafeInteger(periodNum)) {
+    throw new Error(`periodId out of safe integer range: "${periodId}"`);
+  }
   const expiresAtMs = (periodNum + 1) * periodDurationSeconds * 1000;
+  if (!Number.isFinite(expiresAtMs)) {
+    throw new RangeError(
+      `Computed expiration overflows for periodId "${periodId}" with periodDurationSeconds ${periodDurationSeconds}`,
+    );
+  }
   return new Date(expiresAtMs);
 }
 
 /**
  * Check if a period is currently valid (current, next, or previous for grace period).
+ *
+ * Uses a single timestamp snapshot to avoid period rollover races.
  */
 export function isPeriodValid(
   periodId: string,
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): boolean {
-  const current = getCurrentPeriod(periodDurationSeconds);
-  const next = getNextPeriod(periodDurationSeconds);
-  const previous = getPreviousPeriod(periodDurationSeconds);
+  const now = Date.now();
+  const current = getPeriodId(now, periodDurationSeconds);
+  const next = getPeriodId(now + periodDurationSeconds * 1000, periodDurationSeconds);
+  const previous = getPeriodId(now - periodDurationSeconds * 1000, periodDurationSeconds);
   return periodId === current || periodId === next || periodId === previous;
 }
 
@@ -121,14 +149,17 @@ export async function getPeriodKey(
 /**
  * Get current and next period keys for a key ID.
  * Used by CMS to wrap content keys for both time windows.
+ *
+ * Uses a single timestamp snapshot to avoid period rollover races.
  */
 export async function getPeriodKeys(
   periodSecret: Uint8Array,
   keyId: string,
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): Promise<{ current: PeriodKey; next: PeriodKey }> {
-  const currentPeriodId = getCurrentPeriod(periodDurationSeconds);
-  const nextPeriodId = getNextPeriod(periodDurationSeconds);
+  const now = Date.now();
+  const currentPeriodId = getPeriodId(now, periodDurationSeconds);
+  const nextPeriodId = getPeriodId(now + periodDurationSeconds * 1000, periodDurationSeconds);
 
   const [current, next] = await Promise.all([
     getPeriodKey(periodSecret, keyId, currentPeriodId, periodDurationSeconds),

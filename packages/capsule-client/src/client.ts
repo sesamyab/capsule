@@ -1333,12 +1333,26 @@ export class CapsuleClient {
     type: "shared" | "article";
     baseId: string;
   } {
+    if (!keyId) {
+      throw new Error("keyId must be a non-empty string");
+    }
     if (keyId.startsWith("article:")) {
-      return { type: "article", baseId: keyId.slice(8) };
+      const baseId = keyId.slice(8);
+      if (!baseId) {
+        throw new Error("Invalid article keyId: missing article identifier after 'article:'");
+      }
+      return { type: "article", baseId };
     }
     // Shared format: "contentId:periodId" or just "contentId"
     const colonIdx = keyId.indexOf(":");
+    if (colonIdx === 0) {
+      throw new Error(`Invalid shared keyId '${keyId}': contentId segment is empty`);
+    }
     if (colonIdx > 0) {
+      const periodId = keyId.slice(colonIdx + 1);
+      if (!periodId) {
+        throw new Error(`Invalid shared keyId '${keyId}': periodId segment is empty`);
+      }
       return { type: "shared", baseId: keyId.slice(0, colonIdx) };
     }
     return { type: "shared", baseId: keyId };

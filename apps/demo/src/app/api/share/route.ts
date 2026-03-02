@@ -97,11 +97,13 @@ export async function POST(request: NextRequest) {
     const shareUrl = `${targetUrl}${separator}token=${encodeURIComponent(token)}`;
 
     // Log token generation for audit
+    // Use the token's contentId ("premium") to stay consistent with the token scope.
     console.log(`[SHARE] Token generated`, {
       tokenId: payload.tid,
       issuer: payload.iss,
       keyId: payload.kid,
-      contentId,
+      contentId: payload.contentId,
+      articleSlug: contentId,
       expiresIn,
       maxUses,
       userId,
@@ -114,6 +116,7 @@ export async function POST(request: NextRequest) {
       issuer: payload.iss,
       keyId: payload.kid,
       contentId: payload.contentId,
+      articleSlug: contentId,
       expiresAt: new Date(payload.exp * 1000).toISOString(),
       shareUrl,
     });

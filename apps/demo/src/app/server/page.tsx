@@ -861,13 +861,8 @@ const encrypted = articles.map(article =>
         <h2>PHP</h2>
         <p>PHP implementation using OpenSSL for cryptographic operations.</p>
 
-        <h3>Installation</h3>
-        <CodeBlock language="bash">{`composer require capsule/capsule-php`}</CodeBlock>
-
         <h3>Basic Usage</h3>
         <CodeBlock language="php">{`<?php
-
-use Capsule\\ArticleEncryptor;
 
 // Encrypt content
 $contentKey = random_bytes(32); // AES-256 key
@@ -932,7 +927,7 @@ function convertSpkiToPem($base64Spki) {
         </p>
 
         <h3>Installation</h3>
-        <CodeBlock language="bash">{`pip install capsule-py`}</CodeBlock>
+        <CodeBlock language="bash">{`pip install cryptography`}</CodeBlock>
 
         <h3>Basic Usage</h3>
         <CodeBlock language="python">{`from cryptography.hazmat.primitives.ciphers.aead import AESGCM

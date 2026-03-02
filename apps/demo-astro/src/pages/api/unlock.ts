@@ -37,10 +37,10 @@ export const POST: APIRoute = async ({ request }) => {
     const body = await request.json();
     const { keyId, wrappedContentKey, publicKey } = body;
 
-    if (!publicKey || !keyId || !wrappedContentKey) {
+    if (typeof publicKey !== "string" || typeof keyId !== "string" || typeof wrappedContentKey !== "string") {
       return new Response(
         JSON.stringify({
-          error: "Missing required fields: keyId, wrappedContentKey, publicKey",
+          error: "Missing required fields: keyId, wrappedContentKey, publicKey must be strings",
         }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );

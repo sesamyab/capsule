@@ -215,6 +215,9 @@ async function processUnlock(
 
         if (accessDecision.deliveryMode === "contentKey") {
             // Direct path: unseal and return contentKey
+            if (!sealedEntry.contentKey) {
+                throw new Error(`Missing sealed contentKey for content item "${contentName}"`);
+            }
             const contentKeyBytes = await unseal(sealedEntry.contentKey, privateKey, algorithm);
             keys[contentName] = {
                 contentKey: clientBound
@@ -223,6 +226,9 @@ async function processUnlock(
             };
         } else {
             // Cacheable path: unseal and return periodKeys
+            if (!sealedEntry.periodKeys || typeof sealedEntry.periodKeys !== "object") {
+                throw new Error(`Missing or invalid sealed periodKeys for content item "${contentName}"`);
+            }
             const periodKeys: Record<string, string> = {};
             for (const [t, sealedPeriodKey] of Object.entries(sealedEntry.periodKeys)) {
                 const periodKeyBytes = await unseal(sealedPeriodKey, privateKey, algorithm);
