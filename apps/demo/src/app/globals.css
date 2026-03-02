@@ -923,7 +923,8 @@ body.with-console main {
   box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
 }
 
-.key-tag.dek-tier {
+.key-tag.dek-tier,
+.key-tag.dek-shared {
   background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
   color: white;
   box-shadow: 0 2px 4px rgba(139, 92, 246, 0.3);
