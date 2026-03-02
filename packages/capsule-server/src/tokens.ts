@@ -18,7 +18,7 @@
  *
  * // Generate a share token for social media
  * const token = await tokens.generate({
- *   tier: 'premium',
+ *   contentId: 'premium',
  *   maxUses: 1000,
  *   expiresIn: '7d',
  * });
@@ -51,9 +51,7 @@ export interface UnlockTokenPayload {
   iss: string;
   /** Key ID used for signing (enables key rotation) */
   kid: string;
-  /** Tier this token grants access to (e.g., "premium") */
-  tier: string;
-  /** Publisher's content ID (required for content binding) */
+  /** Content name this token grants access to (e.g., "premium", "bodytext") */
   contentId: string;
   /** Optional: full URL for the content */
   url?: string;
@@ -71,9 +69,7 @@ export interface UnlockTokenPayload {
 
 /** Options for generating a token */
 export interface GenerateTokenOptions {
-  /** Tier this token grants access to */
-  tier: string;
-  /** Publisher's content ID (required) */
+  /** Content name this token grants access to (e.g., "premium", "bodytext") */
   contentId: string;
   /** Optional: full URL for the content */
   url?: string;
@@ -196,7 +192,6 @@ export class TokenManager {
       tid: toBase64Url(getRandomBytes(12)),
       iss: this.issuer,
       kid: this.keyId,
-      tier: options.tier,
       contentId: options.contentId,
       iat: now,
       exp: now + expiresInSeconds,
@@ -314,7 +309,7 @@ export class TokenManager {
  *
  * // Generate share link token
  * const token = tokens.generate({
- *   tier: 'premium',
+ *   contentId: 'premium',
  *   maxUses: 1000,
  *   expiresIn: '7d',
  * });

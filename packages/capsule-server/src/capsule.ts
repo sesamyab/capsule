@@ -3,7 +3,7 @@
  *
  * Provides a simple interface for server-side content encryption.
  * The CMS just works with key IDs - it doesn't know or care about
- * tiers, subscriptions, or how keys are derived.
+ * content names, subscriptions, or how keys are derived.
  *
  * Keys are fetched via an async `getKeys` function that you provide.
  * This could:
@@ -132,7 +132,7 @@ export interface EncryptOptions {
   keyIds: string[];
 
   /**
-   * Generic content tier identifier (e.g., "premium", "paywall/basic/bodytext").
+   * Content name identifier (e.g., "premium", "bodytext").
    * Used for key derivation and caching — multiple resources share the same contentId
    * so browsers can cache one key and unlock many articles.
    *
@@ -194,7 +194,7 @@ export class CmsServer {
    *
    * @param resourceId - Unique resource identifier (specific page/article)
    * @param content - Plaintext content to encrypt
-   * @param options - Encryption options (includes contentId for the generic content tier)
+   * @param options - Encryption options (includes contentId for the content name)
    * @returns Encrypted article data
    *
    * @example
@@ -296,7 +296,7 @@ export class CmsServer {
      *
      * {
      *   resourceId: string,          // Specific page/article identifier
-     *   contentId: string,           // Generic content tier (e.g., "premium")
+     *   contentId: string,           // Content name (e.g., "premium")
      *   encryptedContent: string,    // Base64 AES-256-GCM ciphertext
      *   iv: string,                  // Base64 12-byte IV
      *   wrappedKeys: [               // One entry per key

@@ -133,7 +133,7 @@ const result = await publisher.render({
     "domain": "news.example.com",
     "resourceId": "article-123",
     "issuedAt": "2025-01-15T12:00:00Z",
-    "data": { "tier": "premium" }
+    "data": { "section": "politics", "date.published": "2025-10-20T10:30:00Z" }
   },
   "resourceJWT": "eyJ…",
   "issuerJWT": { "sesamy": "eyJ…" },
@@ -411,8 +411,7 @@ const tokens = createTokenManager({
 
 // Generate a share token
 const token = await tokens.generate({
-  tier: 'premium',             // Required: which tier this token grants access to
-  contentId: 'crypto-guide',   // Required: which content this token unlocks
+  contentId: 'premium',          // Required: content name this token grants access to
   url: 'https://example.com/article/crypto-guide', // Optional
   expiresIn: '24h',
   maxUses: 50,
@@ -940,8 +939,7 @@ console.log('[UNLOCK] Token used', {
   keyId: payload.kid,
   contentId: payload.contentId,
   userId: payload.userId,
-  campaign: payload.meta?.campaign,
-  contentId: payload.contentId,
+  campaign: payload.meta?.campaign,  
   timestamp: new Date().toISOString(),
 });`}</CodeBlock>
 

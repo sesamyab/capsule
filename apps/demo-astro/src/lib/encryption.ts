@@ -65,11 +65,11 @@ export const cms = createCmsServer({
 export async function encryptArticleContent(
   resourceId: string,
   content: string,
-  tier: string = "premium"
+  contentName: string = "premium"
 ): Promise<EncryptedArticle> {
   return cms.encrypt(resourceId, content, {
-    keyIds: [tier, `article:${resourceId}`],
-    contentId: tier,
+    keyIds: [contentName, `article:${resourceId}`],
+    contentId: contentName,
   });
 }
 

@@ -254,7 +254,7 @@ describe("PeriodKeyProvider", () => {
 
       const keys = await keyProvider.getKeys(["premium", "basic"]);
 
-      // Should get current and next period for each tier
+      // Should get current and next period for each content name
       expect(keys.length).toBe(4);
 
       const keyIds = keys.map((k) => k.keyId);
@@ -308,7 +308,7 @@ describe("PeriodKeyProvider", () => {
       }
     });
 
-    it("produces different keys for different tiers", async () => {
+    it("produces different keys for different content names", async () => {
       const keyProvider = createPeriodKeyProvider({
         periodSecret,
         periodDurationSeconds: 30,

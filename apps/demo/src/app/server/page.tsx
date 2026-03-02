@@ -652,8 +652,7 @@ const tokens = createTokenManager({
 
 // Generate a share token
 const token = await tokens.generate({
-  tier: 'premium',
-  contentId: 'crypto-guide',
+  contentId: 'premium',
   expiresIn: '7d',
   maxUses: 100,
 });

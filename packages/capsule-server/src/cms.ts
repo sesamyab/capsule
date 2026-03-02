@@ -134,7 +134,7 @@ export class CmsEncryptor {
    * @param resourceId - Unique resource identifier (specific page/article)
    * @param content - Plaintext content to encrypt
    * @param keyConfigs - Array of key-wrapping configurations
-   * @param contentId - Optional generic content tier identifier (e.g., "premium")
+   * @param contentId - Optional content name identifier (e.g., "premium", "bodytext")
    * @returns Encrypted article with wrapped keys
    */
   async encryptArticle(
@@ -172,35 +172,35 @@ export class CmsEncryptor {
   }
 
   /**
-   * Encrypt article with tier-based time-period keys.
+   * Encrypt article with content-name-based time-period keys.
    *
-   * Automatically gets current and next period keys for the specified tier,
+   * Automatically gets current and next period keys for the specified content name,
    * plus any additional static keys (e.g., per-article keys).
    *
    * @param resourceId - Unique resource identifier (specific page/article)
    * @param content - Plaintext content to encrypt
-   * @param tier - Subscription tier (e.g., "premium")
+   * @param contentName - Content name for period key derivation (e.g., "premium", "bodytext")
    * @param additionalKeys - Optional additional key configurations (e.g., per-article keys)
    */
-  async encryptArticleWithTier(
+  async encryptArticleWithContentName(
     resourceId: string,
     content: string,
-    tier: string,
+    contentName: string,
     additionalKeys: KeyWrapConfig[] = [],
   ): Promise<EncryptedArticle> {
-    // Get time-period keys for this tier
-    const periodKeys = await this.getPeriodKeys(tier);
+    // Get time-period keys for this content name
+    const periodKeys = await this.getPeriodKeys(contentName);
 
     const keyConfigs: KeyWrapConfig[] = [
       // Current period key
       {
-        keyId: `${tier}:${periodKeys.current.periodId}`,
+        keyId: `${contentName}:${periodKeys.current.periodId}`,
         key: periodKeys.current.key,
         expiresAt: periodKeys.current.expiresAt,
       },
       // Next period key (handles clock drift)
       {
-        keyId: `${tier}:${periodKeys.next.periodId}`,
+        keyId: `${contentName}:${periodKeys.next.periodId}`,
         key: periodKeys.next.key,
         expiresAt: periodKeys.next.expiresAt,
       },
@@ -208,7 +208,7 @@ export class CmsEncryptor {
       ...additionalKeys,
     ];
 
-    return this.encryptArticle(resourceId, content, keyConfigs, tier);
+    return this.encryptArticle(resourceId, content, keyConfigs, contentName);
   }
 }
 

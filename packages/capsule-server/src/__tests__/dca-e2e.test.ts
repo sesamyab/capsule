@@ -677,7 +677,7 @@ describe("DCA end-to-end", () => {
                     contentNames: ["bodytext"],
                 },
             ],
-            resourceData: { tier: "premium" },
+            resourceData: { section: "politics" },
         });
 
         const issuer = createDcaIssuer({
@@ -700,7 +700,7 @@ describe("DCA end-to-end", () => {
 
         expect(verified.resource.resourceId).toBe("verify-test");
         expect(verified.resource.domain).toBe("verify.example.com");
-        expect(verified.resource.data).toEqual({ tier: "premium" });
+        expect(verified.resource.data).toEqual({ section: "politics" });
         expect(verified.issuerPayload.issuerName).toBe("verify-issuer");
     });
 

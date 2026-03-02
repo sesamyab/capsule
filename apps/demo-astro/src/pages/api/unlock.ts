@@ -34,7 +34,15 @@ const server = createSubscriptionServer({
 
 export const POST: APIRoute = async ({ request }) => {
   try {
-    const body = await request.json();
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: "Invalid or missing JSON body" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
       return new Response(
@@ -43,7 +51,7 @@ export const POST: APIRoute = async ({ request }) => {
       );
     }
 
-    const { keyId, wrappedContentKey, publicKey } = body;
+    const { keyId, wrappedContentKey, publicKey } = body as Record<string, unknown>;
 
     if (typeof publicKey !== "string" || typeof keyId !== "string" || typeof wrappedContentKey !== "string") {
       return new Response(

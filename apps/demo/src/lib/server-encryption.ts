@@ -34,7 +34,7 @@ function getCurrentPeriodId(): string {
  * Get encrypted article for display.
  *
  * Uses the high-level CmsServer API to encrypt content with:
- * - Current and next period keys for the content tier (handles clock drift)
+ * - Current and next period keys for the content name (handles clock drift)
  * - Article-specific key if available (for per-article purchases)
  *
  * Caches the encrypted content within a key rotation period so that:

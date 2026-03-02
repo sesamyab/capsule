@@ -66,12 +66,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate the token
-    // In the demo, all articles use the "premium" tier for encryption.
-    // The contentId in the token must match the tier used during encryption
+    // In the demo, all articles use the "premium" content name for encryption.
+    // The contentId in the token must match the content name used during encryption
     // so the server can derive the correct period key for unlocking.
     // The articleSlug is stored in meta so the token carries the full context.
     const token = await getTokens().generate({
-      tier: "premium",
       contentId: "premium",
       url,
       expiresIn,
@@ -89,11 +88,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Derive all downstream values from the token payload (source of truth)
+    // so the share URL and audit records can never diverge from the token scope.
+    const tokenContentId = payload.contentId;
+    const metaSlug = payload.meta?.articleSlug;
+    const tokenArticleSlug = typeof metaSlug === "string" ? metaSlug : articleSlug;
+    const tokenUrl = payload.url;
+
     // Build share URL
     const baseUrl = request.headers.get("origin") || request.nextUrl.origin;
-    const path = `/article/${articleSlug}`;
+    const path = `/article/${tokenArticleSlug}`;
     const defaultUrl = `${baseUrl}${path}`;
-    const targetUrl = url || defaultUrl;
+    const targetUrl = tokenUrl || defaultUrl;
     const separator = targetUrl.includes("?") ? "&" : "?";
     const shareUrl = `${targetUrl}${separator}token=${encodeURIComponent(token)}`;
 
@@ -102,8 +108,8 @@ export async function POST(request: NextRequest) {
       tokenId: payload.tid,
       issuer: payload.iss,
       keyId: payload.kid,
-      contentId: payload.contentId,
-      articleSlug,
+      contentId: tokenContentId,
+      articleSlug: tokenArticleSlug,
       expiresIn,
       maxUses,
       userId,
@@ -115,8 +121,8 @@ export async function POST(request: NextRequest) {
       tokenId: payload.tid,
       issuer: payload.iss,
       keyId: payload.kid,
-      contentId: payload.contentId,
-      articleSlug,
+      contentId: tokenContentId,
+      articleSlug: tokenArticleSlug,
       expiresAt: new Date(payload.exp * 1000).toISOString(),
       shareUrl,
     });

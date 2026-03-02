@@ -38,7 +38,7 @@ export interface WrappedKey {
 export interface EncryptedArticle {
   /** Unique resource identifier (specific page/article) */
   resourceId: string;
-  /** Generic content tier identifier (e.g., "premium") used for key derivation and caching */
+  /** Content name identifier (e.g., "premium", "bodytext") used for key derivation and caching */
   contentId?: string;
   /** Base64-encoded encrypted content */
   encryptedContent: string;
