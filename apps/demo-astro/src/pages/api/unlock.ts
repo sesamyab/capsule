@@ -13,11 +13,16 @@ import { createSubscriptionServer } from "@sesamy/capsule-server";
 import { PERIOD_DURATION_SECONDS, keyProvider } from "../../lib/encryption";
 
 /** Period secret for key derivation */
-const PERIOD_SECRET =
-  import.meta.env.CAPSULE_PERIOD_SECRET ||
-  Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString(
-    "base64"
-  );
+function getPeriodSecret(): string {
+  const secret = import.meta.env.CAPSULE_PERIOD_SECRET;
+  if (secret) return secret;
+  if (import.meta.env.DEV) {
+    console.warn("[capsule] CAPSULE_PERIOD_SECRET not set — using insecure demo fallback (dev only)");
+    return Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString("base64");
+  }
+  throw new Error("CAPSULE_PERIOD_SECRET environment variable is required in production");
+}
+const PERIOD_SECRET = getPeriodSecret();
 
 /**
  * Subscription server instance for handling unlock requests.

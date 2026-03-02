@@ -64,7 +64,10 @@ export function getPeriodExpiration(
   periodId: string,
   periodDurationSeconds: number = DEFAULT_PERIOD_DURATION_SECONDS,
 ): Date {
-  const periodNum = parseInt(periodId);
+  const periodNum = parseInt(periodId, 10);
+  if (isNaN(periodNum)) {
+    throw new Error(`Invalid periodId: "${periodId}"`);
+  }
   const expiresAtMs = (periodNum + 1) * periodDurationSeconds * 1000;
   return new Date(expiresAtMs);
 }

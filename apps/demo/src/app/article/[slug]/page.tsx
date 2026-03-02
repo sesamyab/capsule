@@ -6,6 +6,9 @@ import { DemoLayout } from "@/components/DemoLayout";
 import { KeyManager } from "@/components/KeyManager";
 import { ShareButton } from "@/components/ShareButton";
 
+/** Opt out of static generation — secrets are not available at build time */
+export const dynamic = "force-dynamic";
+
 interface ArticlePageProps {
   params: Promise<{ slug: string }>;
 }

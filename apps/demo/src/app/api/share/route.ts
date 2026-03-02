@@ -1,15 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createTokenManager } from "@sesamy/capsule-server";
-import { TOKEN_SECRET } from "@/lib/capsule";
+import { getTokenSecret } from "@/lib/capsule";
 
 /**
  * Token manager for generating share tokens.
+ * Lazily initialized to avoid calling getTokenSecret() at build time.
  */
-const tokens = createTokenManager({
-  secret: TOKEN_SECRET,
-  issuer: "capsule-demo",
-  keyId: "demo-key-2026",
-});
+let _tokens: ReturnType<typeof createTokenManager> | undefined;
+function getTokens() {
+  if (!_tokens) {
+    _tokens = createTokenManager({
+      secret: getTokenSecret(),
+      issuer: "capsule-demo",
+      keyId: "demo-key-2026",
+    });
+  }
+  return _tokens;
+}
 
 /**
  * POST /api/share
@@ -62,7 +69,7 @@ export async function POST(request: NextRequest) {
     // In the demo, all articles use the "premium" tier for encryption.
     // The contentId in the token must match the tier used during encryption
     // so the server can derive the correct period key for unlocking.
-    const token = await tokens.generate({
+    const token = await getTokens().generate({
       tier: "premium",
       contentId: "premium",
       url,
@@ -73,7 +80,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Extract token info for response
-    const payload = await tokens.peek(token);
+    const payload = await getTokens().peek(token);
     if (!payload) {
       return NextResponse.json(
         { error: "Failed to generate token" },

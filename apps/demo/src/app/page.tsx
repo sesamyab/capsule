@@ -20,7 +20,7 @@ export default function Home() {
               decrypt instantly in the browser.
             </p>
           </div>
-          
+
           <div className="feature-card">
             <div className="feature-icon">🔒</div>
             <h3>Secure by Design</h3>
@@ -29,7 +29,7 @@ export default function Home() {
               the browser, stored with extractable: false.
             </p>
           </div>
-          
+
           <div className="feature-card">
             <div className="feature-icon">🌐</div>
             <h3>Open Standard</h3>
@@ -38,7 +38,7 @@ export default function Home() {
               PHP, Python, or Go.
             </p>
           </div>
-          
+
           <div className="feature-card">
             <div className="feature-icon">🔌</div>
             <h3>No Dependencies</h3>
@@ -100,7 +100,11 @@ export default function Home() {
           browser generates an RSA-OAEP key pair with the private key marked{" "}
           <code>extractable: false</code>. Unsealed keys are RSA-wrapped before
           leaving the issuer, so no readable key material ever crosses the
-          network. Even XSS or DevTools cannot extract the private key bytes.
+          network. Non-extractable keys prevent raw export of the private key,
+          though injected scripts could still invoke crypto operations
+          in-session. Pair this with a strict{" "}
+          <strong>Content-Security-Policy</strong> and trusted-content practices
+          to limit the attack surface further.
         </p>
         <p style={{ maxWidth: "700px", margin: "0 auto", opacity: 0.7, fontSize: "0.9rem" }}>
           Read more in the <Link href="/spec#delegated-content-access-dca">DCA specification</Link>.

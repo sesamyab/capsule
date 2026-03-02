@@ -5,7 +5,7 @@
  * for the demo pages. The actual encryption is handled by CmsServer.
  */
 
-import { cms, PERIOD_DURATION_SECONDS } from "./capsule";
+import { getCms, PERIOD_DURATION_SECONDS } from "./capsule";
 import { hasArticleKey } from "./encryption-keys";
 import type { EncryptedArticle } from "@sesamy/capsule-server";
 
@@ -67,7 +67,7 @@ export async function getEncryptedArticle(
   }
 
   // Use CmsServer to encrypt with key IDs
-  const encrypted = await cms.encrypt(resourceId, article.premiumContent, {
+  const encrypted = await getCms().encrypt(resourceId, article.premiumContent, {
     keyIds,
     contentId: "premium",
   });

@@ -3,29 +3,41 @@ import {
   createSubscriptionServer,
   createTokenManager,
 } from "@sesamy/capsule-server";
+import type { SubscriptionServer, TokenManager } from "@sesamy/capsule-server";
 import {
-  PERIOD_SECRET,
   PERIOD_DURATION_SECONDS,
-  keyProvider,
-  TOKEN_SECRET,
+  getKeyProvider,
+  getTokenSecret,
+  getPeriodSecret,
 } from "@/lib/capsule";
 
-/**
- * Create subscription server with the same period secret as the CMS.
- */
-const server = createSubscriptionServer({
-  periodSecret: PERIOD_SECRET,
-  periodDurationSeconds: PERIOD_DURATION_SECONDS,
-});
+// ---------------------------------------------------------------------------
+// Lazy singletons – avoid calling secret getters at module-init time so that
+// `next build` can collect pages without the env vars being set.
+// ---------------------------------------------------------------------------
 
-/**
- * Token manager for validating pre-signed share tokens.
- */
-const tokens = createTokenManager({
-  secret: TOKEN_SECRET,
-  issuer: "capsule-demo",
-  keyId: "demo-key-2026",
-});
+let _server: SubscriptionServer | undefined;
+function getServer() {
+  if (!_server) {
+    _server = createSubscriptionServer({
+      periodSecret: getPeriodSecret(),
+      periodDurationSeconds: PERIOD_DURATION_SECONDS,
+    });
+  }
+  return _server;
+}
+
+let _tokens: TokenManager | undefined;
+function getTokens() {
+  if (!_tokens) {
+    _tokens = createTokenManager({
+      secret: getTokenSecret(),
+      issuer: "capsule-demo",
+      keyId: "demo-key-2026",
+    });
+  }
+  return _tokens;
+}
 
 /**
  * POST /api/unlock
@@ -94,7 +106,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Validate the token
-      const validation = await tokens.validate(token);
+      const validation = await getTokens().validate(token);
       if (!validation.valid) {
         console.log(
           `Token validation failed: ${validation.error} - ${validation.message}`,
@@ -128,7 +140,7 @@ export async function POST(request: NextRequest) {
       // This would require a Redis/DB lookup to track usage
 
       // Unlock using the token (validates contentId matches)
-      const result = await server.unlockWithToken(
+      const result = await getServer().unlockWithToken(
         payload,
         wrappedContentKey,
         publicKey,
@@ -172,7 +184,7 @@ export async function POST(request: NextRequest) {
       const contentId = keyId.substring(0, colonIndex);
       const periodId = keyId.substring(colonIndex + 1);
 
-      const result = await server.getSharedKeyForUser(contentId, periodId, publicKey);
+      const result = await getServer().getSharedKeyForUser(contentId, periodId, publicKey);
 
       return NextResponse.json({
         ...result,
@@ -193,7 +205,7 @@ export async function POST(request: NextRequest) {
     const staticKeyLookup = async (keyId: string): Promise<Uint8Array | null> => {
       if (keyId.startsWith("article:")) {
         const contentId = keyId.slice(8);
-        const keyEntry = await keyProvider.getArticleKey(contentId);
+        const keyEntry = await getKeyProvider().getArticleKey(contentId);
         if (keyEntry.key instanceof Uint8Array) {
           return keyEntry.key;
         }
@@ -208,7 +220,7 @@ export async function POST(request: NextRequest) {
       return null;
     };
 
-    const result = await server.unlockForUser(
+    const result = await getServer().unlockForUser(
       { keyId, wrappedContentKey },
       publicKey,
       staticKeyLookup,
