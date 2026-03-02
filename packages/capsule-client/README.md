@@ -5,13 +5,13 @@ Browser-side decryption library for the Capsule secure article-locking system.
 ## Features
 
 - **Zero-Config Setup**: Keys auto-generated on first use, no manual initialization required
-- **Tier Key Caching**: Fetch tier key once, decrypt all articles in that tier locally (zero per-article network calls)
+- **Shared Key Caching**: Fetch shared key once, decrypt all articles in that content group locally (zero per-article network calls)
 - **High-Level API**: Unlock content with a single function call, or go low-level for full control
 - **HTML Processing**: Automatically finds encrypted elements, decrypts, and renders content
 - **Script Execution**: Embedded `<script>` tags in decrypted content are executed (configurable)
 - **Custom Events**: Listen for `capsule:unlock`, `capsule:error`, and `capsule:state` events
-- **DEK Caching**: Encrypted DEKs cached in memory, sessionStorage, or IndexedDB
-- **Auto-Renewal**: DEKs and tier keys automatically renewed before expiry
+- **Content Key Caching**: Encrypted content keys cached in memory, sessionStorage, or IndexedDB
+- **Auto-Renewal**: Content keys and shared keys automatically renewed before expiry
 - **Secure Key Storage**: RSA private keys stored with `extractable: false` in IndexedDB
 - **Web Crypto API**: Uses native browser cryptography for maximum security
 
@@ -29,13 +29,13 @@ npm install @sesamy/capsule
 import { CapsuleClient } from "@sesamy/capsule";
 
 const capsule = new CapsuleClient({
-  unlock: async ({ keyId, wrappedDek, publicKey, resourceId }) => {
+  unlock: async ({ keyId, wrappedContentKey, publicKey, resourceId }) => {
     const res = await fetch("/api/unlock", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+      body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
     });
-    return res.json(); // { encryptedDek, expiresAt }
+    return res.json(); // { encryptedContentKey, expiresAt }
   },
 });
 
@@ -83,54 +83,54 @@ When unlocked, the element's content is replaced with the decrypted HTML.
 
 Capsule supports two key modes, selected automatically based on the server's response:
 
-### Tier Key Mode (`keyType: "kek"`) — Recommended for Subscribers
+### Shared Key Mode (`keyType: "kek"`) — Recommended for Subscribers
 
-The server returns the tier's key-wrapping key (KEK), and the client caches it. All subsequent articles in the same tier are decrypted **locally** with zero network calls:
+The server returns the shared key-wrapping key (KEK), and the client caches it. All subsequent articles in the same content group are decrypted **locally** with zero network calls:
 
 ```
-First article:   Client → Server (fetch tier key) → cache KEK → decrypt locally
+First article:   Client → Server (fetch shared key) → cache KEK → decrypt locally
 Second article:  Client → decrypt locally (no server call!)
 Third article:   Client → decrypt locally (no server call!)
 ```
 
 ```typescript
 const capsule = new CapsuleClient({
-  unlock: async ({ keyId, wrappedDek, publicKey, mode }) => {
+  unlock: async ({ keyId, wrappedContentKey, publicKey, mode }) => {
     const res = await fetch("/api/unlock", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keyId, wrappedDek, publicKey, mode }),
+      body: JSON.stringify({ keyId, wrappedContentKey, publicKey, mode }),
     });
-    return res.json(); // { encryptedDek, expiresAt, keyType: "kek" }
+    return res.json(); // { encryptedContentKey, expiresAt, keyType: "kek" }
   },
 });
 
-// First call fetches tier key, second and beyond are local
+// First call fetches shared key, second and beyond are local
 await capsule.unlock(article1); // → 1 server call
 await capsule.unlock(article2); // → 0 server calls
 await capsule.unlock(article3); // → 0 server calls
 ```
 
-### Per-Article DEK Mode (`keyType: "dek"`) — Share Links & Purchases
+### Per-Article Content Key Mode (`keyType: "dek"`) — Share Links & Purchases
 
-The server unwraps the specific article's DEK and returns it. Each article requires a server call:
+The server unwraps the specific article's content key and returns it. Each article requires a server call:
 
 ```typescript
-// Token-based unlock (share links) always uses per-article DEK mode
+// Token-based unlock (share links) always uses per-article content key mode
 await capsule.unlockWithToken(article, token);
 ```
 
-### Pre-fetching Tier Keys
+### Pre-fetching Shared Keys
 
-Optionally pre-warm the tier key cache before processing a batch:
+Optionally pre-warm the shared key cache before processing a batch:
 
 ```typescript
-// Get a tier keyId from any article
-const tierKeyId = articles[0].wrappedKeys
+// Get a shared keyId from any article
+const sharedKeyId = articles[0].wrappedKeys
   .find(k => !k.keyId.startsWith('article:'))?.keyId;
 
-if (tierKeyId) {
-  await capsule.prefetchTierKey(tierKeyId); // 1 server call
+if (sharedKeyId) {
+  await capsule.prefetchSharedKey(sharedKeyId); // 1 server call
 }
 
 // All unlocks are now local
@@ -144,7 +144,7 @@ const results = await Promise.all(
 ```typescript
 interface CapsuleClientOptions {
   // Required for automatic unlocking
-  unlock?: UnlockFunction; // Async function to fetch encrypted DEK from server
+  unlock?: UnlockFunction; // Async function to fetch encrypted content key from server
 
   // Key settings
   keySize?: 2048 | 4096; // RSA key size (default: 2048)
@@ -154,8 +154,8 @@ interface CapsuleClientOptions {
   executeScripts?: boolean; // Execute <script> tags in decrypted content (default: true)
   selector?: string; // CSS selector for encrypted elements (default: '[data-capsule]')
 
-  // DEK caching
-  dekStorage?: "memory" | "session" | "persist"; // How to store DEKs (default: 'persist')
+  // Content key caching
+  contentKeyStorage?: "memory" | "session" | "persist"; // How to store content keys (default: 'persist')
   renewBuffer?: number; // Ms before expiry to auto-renew (default: 5000)
 
   // Storage
@@ -201,32 +201,32 @@ for (const [id, result] of results) {
 }
 ```
 
-#### `unlock(article: EncryptedArticle, preferredKeyType?: 'tier' | 'article'): Promise<string>`
+#### `unlock(article: EncryptedArticle, preferredKeyType?: 'shared' | 'article'): Promise<string>`
 
 Decrypt an encrypted article. This is the main method and handles the full flow:
 
-1. **Cached tier key?** → Unwrap DEK locally (zero network)
-2. **Cached DEK?** → Decrypt directly
-3. **Fetch from server** → If server returns `keyType: "kek"`, cache tier key and unwrap locally. If `keyType: "dek"`, decrypt directly.
+1. **Cached shared key?** → Unwrap content key locally (zero network)
+2. **Cached content key?** → Decrypt directly
+3. **Fetch from server** → If server returns `keyType: "kek"`, cache shared key and unwrap locally. If `keyType: "dek"`, decrypt directly.
 
-After the first article in a tier triggers a server call, all subsequent articles in the same tier and time bucket are decrypted locally — no additional server requests.
+After the first article in a content group triggers a server call, all subsequent articles in the same group and time period are decrypted locally — no additional server requests.
 
 ```typescript
 const article = JSON.parse(element.dataset.capsule);
-const content = await capsule.unlock(article, "tier");
+const content = await capsule.unlock(article, "shared");
 ```
 
-#### `prefetchTierKey(keyId: string): Promise<{ expiresAt: number; bucketId: string }>`
+#### `prefetchSharedKey(keyId: string): Promise<{ expiresAt: number; periodId: string }>`
 
-Pre-fetch and cache a tier's key-wrapping key. Optional — `unlock()` does this automatically on first call. Use this to pre-warm the cache before processing a batch of articles.
+Pre-fetch and cache a shared key-wrapping key. Optional — `unlock()` does this automatically on first call. Use this to pre-warm the cache before processing a batch of articles.
 
 ```typescript
-// Pre-fetch the tier key from the first article's wrappedKeys
-const tierKeyId = articles[0].wrappedKeys
+// Pre-fetch the shared key from the first article's wrappedKeys
+const sharedKeyId = articles[0].wrappedKeys
   .find(k => !k.keyId.startsWith('article:'))?.keyId;
 
-if (tierKeyId) {
-  await capsule.prefetchTierKey(tierKeyId);
+if (sharedKeyId) {
+  await capsule.prefetchSharedKey(sharedKeyId);
 }
 
 // Now all unlocks are local (zero server calls)
@@ -253,15 +253,15 @@ if (token) {
 
 ### Low-Level Methods
 
-#### `decrypt(article: EncryptedArticle, encryptedDek: string): Promise<string>`
+#### `decrypt(article: EncryptedArticle, encryptedContentKey: string): Promise<string>`
 
-Decrypt content with a pre-fetched encrypted DEK. For full manual control.
+Decrypt content with a pre-fetched encrypted content key. For full manual control.
 
 ```typescript
 // Manual flow
 const publicKey = await capsule.getPublicKey();
-const { encryptedDek } = await myServerCall(publicKey, article.wrappedKeys[0]);
-const content = await capsule.decrypt(article, encryptedDek);
+const { encryptedContentKey } = await myServerCall(publicKey, article.wrappedKeys[0]);
+const content = await capsule.decrypt(article, encryptedContentKey);
 ```
 
 #### `decryptPayload(payload: EncryptedPayload): Promise<string>`
@@ -272,7 +272,7 @@ Decrypt a simple single-key payload (no envelope encryption).
 const content = await capsule.decryptPayload({
   encryptedContent: "...",
   iv: "...",
-  encryptedDek: "...",
+  encryptedContentKey: "...",
 });
 ```
 
@@ -292,7 +292,7 @@ Generate a new key pair, replacing any existing one.
 
 #### `clearAll(): Promise<void>`
 
-Clear all stored keys and cached DEKs.
+Clear all stored keys and cached content keys.
 
 #### `getElementState(resourceId: string): ElementState | undefined`
 
@@ -348,41 +348,41 @@ The `unlock` function is called when content needs to be decrypted but no cached
 
 ```typescript
 type UnlockFunction = (params: {
-  keyId: string; // Key ID from wrappedKeys (e.g., "premium:bucket123")
-  wrappedDek: string; // CMK-encrypted DEK from the article
+  keyId: string; // Key ID from wrappedKeys (e.g., "premium:period123")
+  wrappedContentKey: string; // CMK-encrypted content key from the article
   publicKey: string; // User's public key (Base64 SPKI)
   resourceId: string; // Article being unlocked
-  mode?: "tier"; // When present, request the tier's KEK instead of a per-article DEK
+  mode?: "shared"; // When present, request the shared KEK instead of a per-article content key
 }) => Promise<{
-  encryptedDek: string; // Key encrypted with user's public key (DEK or KEK)
+  encryptedContentKey: string; // Key encrypted with user's public key (content key or KEK)
   expiresAt: string | number; // When the key expires
-  bucketId?: string; // Bucket ID for time-based keys
-  bucketPeriodSeconds?: number;
-  keyType?: "kek" | "dek"; // What encryptedDek contains (see below)
+  periodId?: string; // Period ID for time-based keys
+  periodDurationSeconds?: number;
+  keyType?: "kek" | "dek"; // What encryptedContentKey contains (see below)
 }>;
 ```
 
 ### Response `keyType` Field
 
-| `keyType` | What `encryptedDek` contains | Client behavior |
-|-----------|------------------------------|------------------|
-| `"kek"` | Tier key-wrapping key (AES-256) | Cache tier key, unwrap all article DEKs locally |
+| `keyType` | What `encryptedContentKey` contains | Client behavior |
+|-----------|-------------------------------------|------------------|
+| `"kek"` | Shared key-wrapping key (AES-256) | Cache shared key, unwrap all article content keys locally |
 | `"dek"` | Article's data encryption key | Decrypt content directly |
-| _(absent)_ | Article's DEK (backward compat) | Decrypt content directly |
+| _(absent)_ | Article's content key (backward compat) | Decrypt content directly |
 
-When the server returns `keyType: "kek"`, the client caches the tier key and uses it to locally unwrap every article's `wrappedDek` — no per-article server calls needed.
+When the server returns `keyType: "kek"`, the client caches the shared key and uses it to locally unwrap every article's `wrappedContentKey` — no per-article server calls needed.
 
 Example implementation:
 
 ```typescript
-const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey, mode }) => {
+const unlock: UnlockFunction = async ({ keyId, wrappedContentKey, publicKey, mode }) => {
   const response = await fetch("/api/unlock", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${getAuthToken()}`,
     },
-    body: JSON.stringify({ keyId, wrappedDek, publicKey, mode }),
+    body: JSON.stringify({ keyId, wrappedContentKey, publicKey, mode }),
   });
 
   if (!response.ok) {
@@ -403,7 +403,7 @@ Capsule supports pre-signed share tokens for unlocking content without user auth
 2. **Share URL is created**: `https://example.com/article/xyz?token=eyJhbGc...`
 3. **Reader clicks link** - no login required
 4. **Client detects token** and calls `unlockWithToken()`
-5. **Server validates token** and returns DEK wrapped for the client
+5. **Server validates token** and returns content key wrapped for the client
 6. **Content is decrypted** just like a normal unlock
 
 ### Implementation
@@ -413,14 +413,14 @@ import { CapsuleClient } from "@sesamy/capsule";
 
 // Create client with token-aware unlock function
 const capsule = new CapsuleClient({
-  unlock: async ({ keyId, wrappedDek, publicKey, token, resourceId }) => {
+  unlock: async ({ keyId, wrappedContentKey, publicKey, token, resourceId }) => {
     // Token is automatically passed if using unlockWithToken()
     const response = await fetch("/api/unlock", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         token, // Pre-signed share token (if present)
-        wrappedDek,
+        wrappedContentKey,
         publicKey,
         resourceId,
         keyId, // Fallback for non-token unlock
@@ -850,11 +850,11 @@ validator.clearCache();
 
 ### Signing Key Rotation
 
-Token signing keys are **separate from time bucket keys**:
+Token signing keys are **separate from time period keys**:
 
 | Key Type           | Purpose                | Rotation                    |
 | ------------------ | ---------------------- | --------------------------- |
-| Time bucket keys   | Wrap content DEKs      | Every 15 minutes            |
+| Time period keys   | Wrap content keys      | Every 15 minutes            |
 | Token signing keys | Sign share link tokens | Infrequently (months/years) |
 
 Signing keys must be long-lived because share links may be valid for 30+ days.
@@ -993,9 +993,9 @@ interface JwksValidationFailure {
 | **Cross-domain**   | Requires secret sharing   | Works without sharing secrets   |
 | **Best for**       | First-party tokens        | Third-party/partner tokens      |
 
-## DEK Storage Modes
+## Content Key Storage Modes
 
-Control how decrypted DEKs are cached:
+Control how decrypted content keys are cached:
 
 | Mode        | Storage           | Persistence              | Use Case             |
 | ----------- | ----------------- | ------------------------ | -------------------- |
@@ -1003,7 +1003,7 @@ Control how decrypted DEKs are cached:
 | `'session'` | sessionStorage    | Lost when tab closes     | Balance security/UX  |
 | `'persist'` | IndexedDB         | Survives browser restart | Best offline support |
 
-Note: DEKs are stored **encrypted** with the user's public key. They must be unwrapped using the private key (which never leaves the browser's secure crypto subsystem).
+Note: Content keys are stored **encrypted** with the user's public key. They must be unwrapped using the private key (which never leaves the browser's secure crypto subsystem).
 
 ## Security Model
 
@@ -1027,7 +1027,7 @@ const privateKey = await crypto.subtle.importKey(
 
 This means:
 
-- ✅ **The key can be used** for cryptographic operations (unwrapping DEKs)
+- ✅ **The key can be used** for cryptographic operations (unwrapping content keys)
 - ❌ **The key cannot be exported** in any format (JWK, PKCS8, raw bytes)
 - ❌ **The key cannot be copied** to another device or browser
 - ❌ **The key cannot be downloaded** or sent to a server
@@ -1081,15 +1081,15 @@ The key pair has different extractability settings for important reasons:
 - **Public Key**: `extractable: true`
   - Must be exported to SPKI format and sent to the server
   - Safe to share - it can only _encrypt_, not _decrypt_
-  - Server uses it to wrap DEKs before sending to client
+  - Server uses it to wrap content keys before sending to client
 - **Private Key**: `extractable: false`
   - Must stay locked in the browser's crypto engine
-  - Can only be used for unwrapping DEKs, never exported
+  - Can only be used for unwrapping content keys, never exported
   - Guarantees end-to-end encryption - server never has decrypt capability
 
 ### Additional Security Layers
 
-1. **DEKs in Memory Only**: Unwrapped DEKs are cached in JavaScript memory (not persisted) and lost on page refresh
+1. **Content Keys in Memory Only**: Unwrapped content keys are cached in JavaScript memory (not persisted) and lost on page refresh
 2. **AES-GCM Authentication**: 128-bit auth tags prevent tampering with encrypted content
 3. **Web Crypto API**: Uses hardware-accelerated cryptography when available (TPM, Secure Enclave)
 4. **Secure Context Requirement**: Web Crypto API only works over HTTPS or localhost
@@ -1097,16 +1097,16 @@ The key pair has different extractability settings for important reasons:
 
 ### What This Means for Your Application
 
-✅ **Server compromise cannot leak user keys** - They're not on the server  
-✅ **Database breach cannot decrypt content** - Private keys are client-side only  
-✅ **Network eavesdropping is ineffective** - Only wrapped DEKs are transmitted  
-✅ **Users cannot accidentally export their keys** - Browser prevents it  
+✅ **Server compromise cannot leak user keys** - They're not on the server
+✅ **Database breach cannot decrypt content** - Private keys are client-side only
+✅ **Network eavesdropping is ineffective** - Only wrapped content keys are transmitted
+✅ **Users cannot accidentally export their keys** - Browser prevents it
 ✅ **True end-to-end encryption** - Only the user's browser can decrypt
 
 ### Limitations and Trade-offs
 
-⚠️ **Key loss means data loss**: If a user clears browser data or switches devices, they lose access  
-⚠️ **No cross-device sync**: Keys are tied to a single browser profile  
+⚠️ **Key loss means data loss**: If a user clears browser data or switches devices, they lose access
+⚠️ **No cross-device sync**: Keys are tied to a single browser profile
 ⚠️ **XSS can still abuse keys**: Malicious code can decrypt content (though not steal keys)
 
 Consider implementing:

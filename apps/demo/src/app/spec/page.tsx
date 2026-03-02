@@ -850,10 +850,10 @@ if (result.valid && !result.expired) {
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                4. Server unwraps content key
+                4. Server authorizes &amp; unwraps
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Uses period key from token's contentId to unwrap
+                Checks <code>token.contentId</code> matches the requested content, then derives the period key (from period secret + time bucket) and unwraps the content key
               </td>
             </tr>
             <tr>
