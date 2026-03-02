@@ -5,22 +5,22 @@
  *
  * This package provides:
  * - CmsServer for encrypting content (works with any key source)
- * - TotpKeyProvider for TOTP-based key derivation
+ * - PeriodKeyProvider for period-based key derivation
  * - SubscriptionServer for handling unlock requests
  * - Envelope encryption with AES-256-GCM
  *
- * @example Quick Start with TOTP
+ * @example Quick Start with Period Key Provider
  * ```typescript
- * import { createCmsServer, createTotpKeyProvider, createSubscriptionServer } from '@sesamy/capsule-server';
+ * import { createCmsServer, createPeriodKeyProvider, createSubscriptionServer } from '@sesamy/capsule-server';
  *
- * // Create TOTP key provider (derives keys from master secret)
- * const totp = createTotpKeyProvider({
- *   masterSecret: process.env.MASTER_SECRET,
+ * // Create period key provider (derives keys from period secret)
+ * const keyProvider = createPeriodKeyProvider({
+ *   periodSecret: process.env.PERIOD_SECRET,
  * });
  *
  * // CMS side: encrypt content
  * const cms = createCmsServer({
- *   getKeys: (keyIds) => totp.getKeys(keyIds),
+ *   getKeys: (keyIds) => keyProvider.getKeys(keyIds),
  * });
  *
  * const encrypted = await cms.encrypt('article-123', content, {
@@ -29,7 +29,7 @@
  *
  * // Subscription side: handle unlock requests
  * const server = createSubscriptionServer({
- *   masterSecret: process.env.MASTER_SECRET,
+ *   periodSecret: process.env.PERIOD_SECRET,
  * });
  *
  * app.post('/api/unlock', async (req) => {
@@ -68,18 +68,14 @@ export {
   type EncryptOptions,
   type KeyEntry,
   type KeyProvider,
-  // TOTP Key Provider
-  TotpKeyProvider,
-  createTotpKeyProvider,
-  type TotpKeyProviderOptions,
-  // Legacy aliases (deprecated)
-  CapsuleServer,
-  createCapsule,
-  type CapsuleServerOptions,
+  // Period Key Provider
+  PeriodKeyProvider,
+  createPeriodKeyProvider,
+  type PeriodKeyProviderOptions,
 } from "./capsule";
 
 // CMS encryption (low-level)
-export { CmsEncryptor, createTotpEncryptor, createApiEncryptor } from "./cms";
+export { CmsEncryptor, createPeriodEncryptor, createApiEncryptor } from "./cms";
 
 // Subscription server
 export {
@@ -118,39 +114,129 @@ export {
 export {
   encryptContent,
   decryptContent,
-  wrapDek,
-  unwrapDek,
-  generateDek,
+  wrapContentKey,
+  unwrapContentKey,
+  generateContentKey,
   generateIv,
   GCM_IV_SIZE,
   GCM_TAG_LENGTH,
   AES_KEY_SIZE,
 } from "./encryption";
 
-// Time-bucket utilities
+// Time-period utilities
 export {
-  deriveBucketKey,
-  getBucketKeys,
-  getBucketKey,
-  getCurrentBucket,
-  getNextBucket,
-  getPreviousBucket,
-  getBucketExpiration,
-  getBucketId,
-  isBucketValid,
-  generateMasterSecret,
+  derivePeriodKey,
+  getPeriodKeys,
+  getPeriodKey,
+  getCurrentPeriod,
+  getNextPeriod,
+  getPreviousPeriod,
+  getPeriodExpiration,
+  getPeriodId,
+  isPeriodValid,
   hkdf,
-  DEFAULT_BUCKET_PERIOD_SECONDS,
-} from "./time-buckets";
+  DEFAULT_PERIOD_DURATION_SECONDS,
+} from "./time-periods";
 
 // Types
 export type {
   EncryptedArticle,
   WrappedKey,
   KeyWrapConfig,
-  BucketKey,
+  PeriodKey,
   CmsEncryptorOptions,
   SubscriptionClientOptions,
-  BucketKeysResponse,
+  PeriodKeysResponse,
   UnlockResponse,
 } from "./types";
+
+// ============================================================================
+// DCA (Delegated Content Access) standard support
+// ============================================================================
+
+// DCA Publisher
+export { createDcaPublisher } from "./dca-publisher";
+
+// DCA Issuer
+export {
+  createDcaIssuer,
+  type DcaAccessDecision,
+  type DcaVerifiedRequest,
+} from "./dca-issuer";
+
+// DCA JWT (ES256 signing & integrity proofs)
+export {
+  createJwt,
+  verifyJwt,
+  decodeJwtPayload,
+  createResourceJwt,
+  createIssuerJwt,
+  verifyIssuerProof,
+  computeProofHash,
+} from "./dca-jwt";
+
+// DCA Seal (ECDH P-256 / RSA-OAEP key sealing)
+export {
+  sealEcdhP256,
+  unsealEcdhP256,
+  sealRsaOaep,
+  unsealRsaOaep,
+  seal,
+  unseal,
+  importIssuerPublicKey,
+  importIssuerPrivateKey,
+  type DcaSealAlgorithm,
+} from "./dca-seal";
+
+// DCA Time Buckets
+export {
+  formatTimeBucket,
+  getCurrentTimeBuckets,
+  deriveDcaPeriodKey,
+  generateRenderId,
+} from "./dca-time-buckets";
+
+// DCA Types
+export type {
+  DcaData,
+  DcaResource,
+  DcaContentSealData,
+  DcaSealedContentKey,
+  DcaIssuerEntry,
+  DcaIssuerSealed,
+  DcaIssuerJwtPayload,
+  DcaIssuerProof,
+  DcaJsonApiResponse,
+  DcaPublisherConfig,
+  DcaContentItem,
+  DcaIssuerConfig,
+  DcaRenderOptions,
+  DcaRenderResult,
+  DcaIssuerServerConfig,
+  DcaTrustedPublisher,
+  DcaUnlockRequest,
+  DcaUnlockResponse,
+  DcaUnlockedKeys,
+} from "./dca-types";
+
+// Low-level crypto primitives (ECDH, ECDSA, RSA, SHA-256)
+export {
+  sha256,
+  generateEcdhP256KeyPair,
+  exportEcdhP256PublicKeyRaw,
+  importEcdhP256PublicKeyRaw,
+  importEcdhP256PublicKey,
+  importEcdhP256PrivateKey,
+  ecdhDeriveBits,
+  generateEcdsaP256KeyPair,
+  importEcdsaP256PrivateKey,
+  importEcdsaP256PublicKey,
+  ecdsaP256Sign,
+  ecdsaP256Verify,
+  exportP256KeyPairPem,
+  parsePem,
+  importRsaPublicKey,
+  rsaOaepEncrypt,
+  importRsaPrivateKey,
+  rsaOaepDecrypt,
+} from "./web-crypto";

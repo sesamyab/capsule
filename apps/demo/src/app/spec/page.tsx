@@ -14,106 +14,195 @@ export default function SpecPage() {
 
         <h2>Architecture Overview</h2>
         <p>
-          Capsule uses <strong>envelope encryption</strong>, combining the
-          efficiency of symmetric encryption (AES-256-GCM) with the key
-          management benefits of asymmetric encryption (RSA-OAEP).
+          Capsule uses the <strong>Delegated Content Access (DCA)</strong>{" "}
+          protocol, which separates content encryption (publisher) from access
+          control (issuer). The publisher encrypts content with AES-256-GCM and
+          seals keys for each issuer using ECDH P-256. Issuers unseal keys only
+          when access is granted, and the client decrypts content locally in the
+          browser.
         </p>
+        <h3>Roles</h3>
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            marginTop: "1rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid #333" }}>Role</th>
+              <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid #333" }}>Responsibility</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Publisher</strong></td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Encrypts content at render time. Seals per-content keys for each issuer with ECDH P-256. Signs a <code>resourceJWT</code> (ES256) binding metadata and an <code>issuerJWT</code> proving sealed-blob integrity (SHA-256 hashes).</td>
+            </tr>
+            <tr>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Issuer</strong></td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Owns an ECDH P-256 key pair. On unlock, verifies both JWTs, checks integrity proofs, unseals keys, and returns them to the client.</td>
+            </tr>
+            <tr>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Client</strong></td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Parses DCA data from the page, calls the issuer's unlock endpoint, receives keys, and decrypts content locally with AES-256-GCM.</td>
+            </tr>
+          </tbody>
+        </table>
 
         <h2>Encryption Flow</h2>
-
-        <h3>1. Server-Side Pre-Encryption</h3>
+        <h3>Content Encryption</h3>
         <p>
-          Content is encrypted at build time or when published. A unique Data
-          Encryption Key (DEK) is generated for each article, then wrapped with
-          one or more key-wrapping keys to enable different unlock paths.
+          The publisher generates a random <strong>contentKey</strong> (256-bit AES)
+          and optional rotating <strong>periodKeys</strong> per content item, then
+          encrypts content with AES-256-GCM using a random nonce and an AAD string.
+          The contentKey is additionally wrapped with each periodKey so the issuer
+          can grant either content-level or period-level access.
         </p>
-        <CodeBlock>{`// Generate unique DEK for this article
-const contentDek = randomBytes(32); // 256-bit AES key
+        <CodeBlock>{`// Publisher render (server-side)
+const result = await publisher.render({
+  resourceId: "article-123",
+  contentItems: [
+    { contentName: "bodytext", content: "<p>Premium content…</p>" },
+  ],
+  issuers: [
+    {
+      issuerName: "sesamy",
+      publicKeyPem: ISSUER_ECDH_PUBLIC_KEY_PEM,
+      keyId: "issuer-key-1",
+      unlockUrl: "https://issuer.example.com/api/unlock",
+      contentNames: ["bodytext"],
+    },
+  ],
+});
 
-// Generate unique IV for this article
-const iv = randomBytes(12); // 96 bits for GCM
+// result.html.dcaDataScript → <script class="dca-data">…</script>
+// result.html.sealedContentTemplate → <template class="dca-sealed-content">…</template>`}</CodeBlock>
 
-// Encrypt content ONCE with AES-256-GCM
-const cipher = createCipheriv("aes-256-gcm", contentDek, iv);
-const encrypted = Buffer.concat([
-  cipher.update(content),
-  cipher.final(),
-  cipher.getAuthTag() // 128-bit authentication tag
-]);
-
-// Wrap the DEK with multiple key-wrapping keys
-const wrappedKeys = {
-  // Time-bucket keys for subscription access (rotates every 15 min)
-  [\`premium:\${currentBucketId}\`]: wrapKey(contentDek, currentBucketKey),
-  [\`premium:\${nextBucketId}\`]: wrapKey(contentDek, nextBucketKey),
-  
-  // Static key for per-article purchase (permanent)
-  [\`article:\${articleId}\`]: wrapKey(contentDek, articleSpecificKey),
-};
-
-// Result: { encryptedContent, iv, wrappedKeys }`}</CodeBlock>
-
-        <h3>2. HTML Embedding</h3>
+        <h3>Key Sealing (Publisher → Issuer)</h3>
         <p>
-          Encrypted content is embedded in the server-rendered HTML using an
-          inert <code>&lt;template&gt;</code> element for encrypted data and a
-          sibling placeholder for the locked-state UI. The template is fully
-          inert — no images load, no scripts run, no screen reader noise, no
-          layout impact. On unlock, the client reads from the template, decrypts,
-          replaces the placeholder, and removes the template.
+          For each issuer, the publisher uses <strong>ECDH P-256</strong> key
+          agreement to derive a shared secret, then wraps the contentKey and
+          periodKeys with AES-256-GCM. The resulting opaque blobs are stored in{" "}
+          <code>issuerData</code>. Only the matching issuer private key can
+          unseal them.
         </p>
-        <CodeBlock>{`<!-- Encrypted data (inert) -->
-<template
-  data-capsule='{"articleId":"article-123","encryptedContent":"base64...","iv":"base64...","wrappedKeys":[
-    {"keyId":"premium:123456","wrappedDek":"base64..."},
-    {"keyId":"premium:123457","wrappedDek":"base64..."},
-    {"keyId":"article:crypto-guide","wrappedDek":"base64..."}
-  ]}'
-  data-capsule-id="article-123"
-></template>
-<!-- Visible placeholder (replaced on unlock) -->
-<div data-capsule-placeholder="article-123">
-  <p>Subscribe to unlock this article...</p>
-</div>`}</CodeBlock>
+        <CodeBlock>{`// Sealing internals (automatic during render)
+// 1. Ephemeral ECDH P-256 key pair generated per seal operation
+// 2. ECDH shared secret derived: ephemeralPrivate × issuerPublic
+// 3. HKDF extract-and-expand → 256-bit wrapping key
+// 4. AES-256-GCM wrap each key with a unique 12-byte nonce
+// 5. Sealed blob = ephemeralPublicKey ‖ nonce ‖ ciphertext ‖ tag`}</CodeBlock>
 
-        <h3>3. Client Key Generation</h3>
+        <h3>Integrity Proofs</h3>
         <p>
-          On first visit, the browser generates an RSA-OAEP key pair using the
-          Web Crypto API. The private key is stored in IndexedDB with{" "}
-          <code>extractable: false</code>, ensuring it cannot be exported or
-          accessed outside the crypto engine.
+          The publisher signs an <code>issuerJWT</code> for each issuer containing
+          SHA-256 hashes of every sealed blob. On unlock, the issuer verifies these
+          hashes before unsealing — preventing a tampered page from tricking the
+          issuer into revealing keys for content it didn't encrypt.
         </p>
-        <CodeBlock>{`const keyPair = await crypto.subtle.generateKey(
-  {
-    name: "RSA-OAEP",
-    modulusLength: 2048,
-    publicExponent: new Uint8Array([0x01, 0x00, 0x01]), // 65537
-    hash: "SHA-256",
+        <CodeBlock>{`// issuerJWT payload (signed by publisher's ES256 key)
+{
+  "renderId": "abc123…",           // Binds to resourceJWT
+  "issuerName": "sesamy",
+  "proof": {
+    "bodytext": {
+      "contentKey": "base64url(SHA-256(sealedContentKeyBlob))",
+      "periodKeys": {
+        "251023T13": "base64url(SHA-256(sealedPeriodKeyBlob))"
+      }
+    }
+  }
+}`}</CodeBlock>
+
+        <h3>DCA HTML Embedding</h3>
+        <p>
+          DCA data and sealed content are embedded using two elements. The{" "}
+          <code>&lt;script&gt;</code> tag holds all metadata, JWTs, and sealed keys.
+          The <code>&lt;template&gt;</code> tag holds the encrypted content blobs
+          (inert — no scripts execute, no images load).
+        </p>
+        <CodeBlock>{`<!-- DCA metadata + sealed keys -->
+<script type="application/json" class="dca-data">
+{
+  "version": "1",
+  "resource": {
+    "renderId": "abc123",
+    "domain": "news.example.com",
+    "resourceId": "article-123",
+    "issuedAt": "2025-01-15T12:00:00Z",
+    "data": { "section": "politics", "date.published": "2025-10-20T10:30:00Z" }
   },
-  true, // extractable - needed to export public key and re-import private key
-  ["wrapKey", "unwrapKey"]
-);
+  "resourceJWT": "eyJ…",
+  "issuerJWT": { "sesamy": "eyJ…" },
+  "contentSealData": {
+    "bodytext": { "contentType": "text/html", "nonce": "…", "aad": "…" }
+  },
+  "sealedContentKeys": {
+    "bodytext": [{ "t": "251023T13", "nonce": "…", "key": "…" }]
+  },
+  "issuerData": {
+    "sesamy": {
+      "sealed": {
+        "bodytext": {
+          "contentKey": "base64url-sealed-blob",
+          "periodKeys": { "251023T13": "base64url-sealed-blob" }
+        }
+      },
+      "unlockUrl": "https://issuer.example.com/api/unlock",
+      "keyId": "issuer-key-1"
+    }
+  }
+}
+</script>
 
-// Export and re-import private key as non-extractable
-const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-const nonExtractablePrivateKey = await crypto.subtle.importKey(
-  'jwk',
-  privateKeyJwk,
-  { name: 'RSA-OAEP', hash: 'SHA-256' },
-  false, // NOT extractable - key material cannot be exported
-  ['unwrapKey']
-);
+<!-- Encrypted content (inert) -->
+<template class="dca-sealed-content">
+  <div data-dca-content-name="bodytext">base64url-encrypted-content…</div>
+</template>`}</CodeBlock>
 
-// Store in IndexedDB
-await indexedDB.put("keypair", {
-  publicKey: keyPair.publicKey,   // extractable: true
-  privateKey: nonExtractablePrivateKey  // extractable: false
-});`}</CodeBlock>
-
-        <h4>Why Different Extractability?</h4>
+        <h3>Unlock Flow</h3>
         <p>
-          The public and private keys have different <code>extractable</code>{" "}
-          settings for important security and functional reasons:
+          When the client calls the issuer's unlock endpoint, the issuer performs
+          a multi-step verification before returning keys:
+        </p>
+        <ol>
+          <li>Verify <code>resourceJWT</code> signature (ES256) using the publisher's public key, looked up by <code>resource.domain</code>.</li>
+          <li>Verify <code>issuerJWT</code> signature with the same publisher key; check that <code>renderId</code> matches.</li>
+          <li>Verify integrity proofs — SHA-256 of each sealed blob must match the signed hashes in <code>issuerJWT</code>.</li>
+          <li>Unseal keys using the issuer's ECDH private key (reverse of the sealing process).</li>
+          <li>Return keys to the client — either as plaintext (direct) or RSA-OAEP wrapped (client-bound).</li>
+        </ol>
+
+        <CodeBlock>{`// Client → Issuer
+POST /api/unlock
+{
+  "resource": { "domain": "news.example.com", "resourceId": "article-123", … },
+  "resourceJWT": "eyJ…",
+  "issuerJWT": "eyJ…",
+  "sealed": { "bodytext": { "contentKey": "…", "periodKeys": { "251023T13": "…" } } },
+  "keyId": "issuer-key-1",
+  "issuerName": "sesamy",
+  "clientPublicKey": "base64url-SPKI-RSA-public-key"   // ← enables client-bound mode
+}
+
+// Issuer → Client
+{
+  "keys": {
+    "bodytext": {
+      "contentKey": "base64url-key-or-wrapped-key",
+      "periodKeys": { "251023T13": "base64url-key-or-wrapped-key" }
+    }
+  },
+  "transport": "client-bound"    // or "direct" (default)
+}`}</CodeBlock>
+
+        <h3>Transport Modes</h3>
+        <p>
+          DCA deliberately leaves the issuer → client transport unspecified. Capsule
+          implements two modes:
         </p>
 
         <table
@@ -126,154 +215,100 @@ await indexedDB.put("keypair", {
         >
           <thead>
             <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Key
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Extractable
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Reason
-              </th>
+              <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid #333" }}>Mode</th>
+              <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid #333" }}>Key Delivery</th>
+              <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid #333" }}>Security</th>
+              <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "2px solid #333" }}>Best For</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <strong>Public Key</strong>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>true</code>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Must be exported to SPKI format and sent to the server for DEK
-                wrapping. Safe to share - can only <em>encrypt</em>, not{" "}
-                <em>decrypt</em>.
-              </td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Direct</strong></td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Plaintext base64url keys in HTTPS response</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>TLS only — keys visible in server logs, CDN edges, DevTools</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Simple deployments, trusted infrastructure</td>
             </tr>
             <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <strong>Private Key</strong>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>false</code>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Must stay locked in the browser's crypto engine. Can only be
-                used for unwrapping DEKs, never exported. Guarantees true
-                end-to-end encryption.
-              </td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Client-bound</strong></td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>RSA-OAEP wrapped with client's browser public key</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>End-to-end — only the originating browser can unwrap</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>High-security content, zero-trust environments</td>
             </tr>
           </tbody>
         </table>
 
+        <h3>Client-Bound Transport</h3>
         <p>
-          <strong>Security Implication:</strong>
+          Client-bound transport adds an RSA-OAEP encryption layer on the
+          issuer → client leg. The client generates an RSA key pair once and
+          stores the <strong>non-extractable</strong> private key in IndexedDB.
+          The public key is sent with every unlock request.
         </p>
-        <p>
-          Even if an attacker gains access to IndexedDB (through XSS or browser
-          DevTools), they can see the <code>CryptoKey</code> object but cannot
-          extract the private key bytes:
-        </p>
-        <CodeBlock>{`// Attacker can do this:
-const keyPair = await indexedDB.get('keypair', 'default');
-console.log(keyPair.privateKey);
-// Output: CryptoKey {type: "private", extractable: false, ...}
 
-// But this FAILS:
-await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-// ❌ Error: "key is not extractable"
+        <h4>Key Pair Lifecycle</h4>
+        <CodeBlock>{`// DcaClient with client-bound transport enabled
+const client = new DcaClient({
+  clientBound: true,       // Enable RSA key wrapping
+  rsaKeySize: 2048,        // RSA modulus length (default: 2048)
+  keyDbName: "dca-keys",   // IndexedDB database name
+});
 
-// The CryptoKey object is just a handle/reference.
-// The actual key material lives in the browser's crypto subsystem
-// and cannot be accessed as raw bytes.`}</CodeBlock>
+// First unlock triggers key pair generation:
+// 1. crypto.subtle.generateKey({ name: "RSA-OAEP", modulusLength: 2048, … })
+// 2. Private key re-imported as non-extractable (extractable: false)
+// 3. Key pair stored in IndexedDB
 
-        <p>This architectural design ensures that:</p>
-        <ul>
-          <li>✅ Server can wrap DEKs using the public key</li>
-          <li>✅ Browser can unwrap DEKs using the private key</li>
-          <li>❌ Private key cannot be stolen, even by malicious JavaScript</li>
-          <li>❌ Private key cannot be accidentally exported by the user</li>
-          <li>
-            ❌ Server compromise cannot reveal private keys (they're not on the
-            server)
-          </li>
-        </ul>
+// Subsequent visits: key pair loaded from IndexedDB automatically`}</CodeBlock>
 
-        <h3>4. Key Exchange Protocol</h3>
-        <p>
-          When unlocking content, the client sends its public key and the key ID
-          it wants to use. The server validates access, unwraps the content DEK
-          using the appropriate key-wrapping key, then re-wraps it with the
-          client's public key.
-        </p>
-        <CodeBlock language="json">{`// Client → Server
-POST /api/unlock
-{
-  "keyId": "premium",           // or "article:crypto-guide"
-  "publicKey": "base64-encoded-spki-public-key",
-  "bucketId": "123456"          // optional, for time-bucket keys
+        <h4>Wrapping Flow</h4>
+        <CodeBlock>{`// Client-bound unlock sequence:
+
+// 1. Client includes RSA public key in unlock request
+POST /api/unlock {
+  …dcaFields,
+  "clientPublicKey": "base64url(SPKI-encoded RSA-OAEP public key)"
 }
 
-// Server validates access, then:
-// 1. Gets key-wrapping key for this keyId (derived or looked up)
-// 2. Unwraps the content DEK from the article's wrappedKeys
-// 3. Re-wraps DEK with client's RSA public key
+// 2. Issuer unseals keys normally, then wraps each with client's public key
+for each key in unsealedKeys:
+  wrappedKey = RSA-OAEP-Encrypt(clientPublicKey, rawKeyBytes)
+  response.keys[contentName][keyType] = base64url(wrappedKey)
+response.transport = "client-bound"
 
-// Server → Client
-{
-  "encryptedDek": "base64-rsa-oaep-wrapped-dek",
-  "keyId": "premium",
-  "bucketId": "123456",
-  "expiresAt": "2026-01-17T12:15:00Z"  // when client should re-request
-}`}</CodeBlock>
+// 3. Client receives wrapped keys — opaque ciphertext, useless without private key
+// 4. Client unwraps each key with its non-extractable private key
+rawKey = RSA-OAEP-Decrypt(privateKey, wrappedKeyBytes)
+// → AES-256 key material, ready for content decryption`}</CodeBlock>
 
-        <h3>5. Client-Side Decryption</h3>
+        <h4>Security Properties of Client-Bound Transport</h4>
+        <ul>
+          <li>✅ <strong>End-to-end encryption:</strong> Key material is never in plaintext outside the browser's crypto engine</li>
+          <li>✅ <strong>Non-extractable private key:</strong> Even XSS or DevTools cannot read the raw RSA private key bytes</li>
+          <li>✅ <strong>Server-side opacity:</strong> The issuer sees only the client's public key — it cannot observe which keys the client actually uses</li>
+          <li>✅ <strong>Replay resistance:</strong> Wrapped keys are bound to one browser's key pair</li>
+          <li>✅ <strong>Backward compatible:</strong> If <code>clientPublicKey</code> is absent, the issuer falls back to direct transport</li>
+          <li>⚠️ <strong>Device-bound:</strong> Keys cannot be transferred between browsers/devices (by design)</li>
+        </ul>
+
+        <h3>Client-Side Decryption</h3>
         <p>
-          The client unwraps the DEK using its private key, then decrypts the
-          content using AES-GCM. The unwrapped DEK is cached in memory until
-          expiration.
+          After receiving keys (direct or unwrapped), the client decrypts content
+          using AES-256-GCM with the original nonce and AAD from <code>contentSealData</code>:
         </p>
-        <CodeBlock>{`// Unwrap content DEK with private key
-const contentDek = await crypto.subtle.unwrapKey(
-  "raw",
-  encryptedDek,
-  keyPair.privateKey,
-  { name: "RSA-OAEP" },
-  { name: "AES-GCM", length: 256 },
-  false, // non-extractable
-  ["decrypt"]
-);
+        <CodeBlock>{`// 1. Parse DCA data from the page
+const page = client.parsePage();
 
-// Cache DEK for this keyId until expiration
-dekCache.set(keyId, { dek: contentDek, expiresAt });
+// 2. Unlock via issuer (sends sealed keys + optional clientPublicKey)
+const response = await client.unlock("sesamy");
 
-// Decrypt content
-const decrypted = await crypto.subtle.decrypt(
-  { name: "AES-GCM", iv },
-  contentDek,
-  encryptedContent
-);`}</CodeBlock>
+// 3. Decrypt content (handles unwrapping if client-bound)
+const html = await client.decrypt("sesamy", "bodytext", response);
 
-        <h3>6. Handling Decrypted Content in Scripts</h3>
+// 4. Replace placeholder with decrypted content
+document.querySelector('[data-dca-content-name="bodytext"]')
+  .innerHTML = html;`}</CodeBlock>
+
+        <h3>Handling Decrypted Content in Scripts</h3>
         <p>
           Since content is decrypted client-side <em>after</em> the initial page
           load, any scripts that need to process the content (syntax
@@ -289,14 +324,14 @@ const decrypted = await crypto.subtle.decrypt(
           to the DOM:
         </p>
         <CodeBlock>{`document.addEventListener("capsule:unlocked", (event) => {
-  const { articleId, element, keyId } = event.detail;
+  const { resourceId, element, keyId } = event.detail;
   
   // element is the DOM container with the decrypted content
   // Run your initialization code here
   highlightCodeBlocks(element);
   initializeWidgets(element);
   
-  console.log(\`Article "\${articleId}" unlocked with key: \${keyId}\`);
+  console.log(\`Article "\${resourceId}" unlocked with key: \${keyId}\`);
 });`}</CodeBlock>
 
         <h4>Option B: Use a MutationObserver</h4>
@@ -323,330 +358,6 @@ observer.observe(document.body, {
   subtree: true 
 });`}</CodeBlock>
 
-        <h2>Key Architecture</h2>
-
-        <h3>Two-Layer Encryption</h3>
-        <p>
-          Each piece of content uses{" "}
-          <strong>two-layer envelope encryption</strong>:
-        </p>
-        <ol>
-          <li>
-            <strong>Content DEK</strong> - A unique AES-256 key generated for
-            each article at encryption time. This encrypts the actual content
-            (fast, efficient symmetric encryption).
-          </li>
-          <li>
-            <strong>Key-wrapping keys</strong> - The content DEK is then{" "}
-            <em>wrapped</em> (encrypted) with one or more key-wrapping keys.
-            Each wrapped copy allows a different unlock path.
-          </li>
-        </ol>
-
-        <CodeBlock>{`// Article encryption at build/publish time
-{
-  articleId: "crypto-guide",
-  
-  // Content encrypted ONCE with unique DEK
-  encryptedContent: encrypt(content, contentDek),
-  iv: "unique-iv-for-this-article",
-  
-  // DEK wrapped with MULTIPLE keys for different unlock paths
-  wrappedKeys: {
-    // Tier access: wrapped with time-bucket keys
-    "premium:bucket-123456": wrap(contentDek, bucketKey_123456),
-    "premium:bucket-123457": wrap(contentDek, bucketKey_123457),
-    
-    // Article-specific access (permanent)
-    "article:crypto-guide": wrap(contentDek, articleSpecificKey),
-    
-    // Different subscription server
-    "partner:acme-corp": wrap(contentDek, partnerKey),
-  }
-}`}</CodeBlock>
-
-        <h3>Multiple Unlock Paths</h3>
-        <p>
-          The same content can be unlocked through different key IDs. Each key
-          ID represents a different access path:
-        </p>
-
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Key ID Type
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Example
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Use Case
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Subscription tier
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>premium</code>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                User has premium subscription
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Article ID
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>crypto-guide</code>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                User purchased this specific article
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Partner/Server
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>partner:acme</code>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Different subscription provider
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Time bucket
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>premium:123456</code>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Current 15-minute window
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <h3>Example: Article with Multiple Access Paths</h3>
-        <p>
-          Consider an article that can be unlocked via subscription OR
-          individual purchase, with 2 time buckets (current + next) for the
-          subscription path:
-        </p>
-
-        <CodeBlock>{`// 4 wrapped keys for this article:
-wrappedKeys: {
-  // Subscription tier (with time buckets for revocation)
-  "premium:bucket-current": wrap(dek, currentBucketKey),  // Expires in ≤15 min
-  "premium:bucket-next": wrap(dek, nextBucketKey),        // Handles clock drift
-  
-  // Per-article purchase (permanent access)
-  "article:crypto-guide": wrap(dek, articleKey),
-  
-  // Note: Only ONE of these needs to succeed for decryption
-}`}</CodeBlock>
-
-        <h3>Time-Bucket Keys</h3>
-        <p>
-          For subscription-based access, <strong>time-bucket keys</strong>{" "}
-          rotate every 15 minutes. This enables automatic access revocation
-          without re-encrypting content.
-        </p>
-        <CodeBlock>{`// Bucket keys derived deterministically from master secret
-function deriveBucketKey(tier, bucketId) {
-  return hkdf(masterSecret, bucketId, \`capsule-bucket-\${tier}\`, 32);
-}
-
-// When user unlocks via subscription:
-// 1. Server validates active subscription
-// 2. Gets current bucket key (derived from master secret)
-// 3. Unwraps content DEK using bucket key
-// 4. Re-wraps DEK with user's RSA public key
-// 5. User caches unwrapped DEK until bucket expires
-
-// Access revocation (subscription cancelled):
-// - User's cached DEK expires in ≤15 minutes
-// - Server refuses new unlock requests
-// - No content re-encryption needed`}</CodeBlock>
-
-        <p>
-          <strong>Benefits of time buckets:</strong>
-        </p>
-        <ul>
-          <li>✅ Automatic access revocation (15-minute window)</li>
-          <li>✅ No content re-encryption needed when subscriptions change</li>
-          <li>✅ Deterministic keys (derived, not stored)</li>
-          <li>✅ CMS gets time-limited keys (not master secret)</li>
-        </ul>
-
-        <h3>Static Keys (Per-Article Purchases)</h3>
-        <p>
-          For permanent access (e.g., article purchases), static keys don't
-          rotate:
-        </p>
-        <ul>
-          <li>✅ Permanent access once unlocked</li>
-          <li>✅ No ongoing server requests needed</li>
-          <li>⚠️ Revocation requires re-encrypting the content</li>
-        </ul>
-
-        <h2>Multi-Server Architecture</h2>
-
-        <h3>CMS Server ↔ Subscription Server</h3>
-        <p>
-          Modern Capsule deployments use separate CMS and Subscription servers
-          for security:
-        </p>
-
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Server
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Responsibilities
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Has Access To
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <strong>CMS</strong>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Content management, encryption, publishing
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Plaintext content, time-bucket keys (15-min cache)
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <strong>Subscription</strong>
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Key management, user auth, access control
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Master secret, bucket keys (derived), user subscriptions
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <h4>Authentication Options</h4>
-        <p>CMS authenticates with Subscription Server using:</p>
-        <ul>
-          <li>
-            <strong>Option 1: API Key</strong> - Simple shared secret
-          </li>
-          <li>
-            <strong>Option 2: JWT with Ed25519</strong> - Asymmetric signatures
-            (more secure)
-          </li>
-        </ul>
-
-        <CodeBlock>{`// CMS requests bucket keys (API Key)
-POST /api/cms/bucket-keys
-Authorization: Bearer YOUR_API_KEY
-{ "tier": "premium" }
-
-// Response:
-{
-  "current": {
-    "bucketId": "123456",
-    "key": "base64-encoded-256-bit-key",
-    "expiresAt": "2026-01-16T15:00:00Z"
-  },
-  "next": { ... }
-}`}</CodeBlock>
-
-        <h2>Flow Summary</h2>
-        <p>A simplified view of the complete encryption and decryption flow:</p>
-        <CodeBlock>{`// 1. CMS encrypts article
-DEK = generateRandomKey(256)
-ciphertext = AES-GCM-Encrypt(DEK, articleContent)
-for each tier in [premium, basic]:
-  for each bucket in [current, next]:
-    KEK = HKDF(masterSecret, tier + ":" + bucket)
-    wrappedDek = AES-GCM-Wrap(KEK, DEK)
-
-// 2. Client requests tier access
-POST /api/unlock { keyId: "premium:57906340", publicKey }
-
-// 3. Server wraps KEK with client's public key
-KEK = HKDF(masterSecret, "premium:57906340")
-encryptedKEK = RSA-OAEP-Encrypt(clientPublicKey, KEK)
-
-// 4. Client unwraps KEK and caches it
-KEK = RSA-OAEP-Decrypt(privateKey, encryptedKEK)
-IndexedDB.store("tier:premium:57906340", KEK)
-
-// 5. Client decrypts content (no network needed!)
-DEK = AES-GCM-Unwrap(KEK, article.wrappedKeys["premium:57906340"])
-plaintext = AES-GCM-Decrypt(DEK, article.ciphertext, article.iv)
-
-// 6. Subsequent articles use cached KEK - "unlock once, access all"`}</CodeBlock>
 
         <h2>Share Link Tokens</h2>
         <p>
@@ -659,15 +370,15 @@ plaintext = AES-GCM-Decrypt(DEK, article.ciphertext, article.iv)
         <p>
           When creating a shareable link, you need to grant access to content
           that the link creator doesn't have access to yet. The solution:{" "}
-          <strong>signed tokens</strong> that encode the access tier, enabling
+          <strong>signed tokens</strong> that encode the content ID, enabling
           any holder to unlock content.
         </p>
 
         <CodeBlock>{`// Share Link Flow
 Publisher → creates token → shares URL → Recipient clicks → content unlocks
 
-// Key Insight: Token contains TIER, not DEK
-// The DEK comes from the encrypted article at unlock time`}</CodeBlock>
+// Key Insight: Token contains contentId, not the content key
+// The content key comes from the encrypted article at unlock time`}</CodeBlock>
 
         <h3>Token Structure</h3>
         <p>
@@ -679,8 +390,7 @@ Publisher → creates token → shares URL → Recipient clicks → content unlo
   "tid": "abc123...",          // Unique token ID (for tracking/revocation)
   "iss": "my-publisher",       // Issuer (who created the token)
   "kid": "key-2026-01",        // Key ID (which signing key was used)
-  "tier": "premium",           // Required: access tier
-  "contentId": "crypto-guide", // Required: publisher's content ID
+  "contentId": "premium",           // Required: content ID
   "url": "https://...",        // Optional: full URL for the content
   "maxUses": 100,              // Optional: usage limit
   "userId": "publisher-123",   // Optional: for analytics
@@ -700,9 +410,8 @@ const tokens = createTokenManager({
 });
 
 // Generate a share token
-const token = tokens.generate({
-  tier: 'premium',
-  contentId: 'crypto-guide',   // Required: which content this token unlocks
+const token = await tokens.generate({
+  contentId: 'premium',          // Required: content name this token grants access to
   url: 'https://example.com/article/crypto-guide', // Optional
   expiresIn: '24h',
   maxUses: 50,
@@ -743,7 +452,7 @@ if (token) {
   }
   
   // Validate it's for the current content
-  const validation = validateTokenForContent(result, currentArticleId);
+  const validation = validateTokenForContent(result, currentResourceId);
   if (!validation.valid) {
     // Redirect to correct content
     window.location.href = result.payload.url || \`/article/\${result.payload.contentId}\`;
@@ -823,7 +532,7 @@ export async function POST(request: Request) {
 } from '@sesamy/capsule-server';
 
 // Generate or load a key pair (store securely!)
-const { privateKey, publicKey, keyId } = generateSigningKeyPair();
+const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
 
 const tokenManager = new AsymmetricTokenManager({
   issuer: 'https://api.example.com',
@@ -834,7 +543,6 @@ const tokenManager = new AsymmetricTokenManager({
 
 // Generate an Ed25519-signed token
 const token = await tokenManager.generate({
-  tier: 'premium',
   contentId: 'article-123',
   expiresIn: '7d',
 });
@@ -889,9 +597,9 @@ if (result.valid && !result.expired) {
 // 4. Client finds key with matching kid
 // 5. Client verifies Ed25519 signature using public key`}</CodeBlock>
 
-        <h4>Key Rotation: Signing Keys vs Time Bucket Keys</h4>
+        <h4>Key Rotation: Signing Keys vs Time Period Keys</h4>
         <p>
-          Token signing keys are <strong>separate from time bucket keys</strong>{" "}
+          Token signing keys are <strong>separate from time period keys</strong>{" "}
           and have different rotation schedules:
         </p>
         <table
@@ -936,10 +644,10 @@ if (result.valid && !result.expired) {
           <tbody>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Time bucket keys
+                Time period keys
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Wrap content DEKs for subscriptions
+                Wrap content keys for subscriptions
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 Every 15 minutes (controls subscription window)
@@ -1079,13 +787,11 @@ if (result.valid && !result.expired) {
           from the standard subscription flow:
         </p>
 
-        <CodeBlock>{`// Standard Subscription Flow:
-Client → /api/unlock { keyId, publicKey } → validates subscription → returns KEK
+        <CodeBlock>{`// Standard Flow:
+// Client → Issuer /api/unlock { dcaFields, clientPublicKey } → validates access → returns keys
 
 // Token-Based Flow:
-Client → /api/unlock { keyId, publicKey, token, wrappedDek } → validates token → returns DEK
-
-// Key difference: token flow returns DEK directly, not KEK`}</CodeBlock>
+// Client → /api/unlock { token, wrappedContentKey, publicKey } → validates token → returns content key`}</CodeBlock>
 
         <table
           style={{
@@ -1131,7 +837,7 @@ Client → /api/unlock { keyId, publicKey, token, wrappedDek } → validates tok
                 2. Client sends unlock request
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Includes token + wrapped DEK from article
+                Includes token + wrapped content key from article
               </td>
             </tr>
             <tr>
@@ -1144,10 +850,10 @@ Client → /api/unlock { keyId, publicKey, token, wrappedDek } → validates tok
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                4. Server unwraps DEK
+                4. Server authorizes &amp; unwraps
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Uses bucket key from token's tier to unwrap
+                Checks <code>token.contentId</code> matches the requested content, then derives the period key (from period secret + time bucket) and unwraps the content key
               </td>
             </tr>
             <tr>
@@ -1155,7 +861,7 @@ Client → /api/unlock { keyId, publicKey, token, wrappedDek } → validates tok
                 5. Server re-wraps for client
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Encrypts DEK with client's public key
+                Wraps content key with client's public key
               </td>
             </tr>
             <tr>
@@ -1163,14 +869,14 @@ Client → /api/unlock { keyId, publicKey, token, wrappedDek } → validates tok
                 6. Client decrypts content
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Uses DEK to decrypt article
+                Uses content key to decrypt article
               </td>
             </tr>
           </tbody>
         </table>
 
         <h3>Server-Side Token Validation</h3>
-        <CodeBlock>{`import { createTokenManager, SubscriptionServer } from '@sesamy/capsule-server';
+        <CodeBlock>{`import { createTokenManager, createSubscriptionServer } from '@sesamy/capsule-server';
 
 // Create token manager (same config as generation)
 const tokens = createTokenManager({
@@ -1179,22 +885,26 @@ const tokens = createTokenManager({
   keyId: 'key-2026-01',
 });
 
+const server = createSubscriptionServer({
+  periodSecret: process.env.PERIOD_SECRET,
+});
+
 // Validate token
-const validation = tokens.validate(token);
+const validation = await tokens.validate(token);
 if (!validation.valid) {
   throw new Error(validation.message); // "Token has expired", etc.
 }
 
 // Unlock using validated token payload
-const result = subscriptionServer.unlockWithToken(
+const result = await server.unlockWithToken(
   validation.payload,      // Validated token payload
-  wrappedDek,              // From article.wrappedKeys[keyId]
+  wrappedContentKey,       // From article.wrappedKeys[keyId]
   userPublicKey,           // Client's RSA public key (Base64 SPKI)
   contentId,               // Validates against token.contentId
 );
 
 // result contains:
-// - encryptedDek: DEK wrapped with user's public key
+// - encryptedContentKey: content key wrapped with user's public key
 // - keyId: Which key was used
 // - expiresAt: When the unlock expires`}</CodeBlock>
 
@@ -1229,8 +939,7 @@ console.log('[UNLOCK] Token used', {
   keyId: payload.kid,
   contentId: payload.contentId,
   userId: payload.userId,
-  campaign: payload.meta?.campaign,
-  tier: payload.tier,
+  campaign: payload.meta?.campaign,  
   timestamp: new Date().toISOString(),
 });`}</CodeBlock>
 
@@ -1262,11 +971,11 @@ console.log('[UNLOCK] Token used', {
 
         <h2>Security Considerations</h2>
 
-        <h3>Master Secret Protection</h3>
+        <h3>Period Secret Protection</h3>
         <p>
-          The master secret is the root of all security. If compromised,
-          attackers can derive all future bucket keys. <strong>Never</strong>{" "}
-          give the master secret to the CMS.
+          The period secret is the root of all security. If compromised,
+          attackers can derive all future period keys. Only the publisher
+          should hold the period secret.
         </p>
 
         <table
@@ -1311,18 +1020,18 @@ console.log('[UNLOCK] Token used', {
           <tbody>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Master Secret
+                Period Secret
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 🔒 SECRET
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                KMS only (Subscription Server)
+                KMS only (Publisher server)
               </td>
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Bucket Derivation Algorithm
+                Period Derivation Algorithm
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 ✅ Public
@@ -1333,18 +1042,18 @@ console.log('[UNLOCK] Token used', {
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Bucket Keys
+                Period Keys
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 🔒 SECRET
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Derived on-demand, cached 15 min on CMS
+                Derived on-demand, cached briefly
               </td>
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Article DEKs
+                Content Keys
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 🔒 SECRET
@@ -1369,42 +1078,43 @@ console.log('[UNLOCK] Token used', {
 
         <h3>Access Revocation</h3>
         <p>
-          With time-bucket keys, access is automatically revoked within the
-          bucket duration (15 minutes):
+          With time-period keys, access is automatically revoked within the
+          period duration (15 minutes):
         </p>
         <ul>
-          <li>User's browser caches unwrapped DEK until bucket expires</li>
+          <li>User's browser caches unwrapped content key until period expires</li>
           <li>
-            When subscription cancelled, server refuses new bucket key requests
+            When subscription cancelled, issuer refuses new unlock requests
           </li>
-          <li>Cached DEK expires → user can no longer decrypt new content</li>
+          <li>Cached content key expires → user can no longer decrypt new content</li>
           <li>No content re-encryption needed</li>
         </ul>
 
-        <h3>CMS Compromise Scenarios</h3>
+        <h3>Publisher Compromise Scenarios</h3>
         <p>
-          <strong>If CMS is compromised, attacker gets:</strong>
+          <strong>If the publisher is compromised, attacker gets:</strong>
         </p>
         <ul>
-          <li>❌ Plaintext content (CMS already has this)</li>
-          <li>❌ Current bucket keys (valid for ≤15 minutes)</li>
-          <li>✅ Cannot derive future bucket keys (no master secret)</li>
+          <li>❌ Plaintext content (publisher already has this)</li>
+          <li>❌ Period secret and derived period keys</li>
+          <li>✅ Cannot unseal keys without issuer private key</li>
           <li>✅ Cannot decrypt for other users (no user private keys)</li>
         </ul>
 
-        <h3>Subscription Server Compromise Scenarios</h3>
+        <h3>Issuer Compromise Scenarios</h3>
         <p>
-          <strong>If Subscription Server is compromised, attacker gets:</strong>
+          <strong>If the issuer is compromised, attacker gets:</strong>
         </p>
         <ul>
-          <li>❌ Master secret → can derive all bucket keys</li>
-          <li>❌ Can unwrap article DEKs</li>
-          <li>✅ Cannot read content (CMS has encrypted content only)</li>
+          <li>❌ ECDH private key → can unseal content keys and period keys</li>
+          <li>❌ Can decrypt content if they also have the encrypted content</li>
+          <li>✅ Cannot access content without the encrypted HTML (publisher-side)</li>
+          <li>✅ Cannot forge publisher JWTs (no ES256 signing key)</li>
         </ul>
 
         <p>
-          <strong>Mitigation:</strong> Use separate infrastructure, different
-          access controls, audit logs
+          <strong>Mitigation:</strong> Use separate infrastructure, rotate issuer
+          key pairs, audit logs
         </p>
 
         <h3>Private Key Protection</h3>
@@ -1414,22 +1124,23 @@ console.log('[UNLOCK] Token used', {
           key material.
         </p>
 
-        <h3>DEK Storage</h3>
+        <h3>Key Storage</h3>
         <p>
-          Server-side DEKs should be stored in a secure key management system
-          (KMS) in production. Never hardcode DEKs in source code.
+          The period secret and signing keys should be stored in a secure key
+          management system (KMS) in production. Never hardcode secrets in
+          source code.
         </p>
 
         <h3>Transport Security</h3>
         <p>
-          The key exchange endpoint must use HTTPS. While the wrapped DEK is
+          The key exchange endpoint must use HTTPS. While the wrapped content key is
           encrypted, HTTPS prevents MITM attacks on the public key exchange.
         </p>
 
         <h3>IV Uniqueness</h3>
         <p>
           Each encrypted article must use a unique initialization vector (IV).
-          Never reuse IVs with the same DEK, as this breaks AES-GCM security.
+          Never reuse IVs with the same content key, as this breaks AES-GCM security.
         </p>
 
         <h2>Security Properties</h2>
@@ -1445,11 +1156,11 @@ console.log('[UNLOCK] Token used', {
             tampering
           </li>
           <li>
-            ✅ <strong>Forward Secrecy:</strong> Time buckets limit exposure
+            ✅ <strong>Forward Secrecy:</strong> Time periods limit exposure
             window
           </li>
           <li>
-            ✅ <strong>Secure Key Transport:</strong> RSA-OAEP for key exchange
+            ✅ <strong>Secure Key Transport:</strong> ECDH P-256 sealing + optional RSA-OAEP client-bound wrapping
           </li>
           <li>
             ✅ <strong>Offline Access:</strong> Cached keys work without network
@@ -1482,7 +1193,8 @@ console.log('[UNLOCK] Token used', {
         <h2>Implementation Checklist</h2>
         <ul>
           <li>✅ AES-256-GCM for content encryption</li>
-          <li>✅ RSA-OAEP with SHA-256 for key wrapping</li>
+          <li>✅ ECDH P-256 for key sealing</li>
+          <li>✅ ES256 (ECDSA P-256) for JWT signing</li>
           <li>✅ Unique 96-bit IV per encrypted content</li>
           <li>✅ 128-bit authentication tag (GCM)</li>
           <li>✅ Private keys stored with extractable: false</li>

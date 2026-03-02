@@ -23,8 +23,8 @@ describe("TokenManager", () => {
   describe("generate", () => {
     it("should generate a valid token", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "24h",
       });
 
@@ -35,8 +35,8 @@ describe("TokenManager", () => {
 
     it("should include all specified options in the payload", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "test-article",
+        contentId: "premium",
+
         expiresIn: "7d",
         url: "https://example.com/article/test-article",
         userId: "user-123",
@@ -47,10 +47,9 @@ describe("TokenManager", () => {
       const result = await tokens.validate(token);
       expect(result.valid).toBe(true);
       if (result.valid) {
-        expect(result.payload.tier).toBe("premium");
+        expect(result.payload.contentId).toBe("premium");
         expect(result.payload.iss).toBe("test-issuer");
         expect(result.payload.kid).toBe("key-2026-01");
-        expect(result.payload.contentId).toBe("test-article");
         expect(result.payload.url).toBe(
           "https://example.com/article/test-article",
         );
@@ -62,13 +61,13 @@ describe("TokenManager", () => {
 
     it("should generate unique token IDs", async () => {
       const token1 = await tokens.generate({
-        tier: "premium",
-        contentId: "article-1",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
       const token2 = await tokens.generate({
-        tier: "premium",
-        contentId: "article-2",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
@@ -82,43 +81,43 @@ describe("TokenManager", () => {
       const now = Math.floor(Date.now() / 1000);
 
       const token1h = await tokens.generate({
-        tier: "test",
-        contentId: "art-1",
+        contentId: "test",
+
         expiresIn: "1h",
       });
       expect(tokens.peek(token1h)?.exp).toBe(now + 3600);
 
       const token24h = await tokens.generate({
-        tier: "test",
-        contentId: "art-2",
+        contentId: "test",
+
         expiresIn: "24h",
       });
       expect(tokens.peek(token24h)?.exp).toBe(now + 86400);
 
       const token7d = await tokens.generate({
-        tier: "test",
-        contentId: "art-3",
+        contentId: "test",
+
         expiresIn: "7d",
       });
       expect(tokens.peek(token7d)?.exp).toBe(now + 604800);
 
       const token30s = await tokens.generate({
-        tier: "test",
-        contentId: "art-4",
+        contentId: "test",
+
         expiresIn: "30s",
       });
       expect(tokens.peek(token30s)?.exp).toBe(now + 30);
 
       const token5m = await tokens.generate({
-        tier: "test",
-        contentId: "art-5",
+        contentId: "test",
+
         expiresIn: "5m",
       });
       expect(tokens.peek(token5m)?.exp).toBe(now + 300);
 
       const tokenNumeric = await tokens.generate({
-        tier: "test",
-        contentId: "art-6",
+        contentId: "test",
+
         expiresIn: 3600,
       });
       expect(tokens.peek(tokenNumeric)?.exp).toBe(now + 3600);
@@ -127,14 +126,14 @@ describe("TokenManager", () => {
     it("should throw for invalid duration format", async () => {
       await expect(
         tokens.generate({
-          tier: "test",
-          contentId: "art",
+          contentId: "test",
+
           expiresIn: "invalid",
         }),
       ).rejects.toThrow("Invalid duration format");
 
       await expect(
-        tokens.generate({ tier: "test", contentId: "art", expiresIn: "1w" }),
+        tokens.generate({ contentId: "test", expiresIn: "1w" }),
       ).rejects.toThrow("Invalid duration format");
     });
   });
@@ -142,15 +141,15 @@ describe("TokenManager", () => {
   describe("validate", () => {
     it("should validate a valid token", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "24h",
       });
 
       const result = await tokens.validate(token);
       expect(result.valid).toBe(true);
       if (result.valid) {
-        expect(result.payload.tier).toBe("premium");
+        expect(result.payload.contentId).toBe("premium");
         expect(result.payload.iss).toBe("test-issuer");
         expect(result.payload.kid).toBe("key-2026-01");
         expect(result.payload.v).toBe(1);
@@ -159,8 +158,8 @@ describe("TokenManager", () => {
 
     it("should reject an expired token", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
@@ -177,8 +176,8 @@ describe("TokenManager", () => {
 
     it("should reject a token with invalid signature", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "24h",
       });
 
@@ -202,8 +201,8 @@ describe("TokenManager", () => {
       });
 
       const token = await otherTokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "24h",
       });
 
@@ -230,8 +229,8 @@ describe("TokenManager", () => {
 
     it("should reject a token with tampered payload", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "24h",
       });
 
@@ -239,7 +238,7 @@ describe("TokenManager", () => {
       // Create a tampered payload (use base64url encoding)
       const tamperedPayload = toBase64Url(
         new TextEncoder().encode(
-          JSON.stringify({ tier: "enterprise", exp: 9999999999 }),
+          JSON.stringify({ contentId: "enterprise", exp: 9999999999 }),
         ),
       );
       const tamperedToken = `${tamperedPayload}.${signature}`;
@@ -255,9 +254,8 @@ describe("TokenManager", () => {
   describe("peek", () => {
     it("should return payload without validation", async () => {
       const token = await tokens.generate({
-        tier: "premium",
+        contentId: "premium",
         expiresIn: "1h",
-        contentId: "test-article",
       });
 
       // Advance time past expiration
@@ -269,8 +267,7 @@ describe("TokenManager", () => {
       // But peek should still work
       const payload = tokens.peek(token);
       expect(payload).not.toBeNull();
-      expect(payload?.tier).toBe("premium");
-      expect(payload?.contentId).toBe("test-article");
+      expect(payload?.contentId).toBe("premium");
     });
 
     it("should return null for invalid tokens", () => {
@@ -305,8 +302,8 @@ describe("TokenManager", () => {
       });
 
       const token = await bufferTokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "1h",
       });
 
@@ -316,8 +313,8 @@ describe("TokenManager", () => {
 
     it("should generate URL-safe tokens", async () => {
       const token = await tokens.generate({
-        tier: "premium",
-        contentId: "article-123",
+        contentId: "premium",
+
         expiresIn: "24h",
         meta: { special: "chars+/=" },
       });

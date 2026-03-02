@@ -39,7 +39,7 @@ const encryptedData = await encryptArticleContent(
   
   Uses @sesamy/capsule client with high-level API:
   - Auto key generation (RSA-2048)
-  - Automatic DEK caching and renewal
+  - Automatic content key caching and renewal
   - Script execution in decrypted content
   - Custom events for unlock lifecycle
   
@@ -78,15 +78,15 @@ const encryptedData = await encryptArticleContent(
       CAPSULE ENCRYPTED CONTENT
       ============================================================
       The data-capsule attribute contains the encrypted article in JSON:
-      - articleId: Unique identifier
+      - contentId: Unique identifier
       - encryptedContent: AES-256-GCM ciphertext (Base64)
       - iv: Initialization vector (Base64)
-      - wrappedKeys: Array of wrapped DEKs for different access tiers
+      - wrappedKeys: Array of wrapped content keys for different access levels
       
       The @sesamy/capsule client will:
       1. Find this element by data-capsule attribute
       2. Parse the encrypted data
-      3. Call the unlock function to get the DEK
+      3. Call the unlock function to get the content key
       4. Decrypt and render the content
       5. Execute any embedded scripts
       6. Emit 'capsule:unlock' event
@@ -118,7 +118,7 @@ const encryptedData = await encryptArticleContent(
   ============================================================
   Using the @sesamy/capsule high-level API:
   - Automatic key pair management
-  - Built-in DEK caching
+  - Built-in content key caching
   - Event-based notifications
   ============================================================
   -->
@@ -140,13 +140,13 @@ const encryptedData = await encryptArticleContent(
     }
 
     // Unlock function - called by the client to fetch encrypted DEK
-    const unlock: UnlockFunction = async ({ keyId, wrappedDek, publicKey, articleId }) => {
-      log(`Requesting DEK for ${keyId}...`, 'info');
+    const unlock: UnlockFunction = async ({ keyId, wrappedContentKey, publicKey, resourceId }) => {
+      log(`Requesting content key for ${keyId}...`, 'info');
       
       const response = await fetch('/api/unlock', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyId, wrappedDek, publicKey, articleId }),
+        body: JSON.stringify({ keyId, wrappedContentKey, publicKey, resourceId }),
       });
 
       if (!response.ok) {
@@ -163,13 +163,13 @@ const encryptedData = await encryptArticleContent(
     const capsule = new CapsuleClient({
       unlock,
       executeScripts: true,
-      dekStorage: 'persist',
+      contentKeyStorage: 'persist',
       logger: (msg, level) => log(msg, level === 'error' ? 'error' : level === 'debug' ? 'crypto' : 'info'),
     });
 
     // Get article ID from the encrypted section
     const encryptedSection = document.querySelector('[data-capsule]') as HTMLElement;
-    const articleId = encryptedSection?.dataset.capsuleId;
+    const resourceId = encryptedSection?.dataset.capsuleId;
 
     // Listen for unlock events
     document.addEventListener('capsule:unlock', (e: Event) => {
@@ -215,8 +215,8 @@ const encryptedData = await encryptArticleContent(
       btn.textContent = 'Unlocking...';
 
       try {
-        if (articleId) {
-          await capsule.unlockElement(articleId);
+        if (resourceId) {
+          await capsule.unlockElement(resourceId);
         }
       } catch (error) {
         // Error event will handle UI update
@@ -226,6 +226,6 @@ const encryptedData = await encryptArticleContent(
 
     // Log on page load
     log('Capsule client initialized. Click "Unlock Article" to decrypt.', 'info');
-    log(`Article ID: ${articleId}`, 'info');
+    log(`Article ID: ${resourceId}`, 'info');
   </script>
 </Layout>

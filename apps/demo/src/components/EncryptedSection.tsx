@@ -9,18 +9,19 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useConsole } from "./ConsoleContext";
+import { KeyManager } from "./KeyManager";
 import type {
   CapsuleClient as CapsuleClientType,
   EncryptedArticle,
   UnlockFunction,
   WrappedKey,
-  DekStorageMode,
+  ContentKeyStorageMode,
 } from "@sesamy/capsule";
 
 interface EncryptedSectionProps {
-  articleId: string;
+  resourceId: string;
   encryptedData: EncryptedArticle | null;
-  securityMode?: DekStorageMode;
+  securityMode?: ContentKeyStorageMode;
   /** Optional: pre-signed token for share link unlock */
   token?: string;
 }
@@ -28,7 +29,7 @@ interface EncryptedSectionProps {
 type UnlockState = "locked" | "unlocking" | "decrypting" | "unlocked" | "error";
 
 export function EncryptedSection({
-  articleId,
+  resourceId,
   encryptedData,
   securityMode = "persist",
   token: propToken,
@@ -40,27 +41,35 @@ export function EncryptedSection({
   const [usedKeyId, setUsedKeyId] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<Date | null>(null);
   const [tokenId, setTokenId] = useState<string | null>(null);
+  const [, setTick] = useState(0);
   const contentRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<CapsuleClientType | null>(null);
   const { log } = useConsole();
 
+  // Tick every second while unlocked to update the expiry countdown
+  useEffect(() => {
+    if (state !== "unlocked" || !expiresAt) return;
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(interval);
+  }, [state, expiresAt]);
+
   // Parse keyId to get type and base info
   const parseKeyId = (
     keyId: string,
-  ): { type: "tier" | "article"; baseId: string; bucketId?: string } => {
+  ): { type: "shared" | "article"; baseId: string; periodId?: string } => {
     const [first, second] = keyId.split(":", 2);
     if (first === "article") {
       return { type: "article", baseId: second ?? "" };
     }
-    // tier:bucketId format
-    return { type: "tier", baseId: first ?? "", bucketId: second };
+    // contentId:periodId format
+    return { type: "shared", baseId: first ?? "", periodId: second };
   };
 
   // Get available key options from wrapped keys
   const getKeyOptions = useCallback(() => {
-    if (!encryptedData) return { tierKeys: [], articleKeys: [] };
+    if (!encryptedData) return { sharedKeys: [], articleKeys: [] };
 
-    const tierKeys: WrappedKey[] = [];
+    const sharedKeys: WrappedKey[] = [];
     const articleKeys: WrappedKey[] = [];
 
     for (const wk of encryptedData.wrappedKeys) {
@@ -68,11 +77,11 @@ export function EncryptedSection({
       if (parsed.type === "article") {
         articleKeys.push(wk);
       } else {
-        tierKeys.push(wk);
+        sharedKeys.push(wk);
       }
     }
 
-    return { tierKeys, articleKeys };
+    return { sharedKeys, articleKeys };
   }, [encryptedData]);
 
   // Execute scripts and dispatch event after content is decrypted
@@ -98,18 +107,18 @@ export function EncryptedSection({
       const event = new CustomEvent("capsule:unlocked", {
         bubbles: true,
         detail: {
-          articleId,
+          resourceId,
           element: contentElement,
           keyId: usedKeyId,
         },
       });
       contentElement.dispatchEvent(event);
       log(
-        `Dispatched 'capsule:unlocked' event for article "${articleId}"`,
+        `Dispatched 'capsule:unlocked' event for article "${resourceId}"`,
         "info",
       );
     }
-  }, [state, decryptedContent, log, articleId, usedKeyId]);
+  }, [state, decryptedContent, log, resourceId, usedKeyId]);
 
   // Initialize the Capsule client
   useEffect(() => {
@@ -117,7 +126,7 @@ export function EncryptedSection({
 
     async function init() {
       try {
-        log(`Loading article "${articleId}"...`, "info");
+        log(`Loading article "${resourceId}"...`, "info");
         log("Initializing @sesamy/capsule client...", "key");
 
         // Dynamic import for client-side only
@@ -126,17 +135,17 @@ export function EncryptedSection({
         // Create unlock function with verbose logging
         const unlock: UnlockFunction = async ({
           keyId,
-          wrappedDek,
+          wrappedContentKey,
           publicKey,
           token,
         }) => {
           const parsed = parseKeyId(keyId);
-          const isTierKey = parsed.type === "tier";
+          const isSharedKey = parsed.type === "shared";
 
           // Token-based unlock
           if (token) {
             log(
-              `POST /api/unlock { token: "...", wrappedDek: "...", publicKey: "..." } (share link mode)`,
+              `POST /api/unlock { token: "...", wrappedContentKey: "...", publicKey: "..." } (share link mode)`,
               "network",
             );
 
@@ -145,9 +154,9 @@ export function EncryptedSection({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 token,
-                wrappedDek,
+                wrappedContentKey,
                 publicKey,
-                articleId,
+                resourceId,
               }),
             });
 
@@ -165,7 +174,7 @@ export function EncryptedSection({
               "success",
             );
             log(
-              `Received encrypted DEK (${result.encryptedDek.length} chars)`,
+              `Received encrypted DEK (${result.encryptedContentKey.length} chars)`,
               "success",
             );
 
@@ -177,15 +186,15 @@ export function EncryptedSection({
             return result;
           }
 
-          // Regular unlock (tier or article key)
-          if (isTierKey) {
+          // Regular unlock (shared or article key)
+          if (isSharedKey) {
             log(
-              `POST /api/unlock { keyId: "${keyId}", publicKey: "..." } (tier mode - getting KEK)`,
+              `POST /api/unlock { keyId: "${keyId}", publicKey: "..." } (shared mode - getting KEK)`,
               "network",
             );
           } else {
             log(
-              `POST /api/unlock { keyId: "${keyId}", wrappedDek: "...", publicKey: "..." }`,
+              `POST /api/unlock { keyId: "${keyId}", wrappedContentKey: "...", publicKey: "..." }`,
               "network",
             );
           }
@@ -195,9 +204,9 @@ export function EncryptedSection({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               keyId,
-              wrappedDek,
+              wrappedContentKey,
               publicKey,
-              mode: isTierKey ? "tier" : undefined,
+              mode: isSharedKey ? "shared" : undefined,
             }),
           });
 
@@ -209,16 +218,14 @@ export function EncryptedSection({
 
           const result = await response.json();
           log(
-            `Received encrypted ${result.keyType?.toUpperCase() || "DEK"} (${
-              result.encryptedDek.length
+            `Received encrypted ${result.keyType?.toUpperCase() || "content key"} (${result.encryptedContentKey.length
             } chars)`,
             "success",
           );
           log(
             `Key valid until: ${new Date(
               result.expiresAt,
-            ).toLocaleTimeString()} (bucket ${result.bucketId || "static"}, ${
-              result.bucketPeriodSeconds
+            ).toLocaleTimeString()} (period ${result.periodId || "static"}, ${result.periodDurationSeconds
             }s period)`,
             "info",
           );
@@ -234,7 +241,7 @@ export function EncryptedSection({
         // Create client with logging
         const client = new CapsuleClient({
           unlock,
-          dekStorage: securityMode,
+          contentKeyStorage: securityMode,
           renewBuffer: 5000,
           executeScripts: true,
           logger: (message, level) => {
@@ -305,12 +312,12 @@ export function EncryptedSection({
                   token,
                 );
 
-                const tierKey = encryptedData.wrappedKeys.find(
+                const sharedKey = encryptedData.wrappedKeys.find(
                   (k) => !k.keyId.startsWith("article:"),
                 );
 
                 setDecryptedContent(content);
-                setUsedKeyId(tierKey?.keyId || "token");
+                setUsedKeyId(sharedKey?.keyId || "token");
                 setState("unlocked");
                 log("✨ Article unlocked via share link!", "success");
 
@@ -324,8 +331,7 @@ export function EncryptedSection({
                 return;
               } catch (err) {
                 log(
-                  `Share link unlock failed: ${
-                    err instanceof Error ? err.message : "Unknown error"
+                  `Share link unlock failed: ${err instanceof Error ? err.message : "Unknown error"
                   }`,
                   "error",
                 );
@@ -333,41 +339,61 @@ export function EncryptedSection({
               }
             }
 
-            // Try auto-decryption with cached keys
-            log("Checking for cached decryption keys...", "info");
-
-            try {
-              // Attempt to unlock using cached DEK
-              setState("decrypting");
-              const content = await client.unlock(encryptedData, "tier");
-
-              // Find which key was used
-              const tierKey = encryptedData.wrappedKeys.find(
+            // Content is ready — try cached keys first
+            const cachedContent = await client.tryUnlockFromCache(encryptedData);
+            if (cachedContent) {
+              log("Found cached content key — auto-unlocking...", "success");
+              const sharedKey = encryptedData.wrappedKeys.find(
                 (k) => !k.keyId.startsWith("article:"),
               );
-
-              setDecryptedContent(content);
-              setUsedKeyId(tierKey?.keyId || "unknown");
+              setDecryptedContent(cachedContent);
+              setUsedKeyId(sharedKey?.keyId || "cached");
               setState("unlocked");
-              log("✨ Article unlocked using cached key!", "success");
-            } catch {
-              // No cached key or decryption failed
-              const { tierKeys, articleKeys } = getKeyOptions();
-              log(`Encrypted content ready (${securityMode} mode)`, "info");
-              log(
-                `Available keys: ${tierKeys.length} tier, ${articleKeys.length} article`,
-                "info",
-              );
-              log("Click 'Unlock' to request decryption key", "info");
-              setState("locked");
+              log("✨ Article unlocked from cached key!", "success");
+              return;
             }
+
+            // No valid cached keys — check if expired keys were cleaned up
+            // for THIS article (not some other article). If so, auto-renew
+            // with the same key type the user originally used.
+            if (client.hadExpiredKeys) {
+              const renewKeyType = client.expiredKeyType || "shared";
+              log(`Cached ${renewKeyType} key expired — auto-renewing from server...`, "info");
+              setState("unlocking");
+              try {
+                const content = await client.unlock(encryptedData, renewKeyType);
+                const usedKey = renewKeyType === "shared"
+                  ? encryptedData.wrappedKeys.find((k) => !k.keyId.startsWith("article:"))
+                  : encryptedData.wrappedKeys.find((k) => k.keyId.startsWith("article:"));
+                setDecryptedContent(content);
+                setUsedKeyId(usedKey?.keyId || "renewed");
+                setState("unlocked");
+                log("✨ Article unlocked with renewed key!", "success");
+                return;
+              } catch (err) {
+                log(
+                  `Auto-renewal failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+                  "error",
+                );
+                // Fall through to locked state
+              }
+            }
+
+            // No cached keys — wait for user to click unlock
+            const { sharedKeys, articleKeys } = getKeyOptions();
+            log(`Encrypted content ready (${securityMode} mode)`, "info");
+            log(
+              `Available keys: ${sharedKeys.length} shared, ${articleKeys.length} article`,
+              "info",
+            );
+            log("Click 'Unlock' to request decryption key", "info");
+            setState("locked");
           }
         }
       } catch (err) {
         console.error("Failed to initialize Capsule client:", err);
         log(
-          `Error: ${
-            err instanceof Error ? err.message : "Failed to initialize"
+          `Error: ${err instanceof Error ? err.message : "Failed to initialize"
           }`,
           "error",
         );
@@ -383,17 +409,17 @@ export function EncryptedSection({
     return () => {
       mounted = false;
     };
-  }, [articleId, encryptedData, getKeyOptions, log, securityMode]);
+  }, [resourceId, encryptedData, getKeyOptions, log, securityMode]);
 
   // Handle unlock button click
-  const handleUnlock = async (keyType: "tier" | "article") => {
+  const handleUnlock = async (keyType: "shared" | "article") => {
     if (!clientRef.current || !encryptedData) {
       setError("Not ready");
       return;
     }
 
-    const { tierKeys, articleKeys } = getKeyOptions();
-    const keys = keyType === "tier" ? tierKeys : articleKeys;
+    const { sharedKeys, articleKeys } = getKeyOptions();
+    const keys = keyType === "shared" ? sharedKeys : articleKeys;
 
     if (keys.length === 0) {
       setError(`No ${keyType} keys available`);
@@ -411,13 +437,13 @@ export function EncryptedSection({
 
       // Find which key was used
       const usedKey =
-        keyType === "tier"
+        keyType === "shared"
           ? encryptedData.wrappedKeys.find(
-              (k) => !k.keyId.startsWith("article:"),
-            )
+            (k) => !k.keyId.startsWith("article:"),
+          )
           : encryptedData.wrappedKeys.find((k) =>
-              k.keyId.startsWith("article:"),
-            );
+            k.keyId.startsWith("article:"),
+          );
 
       log(
         "DEK unwrapped successfully (AES-256-GCM, non-extractable)",
@@ -436,8 +462,7 @@ export function EncryptedSection({
     } catch (err) {
       console.error("Unlock failed:", err);
       log(
-        `Unlock failed: ${
-          err instanceof Error ? err.message : "Unknown error"
+        `Unlock failed: ${err instanceof Error ? err.message : "Unknown error"
         }`,
         "error",
       );
@@ -485,9 +510,9 @@ export function EncryptedSection({
     const parsed = parseKeyId(usedKeyId);
     const keyLabel = tokenId
       ? `share link`
-      : parsed.type === "tier"
-      ? `tier "${parsed.baseId}"`
-      : `article "${parsed.baseId}"`;
+      : parsed.type === "shared"
+        ? `shared "\${parsed.baseId}"`
+        : `article "${parsed.baseId}"`;
     const expiryDisplay = getExpiryDisplay();
 
     return (
@@ -501,12 +526,15 @@ export function EncryptedSection({
           {expiryDisplay && (
             <span
               className="key-expiry-badge"
-              title="DEK auto-renews before expiry"
+              title="Content key auto-renews before expiry"
               suppressHydrationWarning
             >
               ⏱️ {expiryDisplay}
             </span>
           )}
+        </div>
+        <div className="unlock-key-manager">
+          <KeyManager />
         </div>
         <div
           ref={contentRef}
@@ -519,12 +547,12 @@ export function EncryptedSection({
     );
   }
 
-  const { tierKeys, articleKeys } = getKeyOptions();
+  const { sharedKeys, articleKeys } = getKeyOptions();
 
   return (
     <div className="locked-section">
       <template
-        id={`encrypted-${articleId}`}
+        id={`encrypted-${resourceId}`}
         data-encrypted-article={JSON.stringify(encryptedData)}
       />
 
@@ -534,9 +562,9 @@ export function EncryptedSection({
             <div className="lock-icon">⚠️</div>
             <p className="error-message">{error}</p>
             <div className="unlock-buttons">
-              {tierKeys.length > 0 && (
-                <button onClick={() => handleUnlock("tier")}>
-                  Try Tier Key
+              {sharedKeys.length > 0 && (
+                <button onClick={() => handleUnlock("shared")}>
+                  Try Shared Key
                 </button>
               )}
               {articleKeys.length > 0 && (
@@ -573,16 +601,16 @@ export function EncryptedSection({
             <h3>Premium Content</h3>
             <p>Choose how to unlock this encrypted content:</p>
             <div className="unlock-buttons">
-              {tierKeys.length > 0 && (
+              {sharedKeys.length > 0 && (
                 <button
-                  onClick={() => handleUnlock("tier")}
+                  onClick={() => handleUnlock("shared")}
                   className="primary"
                 >
                   <span className="button-icon">🎫</span>
                   <span className="button-text">
-                    <strong>Premium Tier</strong>
+                    <strong>Premium Shared</strong>
                     <small>
-                      Unlocks all premium articles ({tierKeys.length} keys)
+                      Unlocks all premium articles ({sharedKeys.length} keys)
                     </small>
                   </span>
                 </button>
@@ -601,8 +629,8 @@ export function EncryptedSection({
               )}
             </div>
             <p className="hint">
-              <strong>Tier keys</strong> unlock all articles in the subscription
-              tier. <strong>Article keys</strong> are specific to this article
+              <strong>Shared keys</strong> unlock all articles in the subscription.
+              <strong>Article keys</strong> are specific to this article
               only.
             </p>
           </>

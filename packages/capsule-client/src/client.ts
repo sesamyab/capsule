@@ -8,10 +8,10 @@
  * @example Minimal setup:
  * ```ts
  * const capsule = new CapsuleClient({
- *   unlock: async ({ keyId, wrappedDek, publicKey }) => {
+ *   unlock: async ({ keyId, wrappedContentKey, publicKey }) => {
  *     const res = await fetch('/api/unlock', {
  *       method: 'POST',
- *       body: JSON.stringify({ keyId, wrappedDek, publicKey }),
+ *       body: JSON.stringify({ keyId, wrappedContentKey, publicKey }),
  *     });
  *     return res.json();
  *   }
@@ -30,7 +30,7 @@
  *
  * // Listen for unlock events
  * document.addEventListener('capsule:unlock', (e) => {
- *   console.log('Unlocked:', e.detail.articleId);
+ *   console.log('Unlocked:', e.detail.resourceId);
  * });
  * ```
  *
@@ -38,8 +38,8 @@
  * ```ts
  * const capsule = new CapsuleClient();
  * const publicKey = await capsule.getPublicKey();
- * const encryptedDek = await myServerCall(publicKey);
- * const content = await capsule.decrypt(encryptedArticle, encryptedDek);
+ * const encryptedContentKey = await myServerCall(publicKey);
+ * const content = await capsule.decrypt(encryptedArticle, encryptedContentKey);
  * ```
  */
 
@@ -50,11 +50,11 @@ import type {
   WrappedKey,
   CapsuleClientOptions,
   StoredKeyPair,
-  StoredDek,
+  StoredContentKey,
   UnlockFunction,
   UnlockResponse,
   ElementState,
-  DekStorageMode,
+  ContentKeyStorageMode,
   CapsuleUnlockEvent,
   CapsuleErrorEvent,
   CapsuleStateEvent,
@@ -70,7 +70,7 @@ const DEFAULT_SELECTOR = "[data-capsule]";
 const RSA_PUBLIC_EXPONENT = new Uint8Array([0x01, 0x00, 0x01]);
 
 /** DEK storage key prefix */
-const DEK_STORAGE_PREFIX = "capsule-dek:";
+const CONTENT_KEY_STORAGE_PREFIX = "capsule-key:";
 
 /** AES-GCM initialization vector size in bytes (96 bits per NIST) */
 const GCM_IV_BYTES = 12;
@@ -80,7 +80,7 @@ const GCM_IV_BYTES = 12;
  *
  * Handles:
  * - RSA key pair generation and storage (auto-creates if needed)
- * - DEK caching and auto-renewal
+ * - content key caching and auto-renewal
  * - HTML element processing and script execution
  * - Custom event emission
  */
@@ -91,23 +91,27 @@ export class CapsuleClient {
   private autoProcess: boolean;
   private executeScripts: boolean;
   private selector: string;
-  private dekStorage: DekStorageMode;
+  private contentKeyStorage: ContentKeyStorageMode;
   private renewBuffer: number;
   private logger?: (message: string, level: "info" | "error" | "debug") => void;
 
   // Cached state
   private keyPairPromise: Promise<StoredKeyPair> | null = null;
-  private dekCache: Map<string, { dek: CryptoKey; info: StoredDek }> =
+  private contentKeyCache: Map<string, { contentKey: CryptoKey; info: StoredContentKey }> =
     new Map();
   private renewalTimers: Map<string, number> = new Map();
   private elementStates: Map<string, ElementState> = new Map();
 
-  // Tier key cache: tier name → { AES CryptoKey, bucketId, expiresAt }
-  private tierKeyCache: Map<
+  // Shared key cache: content ID → { AES CryptoKey, periodId, expiresAt }
+  private sharedKeyCache: Map<
     string,
-    { key: CryptoKey; bucketId: string; expiresAt: number }
+    { key: CryptoKey; periodId: string; expiresAt: number }
   > = new Map();
-  private tierRenewalTimers: Map<string, number> = new Map();
+  private sharedRenewalTimers: Map<string, number> = new Map();
+  /** Expired key IDs found (and cleaned up) during the last tryUnlockFromCache call */
+  private _expiredKeyIds: Set<string> = new Set();
+  /** The wrapped key IDs from the last tryUnlockFromCache article */
+  private _lastContentKeyIds: Set<string> = new Set();
 
   /**
    * Create a new CapsuleClient instance.
@@ -129,7 +133,7 @@ export class CapsuleClient {
    *   keySize: 4096,
    *   autoProcess: true,
    *   executeScripts: false,
-   *   dekStorage: 'session',
+   *   contentKeyStorage: 'session',
    *   renewBuffer: 10000,
    * });
    * ```
@@ -140,7 +144,7 @@ export class CapsuleClient {
     this.autoProcess = options.autoProcess ?? false;
     this.executeScripts = options.executeScripts ?? true;
     this.selector = options.selector ?? DEFAULT_SELECTOR;
-    this.dekStorage = options.dekStorage ?? "persist";
+    this.contentKeyStorage = options.contentKeyStorage ?? "persist";
     this.renewBuffer = options.renewBuffer ?? 5000;
     this.logger = options.logger;
     this.storage = new KeyStorage(options.dbName, options.storeName);
@@ -184,22 +188,22 @@ export class CapsuleClient {
 
   /**
    * Unlock an encrypted element on the page by article ID.
-   * Finds the element, fetches the DEK (using unlock function), decrypts, and renders.
+   * Finds the element, fetches the content key (using unlock function), decrypts, and renders.
    *
-   * @param articleId - The article ID to unlock
+   * @param resourceId - The resource ID to unlock
    * @returns The decrypted content string
    * @throws Error if element not found, no unlock function, or decryption fails
    *
    * @example
    * ```ts
-   * // Element: <div data-capsule='{"articleId":"abc",...}'></div>
+   * // Element: <div data-capsule='{"resourceId":"abc",...}'></div>
    * const content = await capsule.unlockElement('abc');
    * ```
    */
-  async unlockElement(articleId: string): Promise<string> {
-    const element = this.findElement(articleId);
+  async unlockElement(resourceId: string): Promise<string> {
+    const element = this.findElement(resourceId);
     if (!element) {
-      throw new Error(`No encrypted element found for article "${articleId}"`);
+      throw new Error(`No encrypted element found for article "${resourceId}"`);
     }
 
     return this.processElement(element);
@@ -209,7 +213,7 @@ export class CapsuleClient {
    * Process all encrypted elements on the page.
    * Elements must have the data-capsule attribute with JSON EncryptedArticle data.
    *
-   * @returns Map of articleId to decrypted content (or error)
+   * @returns Map of resourceId to decrypted content (or error)
    *
    * @example
    * ```ts
@@ -233,12 +237,12 @@ export class CapsuleClient {
         const data = this.parseElementData(element);
         if (data) {
           const content = await this.processElement(element);
-          results.set(data.articleId, content);
+          results.set(data.resourceId, content);
         }
       } catch (err) {
-        const articleId = element.dataset.capsuleId || "unknown";
+        const resourceId = element.dataset.capsuleId || "unknown";
         results.set(
-          articleId,
+          resourceId,
           err instanceof Error ? err : new Error(String(err)),
         );
       }
@@ -282,48 +286,47 @@ export class CapsuleClient {
     const keyPair = await this.ensureKeyPair();
     const publicKey = await this.getPublicKey();
 
-    // Use the first tier key's wrappedDek (token-based unlock doesn't need keyId)
-    const tierKey = article.wrappedKeys.find(
+    // Use the first shared key's wrappedContentKey (token-based unlock doesn't need keyId)
+    const sharedKey = article.wrappedKeys.find(
       (k) => !k.keyId.startsWith("article:"),
     );
-    if (!tierKey) {
-      throw new Error("No tier key found in article for token-based unlock");
+    if (!sharedKey) {
+      throw new Error("No shared key found in article for token-based unlock");
     }
 
     const response = await this.unlockFn({
-      keyId: tierKey.keyId,
-      wrappedDek: tierKey.wrappedDek,
+      keyId: sharedKey.keyId,
+      wrappedContentKey: sharedKey.wrappedContentKey,
       publicKey,
-      articleId: article.articleId,
+      resourceId: article.resourceId,
       token,
     });
 
-    const dek = await this.unwrapDek(keyPair.privateKey, response.encryptedDek);
+    const contentKey = await this.unwrapContentKey(keyPair.privateKey, response.encryptedContentKey);
 
-    // Cache the DEK for future use
-    await this.cacheDek(tierKey.keyId, dek, response);
+    // Cache the content key for future use
+    await this.cacheContentKey(sharedKey.keyId, contentKey, response);
 
     this.log(
-      `Unlocked ${article.articleId} with token ${
-        response.tokenId || "unknown"
+      `Unlocked ${article.resourceId} with token ${response.tokenId || "unknown"
       }`,
       "info",
     );
 
-    return await this.decryptWithDek(article, dek);
+    return await this.decryptWithContentKey(article, contentKey);
   }
 
   /**
-   * Decrypt content using cached DEK or by fetching a new one.
+   * Decrypt content using cached content key or by fetching a new one.
    * This is the main decryption method that handles the full flow.
    *
-   * For tier keys, this automatically:
-   * 1. Checks for a cached tier key and unwraps DEKs locally (zero network)
-   * 2. Falls back to fetching a tier key from the server
-   * 3. Caches the tier key so subsequent articles decrypt locally
+   * For shared keys, this automatically:
+   * 1. Checks for a cached shared key and unwraps content keys locally (zero network)
+   * 2. Falls back to fetching a shared key from the server
+   * 3. Caches the shared key so subsequent articles decrypt locally
    *
    * @param article - The encrypted article data
-   * @param preferredKeyType - Prefer 'tier' or 'article' keys (default: tier)
+   * @param preferredKeyType - Prefer 'shared' or 'article' keys (default: shared)
    * @returns Decrypted content string
    *
    * @example
@@ -334,7 +337,7 @@ export class CapsuleClient {
    */
   async unlock(
     article: EncryptedArticle,
-    preferredKeyType: "tier" | "article" = "tier",
+    preferredKeyType: "shared" | "article" = "shared",
   ): Promise<string> {
     const keyPair = await this.ensureKeyPair();
 
@@ -344,23 +347,23 @@ export class CapsuleClient {
       preferredKeyType,
     );
 
-    // 1. Try locally with cached tier keys (fastest: zero network, zero I/O)
+    // 1. Try locally with cached shared keys (fastest: zero network, zero I/O)
     for (const wrappedKey of sortedKeys) {
-      const content = await this.tryLocalTierUnwrap(article, wrappedKey);
+      const content = await this.tryLocalSharedUnwrap(article, wrappedKey);
       if (content !== null) return content;
     }
 
-    // 2. Try cached DEKs (from persistent storage)
+    // 2. Try cached content keys (from persistent storage)
     for (const wrappedKey of sortedKeys) {
-      const cached = await this.getCachedDek(wrappedKey.keyId);
+      const cached = await this.getCachedContentKey(wrappedKey.keyId);
       if (cached) {
-        this.log(`Using cached DEK for ${wrappedKey.keyId}`, "debug");
+        this.log(`Using cached content key for ${wrappedKey.keyId}`, "debug");
         try {
-          return await this.decryptWithDek(article, cached.dek);
+          return await this.decryptWithContentKey(article, cached.contentKey);
         } catch {
           // Cache might be stale, continue
           this.log(
-            `Cached DEK failed for ${wrappedKey.keyId}, trying next`,
+            `Cached content key failed for ${wrappedKey.keyId}, trying next`,
             "debug",
           );
         }
@@ -371,7 +374,7 @@ export class CapsuleClient {
     if (!this.unlockFn) {
       throw new Error(
         "No unlock function provided. Either pass an unlock function to the constructor, " +
-          "or use decrypt() with a pre-fetched encryptedDek.",
+        "or use decrypt() with a pre-fetched encryptedContentKey.",
       );
     }
 
@@ -383,40 +386,40 @@ export class CapsuleClient {
 
         const response = await this.unlockFn({
           keyId: wrappedKey.keyId,
-          wrappedDek: wrappedKey.wrappedDek,
+          wrappedContentKey: wrappedKey.wrappedContentKey,
           publicKey,
-          articleId: article.articleId,
-          // Request tier key when appropriate
-          ...(parsed.type === "tier" ? { mode: "tier" as const } : {}),
+          resourceId: article.resourceId,
+          // Request shared key when appropriate
+          ...(parsed.type === "shared" ? { mode: "shared" as const } : {}),
         });
 
         if (response.keyType === "kek") {
-          // Tier key response: unwrap the KEK, cache it, and locally unwrap the DEK
-          const tierKey = await this.unwrapDek(
+          // Shared key response: unwrap the KEK, cache it, and locally unwrap the content key
+          const sharedKey = await this.unwrapContentKey(
             keyPair.privateKey,
-            response.encryptedDek,
+            response.encryptedContentKey,
           );
-          this.cacheTierKey(parsed.baseId, tierKey, response);
+          this.cacheSharedKey(parsed.baseId, sharedKey, response);
 
-          const dek = await this.localUnwrapDek(
-            wrappedKey.wrappedDek,
-            tierKey,
+          const contentKey = await this.localUnwrapContentKey(
+            wrappedKey.wrappedContentKey,
+            sharedKey,
           );
           this.log(
-            `Tier key '${parsed.baseId}' cached, article unlocked locally`,
+            `Shared key '${parsed.baseId}' cached, article unlocked locally`,
             "info",
           );
-          return await this.decryptWithDek(article, dek);
+          return await this.decryptWithContentKey(article, contentKey);
         }
 
         // DEK response (standard per-article flow)
-        const dek = await this.unwrapDek(
+        const contentKey = await this.unwrapContentKey(
           keyPair.privateKey,
-          response.encryptedDek,
+          response.encryptedContentKey,
         );
-        await this.cacheDek(wrappedKey.keyId, dek, response);
+        await this.cacheContentKey(wrappedKey.keyId, contentKey, response);
 
-        return await this.decryptWithDek(article, dek);
+        return await this.decryptWithContentKey(article, contentKey);
       } catch (err) {
         this.log(`Failed to unlock with ${wrappedKey.keyId}: ${err}`, "debug");
         continue;
@@ -427,33 +430,162 @@ export class CapsuleClient {
   }
 
   /**
-   * Pre-fetch and cache a tier's key-wrapping key for local DEK unwrapping.
+   * Try to unlock content using only locally-cached keys (no server call).
    *
-   * After calling this, all articles encrypted for this tier can be unlocked
-   * locally without additional server round-trips (until the bucket expires).
+   * Returns the decrypted content if a valid cached key is found, or `null`
+   * if no cached key is available. This is useful for restoring previously
+   * unlocked content on page load without triggering a server round-trip.
    *
-   * This is optional — `unlock()` automatically requests and caches tier keys.
-   * Use this to pre-warm the cache before processing multiple articles.
+   * Checks:
+   * 1. In-memory shared key cache (fastest)
+   * 2. Persistent content key storage (IndexedDB)
    *
-   * @param keyId - Full key ID including bucket (e.g., "premium:123456")
-   * @returns Expiration info for the cached tier key
+   * @param article - The encrypted article data
+   * @param preferredKeyType - Which key type to try first (default: "shared")
+   * @returns Decrypted content string, or `null` if no cached key works
    *
    * @example
    * ```ts
-   * // Pre-fetch tier key from first article's wrappedKeys
-   * const tierKeyId = articles[0].wrappedKeys.find(k => !k.keyId.startsWith('article:'))?.keyId;
-   * if (tierKeyId) {
-   *   await capsule.prefetchTierKey(tierKeyId);
+   * const cached = await capsule.tryUnlockFromCache(article);
+   * if (cached) {
+   *   showContent(cached);
+   * } else {
+   *   showPaywall();
    * }
-   * // Now all unlocks for this tier are local
+   * ```
+   */
+  async tryUnlockFromCache(
+    article: EncryptedArticle,
+    preferredKeyType: "shared" | "article" = "shared",
+  ): Promise<string | null> {
+    this._expiredKeyIds = new Set();
+    this._lastContentKeyIds = new Set(
+      article.wrappedKeys.map((wk) => wk.keyId),
+    );
+    const keyPair = await this.ensureKeyPair();
+
+    const sortedKeys = this.sortKeysByPreference(
+      article.wrappedKeys,
+      preferredKeyType,
+    );
+
+    // 0. Hydrate in-memory shared key cache from IndexedDB (survives page reload)
+    await this.loadPersistedSharedKeys(keyPair.privateKey);
+
+    // 1. Try locally with cached shared keys (in-memory, now hydrated)
+    for (const wrappedKey of sortedKeys) {
+      const content = await this.tryLocalSharedUnwrap(article, wrappedKey);
+      if (content !== null) {
+        this.log(`Unlocked from cached shared key for ${wrappedKey.keyId}`, "debug");
+        return content;
+      }
+    }
+
+    // 2. Try cached content keys (from persistent storage)
+    for (const wrappedKey of sortedKeys) {
+      const cached = await this.getCachedContentKey(wrappedKey.keyId);
+      if (cached) {
+        try {
+          const content = await this.decryptWithContentKey(article, cached.contentKey);
+          this.log(`Unlocked from cached content key for ${wrappedKey.keyId}`, "debug");
+          return content;
+        } catch {
+          this.log(
+            `Cached content key failed for ${wrappedKey.keyId}, trying next`,
+            "debug",
+          );
+        }
+      }
+    }
+
+    // No cached keys available — do NOT call the server
+    return null;
+  }
+
+  /**
+   * Returns true if `tryUnlockFromCache` encountered expired keys that belonged
+   * to the article it was called with. Use this to distinguish "first visit"
+   * (no keys) from "returning user with expired keys" so the UI can auto-renew.
+   *
+   * Must be called after `tryUnlockFromCache()`.
+   */
+  get hadExpiredKeys(): boolean {
+    // Check if any expired key matches the article's wrapped key IDs.
+    // For shared keys, match on content ID (baseId) since the period changes on renewal.
+    for (const expiredId of this._expiredKeyIds) {
+      // Direct match (same keyId)
+      if (this._lastContentKeyIds.has(expiredId)) return true;
+
+      // Shared key: match if same content ID (e.g. expired "premium:111" matches article's "premium:222")
+      if (!expiredId.startsWith("article:")) {
+        const expiredShared = expiredId.split(":")[0];
+        for (const contentKeyId of this._lastContentKeyIds) {
+          if (!contentKeyId.startsWith("article:") && contentKeyId.split(":")[0] === expiredShared) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns the key type ("shared" or "article") of the expired keys found for
+   * the last article passed to `tryUnlockFromCache()`. Useful for renewing
+   * with the same key type the user originally used.
+   *
+   * Returns null if no relevant expired keys were found.
+   */
+  get expiredKeyType(): "shared" | "article" | null {
+    for (const expiredId of this._expiredKeyIds) {
+      const isShared = !expiredId.startsWith("article:");
+
+      // Direct match
+      if (this._lastContentKeyIds.has(expiredId)) {
+        return isShared ? "shared" : "article";
+      }
+
+      // Shared: match on content ID
+      if (isShared) {
+        const expiredShared = expiredId.split(":")[0];
+        for (const contentKeyId of this._lastContentKeyIds) {
+          if (!contentKeyId.startsWith("article:") && contentKeyId.split(":")[0] === expiredShared) {
+            return "shared";
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Pre-fetch and cache a shared key-wrapping key for local DEK unwrapping.
+   *
+   * After calling this, all articles encrypted for this content ID can be unlocked
+   * locally without additional server round-trips (until the period expires).
+   *
+   * This is optional — `unlock()` automatically requests and caches shared keys.
+   * Use this to pre-warm the cache before processing multiple articles.
+   *
+   * @param keyId - Full key ID including period (e.g., "premium:123456")
+   * @returns Expiration info for the cached shared key
+   *
+   * @example
+   * ```ts
+   * // Pre-fetch shared key from first article's wrappedKeys
+   * const sharedKeyId = articles[0].wrappedKeys.find(k => !k.keyId.startsWith('article:'))?.keyId;
+   * if (sharedKeyId) {
+   *   await capsule.prefetchSharedKey(sharedKeyId);
+   * }
+   * // Now all unlocks for this content ID are local
    * for (const article of articles) {
    *   await capsule.unlock(article);
    * }
    * ```
    */
-  async prefetchTierKey(
+  async prefetchSharedKey(
     keyId: string,
-  ): Promise<{ expiresAt: number; bucketId: string }> {
+  ): Promise<{ expiresAt: number; periodId: string }> {
     if (!this.unlockFn) {
       throw new Error(
         "No unlock function provided. Pass an unlock function to the constructor.",
@@ -463,9 +595,9 @@ export class CapsuleClient {
     const parsed = this.parseKeyId(keyId);
 
     // Check if already cached and valid
-    const existing = this.tierKeyCache.get(parsed.baseId);
+    const existing = this.sharedKeyCache.get(parsed.baseId);
     if (existing && existing.expiresAt > Date.now()) {
-      return { expiresAt: existing.expiresAt, bucketId: existing.bucketId };
+      return { expiresAt: existing.expiresAt, periodId: existing.periodId };
     }
 
     const keyPair = await this.ensureKeyPair();
@@ -473,23 +605,23 @@ export class CapsuleClient {
 
     const response = await this.unlockFn({
       keyId,
-      wrappedDek: "",
+      wrappedContentKey: "",
       publicKey,
-      articleId: "",
-      mode: "tier",
+      resourceId: "",
+      mode: "shared",
     });
 
     if (response.keyType !== "kek") {
       throw new Error(
-        "Server did not return a tier key (expected keyType 'kek')",
+        "Server did not return a shared key (expected keyType 'kek')",
       );
     }
 
-    const tierKey = await this.unwrapDek(
+    const sharedKey = await this.unwrapContentKey(
       keyPair.privateKey,
-      response.encryptedDek,
+      response.encryptedContentKey,
     );
-    this.cacheTierKey(parsed.baseId, tierKey, response);
+    this.cacheSharedKey(parsed.baseId, sharedKey, response);
 
     const expiresAt =
       typeof response.expiresAt === "string"
@@ -497,10 +629,10 @@ export class CapsuleClient {
         : response.expiresAt;
 
     this.log(
-      `Pre-fetched tier key '${parsed.baseId}', expires ${new Date(expiresAt).toISOString()}`,
+      `Pre-fetched shared key '${parsed.baseId}', expires ${new Date(expiresAt).toISOString()}`,
       "info",
     );
-    return { expiresAt, bucketId: response.bucketId || "" };
+    return { expiresAt, periodId: response.periodId || "" };
   }
 
   // =========================================================================
@@ -512,24 +644,24 @@ export class CapsuleClient {
    * Use this for full manual control over the unlock flow.
    *
    * @param article - The encrypted article data
-   * @param encryptedDek - Base64-encoded DEK encrypted with user's public key
+   * @param encryptedContentKey - Base64-encoded DEK encrypted with user's public key
    * @returns Decrypted content string
    *
    * @example
    * ```ts
    * // Manual flow
    * const publicKey = await capsule.getPublicKey();
-   * const { encryptedDek } = await myServerCall(publicKey, article.wrappedKeys[0]);
-   * const content = await capsule.decrypt(article, encryptedDek);
+   * const { encryptedContentKey } = await myServerCall(publicKey, article.wrappedKeys[0]);
+   * const content = await capsule.decrypt(article, encryptedContentKey);
    * ```
    */
   async decrypt(
     article: EncryptedArticle,
-    encryptedDek: string,
+    encryptedContentKey: string,
   ): Promise<string> {
     const keyPair = await this.ensureKeyPair();
-    const dek = await this.unwrapDek(keyPair.privateKey, encryptedDek);
-    return this.decryptWithDek(article, dek);
+    const contentKey = await this.unwrapContentKey(keyPair.privateKey, encryptedContentKey);
+    return this.decryptWithContentKey(article, contentKey);
   }
 
   /**
@@ -541,14 +673,14 @@ export class CapsuleClient {
    */
   async decryptPayload(payload: EncryptedPayload): Promise<string> {
     const keyPair = await this.ensureKeyPair();
-    const dek = await this.unwrapDek(keyPair.privateKey, payload.encryptedDek);
+    const contentKey = await this.unwrapContentKey(keyPair.privateKey, payload.encryptedContentKey);
 
     const iv = this.base64ToArrayBuffer(payload.iv);
     const ciphertext = this.base64ToArrayBuffer(payload.encryptedContent);
 
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv },
-      dek,
+      contentKey,
       ciphertext,
     );
 
@@ -584,30 +716,30 @@ export class CapsuleClient {
   async regenerateKeyPair(): Promise<string> {
     await this.storage.deleteKeyPair(DEFAULT_KEY_ID);
     this.keyPairPromise = null;
-    this.dekCache.clear();
-    this.tierKeyCache.clear();
+    this.contentKeyCache.clear();
+    this.sharedKeyCache.clear();
     return this.getPublicKey();
   }
 
   /**
-   * Clear all stored keys and cached DEKs.
+   * Clear all stored keys and cached content keys.
    */
   async clearAll(): Promise<void> {
     await this.storage.clearAll();
     this.keyPairPromise = null;
-    this.dekCache.clear();
-    this.tierKeyCache.clear();
+    this.contentKeyCache.clear();
+    this.sharedKeyCache.clear();
     this.clearAllRenewalTimers();
 
     // Clear persisted DEKs
-    if (this.dekStorage === "persist") {
+    if (this.contentKeyStorage === "persist") {
       // Clear from IndexedDB
-      const db = await this.openDekDb();
-      await this.clearDekStore(db);
-    } else if (this.dekStorage === "session") {
+      const db = await this.openContentKeyDb();
+      await this.clearContentKeyStore(db);
+    } else if (this.contentKeyStorage === "session") {
       // Clear from sessionStorage
       const keys = Object.keys(sessionStorage).filter((k) =>
-        k.startsWith(DEK_STORAGE_PREFIX),
+        k.startsWith(CONTENT_KEY_STORAGE_PREFIX),
       );
       keys.forEach((k) => sessionStorage.removeItem(k));
     }
@@ -616,8 +748,8 @@ export class CapsuleClient {
   /**
    * Get the current state of an element.
    */
-  getElementState(articleId: string): ElementState | undefined {
-    return this.elementStates.get(articleId);
+  getElementState(resourceId: string): ElementState | undefined {
+    return this.elementStates.get(resourceId);
   }
 
   // =========================================================================
@@ -633,20 +765,20 @@ export class CapsuleClient {
       throw new Error("Element has no valid encrypted data");
     }
 
-    const articleId = data.articleId;
-    this.setElementState(element, articleId, "unlocking");
+    const resourceId = data.resourceId;
+    this.setElementState(element, resourceId, "unlocking");
 
     try {
       // Unlock and get content
       const content = await this.unlock(data);
 
       // Render content into element
-      this.renderContent(element, content, articleId);
-      this.setElementState(element, articleId, "unlocked");
+      this.renderContent(element, content, resourceId);
+      this.setElementState(element, resourceId, "unlocked");
 
       // Emit unlock event
       this.emitEvent(element, "capsule:unlock", {
-        articleId,
+        resourceId,
         element,
         keyId: data.wrappedKeys[0]?.keyId || "unknown",
         content,
@@ -654,11 +786,11 @@ export class CapsuleClient {
 
       return content;
     } catch (err) {
-      this.setElementState(element, articleId, "error");
+      this.setElementState(element, resourceId, "error");
 
       // Emit error event
       this.emitEvent(element, "capsule:error", {
-        articleId,
+        resourceId,
         element,
         error: err instanceof Error ? err : new Error(String(err)),
       } satisfies CapsuleErrorEvent);
@@ -670,24 +802,24 @@ export class CapsuleClient {
   /**
    * Find an encrypted element by article ID.
    */
-  private findElement(articleId: string): HTMLElement | null {
+  private findElement(resourceId: string): HTMLElement | null {
     // Try data-capsule-id first
     let element = document.querySelector<HTMLElement>(
-      `[data-capsule-id="${articleId}"]`,
+      `[data-capsule-id="${resourceId}"]`,
     );
     if (element) return element;
 
     // Try id attribute
-    element = document.getElementById(articleId);
+    element = document.getElementById(resourceId);
     if (element?.hasAttribute("data-capsule")) return element;
 
-    // Search all encrypted elements for matching articleId
+    // Search all encrypted elements for matching resourceId
     const elements = document.querySelectorAll<HTMLElement>(this.selector);
     for (let i = 0; i < elements.length; i++) {
       const el = elements[i]!;
       try {
         const data = this.parseElementData(el);
-        if (data?.articleId === articleId) return el;
+        if (data?.resourceId === resourceId) return el;
       } catch {
         continue;
       }
@@ -717,7 +849,7 @@ export class CapsuleClient {
   private renderContent(
     element: HTMLElement,
     content: string,
-    articleId: string,
+    resourceId: string,
   ): void {
     // Set the HTML content
     element.innerHTML = content;
@@ -731,7 +863,7 @@ export class CapsuleClient {
       this.executeEmbeddedScripts(element);
     }
 
-    this.log(`Rendered content for ${articleId}`, "info");
+    this.log(`Rendered content for ${resourceId}`, "info");
   }
 
   /**
@@ -763,11 +895,11 @@ export class CapsuleClient {
    */
   private setElementState(
     element: HTMLElement,
-    articleId: string,
+    resourceId: string,
     state: ElementState,
   ): void {
-    const previousState = this.elementStates.get(articleId) || "locked";
-    this.elementStates.set(articleId, state);
+    const previousState = this.elementStates.get(resourceId) || "locked";
+    this.elementStates.set(resourceId, state);
 
     // Update element data attribute
     element.dataset.capsuleState = state;
@@ -775,7 +907,7 @@ export class CapsuleClient {
     // Emit state change event
     if (previousState !== state) {
       this.emitEvent(element, "capsule:state", {
-        articleId,
+        resourceId,
         element,
         previousState,
         state,
@@ -879,10 +1011,10 @@ export class CapsuleClient {
    */
   private sortKeysByPreference(
     keys: WrappedKey[],
-    preferredType: "tier" | "article",
+    preferredType: "shared" | "article",
   ): WrappedKey[] {
-    const parseKeyType = (keyId: string): "tier" | "article" => {
-      return keyId.startsWith("article:") ? "article" : "tier";
+    const parseKeyType = (keyId: string): "shared" | "article" => {
+      return keyId.startsWith("article:") ? "article" : "shared";
     };
 
     return [...keys].sort((a, b) => {
@@ -896,39 +1028,39 @@ export class CapsuleClient {
   }
 
   // =========================================================================
-  // Tier Key Management (local DEK unwrapping)
+  // Shared Key Management (local DEK unwrapping)
   // =========================================================================
 
   /**
-   * Try to unwrap an article's DEK locally using a cached tier key.
+   * Try to unwrap an article's content key locally using a cached shared key.
    * Returns decrypted content on success, null if not possible.
    */
-  private async tryLocalTierUnwrap(
+  private async tryLocalSharedUnwrap(
     article: EncryptedArticle,
     wrappedKey: WrappedKey,
   ): Promise<string | null> {
     const parsed = this.parseKeyId(wrappedKey.keyId);
-    if (parsed.type !== "tier") return null;
+    if (parsed.type !== "shared") return null;
 
-    const cached = this.tierKeyCache.get(parsed.baseId);
+    const cached = this.sharedKeyCache.get(parsed.baseId);
     if (!cached || cached.expiresAt <= Date.now()) return null;
 
-    // Extract bucketId from keyId (e.g., "premium:123456" → "123456")
+    // Extract periodId from keyId (e.g., "premium:123456" → "123456")
     const colonIdx = wrappedKey.keyId.lastIndexOf(":");
-    const bucketId =
+    const periodId =
       colonIdx > 0 ? wrappedKey.keyId.substring(colonIdx + 1) : null;
-    if (!bucketId || cached.bucketId !== bucketId) return null;
+    if (!periodId || cached.periodId !== periodId) return null;
 
     try {
-      const dek = await this.localUnwrapDek(wrappedKey.wrappedDek, cached.key);
+      const contentKey = await this.localUnwrapContentKey(wrappedKey.wrappedContentKey, cached.key);
       this.log(
-        `Local tier unwrap for '${parsed.baseId}:${bucketId}'`,
+        `Local shared unwrap for '${parsed.baseId}:${periodId}'`,
         "debug",
       );
-      return await this.decryptWithDek(article, dek);
+      return await this.decryptWithContentKey(article, contentKey);
     } catch {
       this.log(
-        `Local tier unwrap failed for '${parsed.baseId}:${bucketId}'`,
+        `Local shared unwrap failed for '${parsed.baseId}:${periodId}'`,
         "debug",
       );
       return null;
@@ -936,32 +1068,32 @@ export class CapsuleClient {
   }
 
   /**
-   * Locally unwrap a DEK using a tier key (AES-GCM).
+   * Locally unwrap a content key using a shared key (AES-GCM).
    *
-   * The wrappedDek format is: IV (12 bytes) + AES-GCM(DEK + auth tag).
-   * This mirrors the server-side wrapDek/unwrapDek from @sesamy/capsule-server.
+   * The wrappedContentKey format is: IV (12 bytes) + AES-GCM(DEK + auth tag).
+   * This mirrors the server-side wrapContentKey/unwrapContentKey from @sesamy/capsule-server.
    */
-  private async localUnwrapDek(
-    wrappedDekB64: string,
-    tierKey: CryptoKey,
+  private async localUnwrapContentKey(
+    wrappedContentKeyB64: string,
+    sharedKey: CryptoKey,
   ): Promise<CryptoKey> {
-    const wrappedBytes = this.base64ToArrayBuffer(wrappedDekB64) as Uint8Array;
+    const wrappedBytes = this.base64ToArrayBuffer(wrappedContentKeyB64) as Uint8Array;
 
-    // Split: first 12 bytes = IV, rest = AES-GCM ciphertext (DEK + auth tag)
+    // Split: first 12 bytes = IV, rest = AES-GCM ciphertext (content key + auth tag)
     const iv = wrappedBytes.slice(0, GCM_IV_BYTES);
     const ciphertext = wrappedBytes.slice(GCM_IV_BYTES);
 
-    // Decrypt the wrapped DEK with the tier key
-    const dekBytes = await crypto.subtle.decrypt(
+    // Decrypt the wrapped content key with the shared key
+    const contentKeyBytes = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv },
-      tierKey,
+      sharedKey,
       ciphertext,
     );
 
-    // Import the raw DEK as a CryptoKey for content decryption
+    // Import the raw content key as a CryptoKey for content decryption
     return crypto.subtle.importKey(
       "raw",
-      dekBytes,
+      contentKeyBytes,
       { name: "AES-GCM", length: 256 },
       false,
       ["decrypt"],
@@ -969,10 +1101,10 @@ export class CapsuleClient {
   }
 
   /**
-   * Cache a tier key in memory.
+   * Cache a shared key in memory and persist to IndexedDB.
    */
-  private cacheTierKey(
-    tier: string,
+  private cacheSharedKey(
+    contentId: string,
     key: CryptoKey,
     response: UnlockResponse,
   ): void {
@@ -980,19 +1112,132 @@ export class CapsuleClient {
       typeof response.expiresAt === "string"
         ? new Date(response.expiresAt).getTime()
         : response.expiresAt;
-    const bucketId = response.bucketId || "";
+    const periodId = response.periodId || "";
 
-    this.tierKeyCache.set(tier, { key, bucketId, expiresAt });
-    this.scheduleTierKeyRenewal(tier, expiresAt);
+    this.sharedKeyCache.set(contentId, { key, periodId, expiresAt });
+    this.scheduleSharedKeyRenewal(contentId, expiresAt);
+
+    // Persist to IndexedDB so the shared key survives page reloads.
+    // Stored as a StoredContentKey with an IndexedDB key of "kek:<contentId>:<periodId>".
+    const info: StoredContentKey = {
+      type: "shared",
+      baseId: contentId,
+      encryptedContentKey: response.encryptedContentKey,
+      expiresAt,
+      periodId,
+    };
+    const storeKey = `kek:${contentId}:${periodId}`;
+
+    // Remove old shared key entries for this content ID, then store the new one
+    this.replaceOldSharedKeys(contentId, storeKey, info).catch(() => {
+      // Non-critical — worst case the user re-fetches on next page load
+    });
   }
 
   /**
-   * Schedule auto-expiry for a cached tier key.
+   * Remove old kek entries for a content ID and store the new one.
    */
-  private scheduleTierKeyRenewal(tier: string, expiresAt: number): void {
+  private async replaceOldSharedKeys(
+    contentId: string,
+    newStoreKey: string,
+    newInfo: StoredContentKey,
+  ): Promise<void> {
+    const db = await this.openContentKeyDb();
+    const allKeys = await this.getAllContentKeysFromStore(db);
+    const prefix = `kek:${contentId}:`;
+
+    for (const { key: storeKey } of allKeys) {
+      if (typeof storeKey === "string" && storeKey.startsWith(prefix) && storeKey !== newStoreKey) {
+        await this.deleteContentKeyFromStore(db, storeKey);
+        this.log(`Removed expired shared key: ${storeKey}`, "debug");
+      }
+    }
+
+    await this.putContentKeyToStore(db, newStoreKey, newInfo);
+  }
+
+  /**
+   * Load persisted shared keys from IndexedDB into the in-memory sharedKeyCache.
+   * Called by tryUnlockFromCache to restore keys that survived a page reload.
+   */
+  private async loadPersistedSharedKeys(privateKey: CryptoKey): Promise<void> {
+    if (this.contentKeyStorage === "memory") return;
+
+    try {
+      const db = await this.openContentKeyDb();
+      const allKeys = await this.getAllContentKeysFromStore(db);
+
+      for (const { key: storeKey, value: stored } of allKeys) {
+        // Only process shared key entries (stored with "kek:" prefix)
+        if (typeof storeKey !== "string" || !storeKey.startsWith("kek:")) continue;
+        if (stored.type !== "shared") continue;
+
+        // Clean up expired entries from IndexedDB
+        if (stored.expiresAt <= Date.now()) {
+          // Record the original keyId (contentId:periodId format) for this expired shared key
+          const expiredKeyId = `${stored.baseId}:${stored.periodId || ""}`;
+          this._expiredKeyIds.add(expiredKeyId);
+          this.deleteContentKeyFromStore(db, storeKey as string).catch(() => { });
+          this.log(`Removed expired shared key: ${storeKey}`, "debug");
+          continue;
+        }
+
+        // Skip if already in memory cache
+        if (this.sharedKeyCache.has(stored.baseId)) {
+          const existing = this.sharedKeyCache.get(stored.baseId)!;
+          if (existing.expiresAt > Date.now()) continue;
+        }
+
+        // Unwrap the RSA-encrypted shared key
+        try {
+          const sharedKey = await this.unwrapContentKey(privateKey, stored.encryptedContentKey);
+          this.sharedKeyCache.set(stored.baseId, {
+            key: sharedKey,
+            periodId: stored.periodId || "",
+            expiresAt: stored.expiresAt,
+          });
+          this.scheduleSharedKeyRenewal(stored.baseId, stored.expiresAt);
+          this.log(`Restored shared key '${stored.baseId}' from IndexedDB`, "debug");
+        } catch {
+          // Key may be stale or for a different RSA key — ignore
+        }
+      }
+    } catch {
+      // IndexedDB may not be available — non-critical
+    }
+  }
+
+  /**
+   * Read all entries from the content-keys object store.
+   */
+  private getAllContentKeysFromStore(
+    db: IDBDatabase,
+  ): Promise<Array<{ key: IDBValidKey; value: StoredContentKey }>> {
+    return new Promise((resolve) => {
+      const tx = db.transaction("content-keys", "readonly");
+      const store = tx.objectStore("content-keys");
+      const results: Array<{ key: IDBValidKey; value: StoredContentKey }> = [];
+      const cursorReq = store.openCursor();
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (cursor) {
+          results.push({ key: cursor.key, value: cursor.value });
+          cursor.continue();
+        } else {
+          resolve(results);
+        }
+      };
+      cursorReq.onerror = () => resolve([]);
+    });
+  }
+
+  /**
+   * Schedule auto-expiry for a cached shared key.
+   */
+  private scheduleSharedKeyRenewal(contentId: string, expiresAt: number): void {
     if (this.renewBuffer <= 0) return;
 
-    const existingTimer = this.tierRenewalTimers.get(tier);
+    const existingTimer = this.sharedRenewalTimers.get(contentId);
     if (existingTimer) {
       clearTimeout(existingTimer);
     }
@@ -1001,50 +1246,55 @@ export class CapsuleClient {
     if (timeUntilExpiry <= 0) return;
 
     const timer = window.setTimeout(() => {
-      this.tierKeyCache.delete(tier);
-      this.tierRenewalTimers.delete(tier);
-      this.log(`Tier key '${tier}' expired, cleared from cache`, "debug");
+      this.sharedKeyCache.delete(contentId);
+      this.sharedRenewalTimers.delete(contentId);
+      this.log(`Shared key '${contentId}' expired, cleared from cache`, "debug");
     }, timeUntilExpiry);
 
-    this.tierRenewalTimers.set(tier, timer);
+    this.sharedRenewalTimers.set(contentId, timer);
   }
 
   /**
-   * Get cached DEK for a key ID.
+   * Get cached content key for a key ID.
    */
-  private async getCachedDek(
+  private async getCachedContentKey(
     keyId: string,
-  ): Promise<{ dek: CryptoKey; info: StoredDek } | null> {
+  ): Promise<{ contentKey: CryptoKey; info: StoredContentKey } | null> {
     // Check memory cache first
-    const memCached = this.dekCache.get(keyId);
+    const memCached = this.contentKeyCache.get(keyId);
     if (memCached && memCached.info.expiresAt > Date.now()) {
       return memCached;
     }
 
     // Check persistent storage
-    const stored = await this.loadStoredDek(keyId);
+    const stored = await this.loadStoredContentKey(keyId);
     if (!stored || stored.expiresAt <= Date.now()) {
+      // Remove expired entry from persistent storage
+      if (stored && stored.expiresAt <= Date.now()) {
+        this._expiredKeyIds.add(keyId);
+        this.removeStoredContentKey(keyId).catch(() => { });
+      }
       return null;
     }
 
     // Unwrap and cache in memory
     const keyPair = await this.ensureKeyPair();
     try {
-      const dek = await this.unwrapDek(keyPair.privateKey, stored.encryptedDek);
-      this.dekCache.set(keyId, { dek, info: stored });
+      const contentKey = await this.unwrapContentKey(keyPair.privateKey, stored.encryptedContentKey);
+      this.contentKeyCache.set(keyId, { contentKey, info: stored });
       this.scheduleRenewal(keyId, stored);
-      return { dek, info: stored };
+      return { contentKey, info: stored };
     } catch {
       return null;
     }
   }
 
   /**
-   * Cache a DEK after fetching.
+   * Cache a content key after fetching.
    */
-  private async cacheDek(
+  private async cacheContentKey(
     keyId: string,
-    dek: CryptoKey,
+    contentKey: CryptoKey,
     response: UnlockResponse,
   ): Promise<void> {
     const expiresAt =
@@ -1053,25 +1303,25 @@ export class CapsuleClient {
         : response.expiresAt;
 
     const parsed = this.parseKeyId(keyId);
-    const info: StoredDek = {
+    const info: StoredContentKey = {
       type: parsed.type,
       baseId: parsed.baseId,
-      encryptedDek: response.encryptedDek,
+      encryptedContentKey: response.encryptedContentKey,
       expiresAt,
-      bucketId: response.bucketId,
+      periodId: response.periodId,
     };
 
     // Memory cache
-    this.dekCache.set(keyId, { dek, info });
+    this.contentKeyCache.set(keyId, { contentKey, info });
 
     // Persistent storage
-    await this.storeStoredDek(keyId, info);
+    await this.storeStoredContentKey(keyId, info);
 
     // Schedule renewal
     this.scheduleRenewal(keyId, info);
 
     this.log(
-      `Cached DEK for ${keyId}, expires ${new Date(expiresAt).toISOString()}`,
+      `Cached content key for ${keyId}, expires ${new Date(expiresAt).toISOString()}`,
       "debug",
     );
   }
@@ -1080,24 +1330,38 @@ export class CapsuleClient {
    * Parse a key ID into type and base ID.
    */
   private parseKeyId(keyId: string): {
-    type: "tier" | "article";
+    type: "shared" | "article";
     baseId: string;
   } {
+    if (!keyId) {
+      throw new Error("keyId must be a non-empty string");
+    }
     if (keyId.startsWith("article:")) {
-      return { type: "article", baseId: keyId.slice(8) };
+      const baseId = keyId.slice(8);
+      if (!baseId) {
+        throw new Error("Invalid article keyId: missing article identifier after 'article:'");
+      }
+      return { type: "article", baseId };
     }
-    // Tier format: "tierName:bucketId" or just "tierName"
+    // Shared format: "contentId:periodId" or just "contentId"
     const colonIdx = keyId.indexOf(":");
-    if (colonIdx > 0) {
-      return { type: "tier", baseId: keyId.slice(0, colonIdx) };
+    if (colonIdx === 0) {
+      throw new Error(`Invalid shared keyId '${keyId}': contentId segment is empty`);
     }
-    return { type: "tier", baseId: keyId };
+    if (colonIdx > 0) {
+      const periodId = keyId.slice(colonIdx + 1);
+      if (!periodId) {
+        throw new Error(`Invalid shared keyId '${keyId}': periodId segment is empty`);
+      }
+      return { type: "shared", baseId: keyId.slice(0, colonIdx) };
+    }
+    return { type: "shared", baseId: keyId };
   }
 
   /**
-   * Schedule auto-renewal for a DEK.
+   * Schedule auto-renewal for a content key.
    */
-  private scheduleRenewal(keyId: string, info: StoredDek): void {
+  private scheduleRenewal(keyId: string, info: StoredContentKey): void {
     if (this.renewBuffer <= 0) return;
 
     // Clear existing timer
@@ -1110,9 +1374,9 @@ export class CapsuleClient {
     if (timeUntilRenewal <= 0) return;
 
     const timer = window.setTimeout(async () => {
-      this.log(`Auto-renewing DEK for ${keyId}`, "debug");
+      this.log(`Auto-renewing content key for ${keyId}`, "debug");
       // DEK will be refreshed on next decrypt attempt
-      this.dekCache.delete(keyId);
+      this.contentKeyCache.delete(keyId);
       this.renewalTimers.delete(keyId);
     }, timeUntilRenewal);
 
@@ -1127,94 +1391,116 @@ export class CapsuleClient {
       clearTimeout(timer);
     }
     this.renewalTimers.clear();
-    for (const timer of this.tierRenewalTimers.values()) {
+    for (const timer of this.sharedRenewalTimers.values()) {
       clearTimeout(timer);
     }
-    this.tierRenewalTimers.clear();
+    this.sharedRenewalTimers.clear();
   }
 
   // =========================================================================
   // DEK Persistence
   // =========================================================================
 
-  private async loadStoredDek(keyId: string): Promise<StoredDek | null> {
-    if (this.dekStorage === "memory") {
+  private async loadStoredContentKey(keyId: string): Promise<StoredContentKey | null> {
+    if (this.contentKeyStorage === "memory") {
       return null; // Memory-only, no persistence
     }
 
-    if (this.dekStorage === "session") {
-      const json = sessionStorage.getItem(DEK_STORAGE_PREFIX + keyId);
+    if (this.contentKeyStorage === "session") {
+      const json = sessionStorage.getItem(CONTENT_KEY_STORAGE_PREFIX + keyId);
       return json ? JSON.parse(json) : null;
     }
 
     // persist mode - use IndexedDB
-    const db = await this.openDekDb();
-    return this.getDekFromStore(db, keyId);
+    const db = await this.openContentKeyDb();
+    return this.getContentKeyFromStore(db, keyId);
   }
 
-  private async storeStoredDek(keyId: string, info: StoredDek): Promise<void> {
-    if (this.dekStorage === "memory") {
+  private async storeStoredContentKey(keyId: string, info: StoredContentKey): Promise<void> {
+    if (this.contentKeyStorage === "memory") {
       return; // Memory-only
     }
 
-    if (this.dekStorage === "session") {
-      sessionStorage.setItem(DEK_STORAGE_PREFIX + keyId, JSON.stringify(info));
+    if (this.contentKeyStorage === "session") {
+      sessionStorage.setItem(CONTENT_KEY_STORAGE_PREFIX + keyId, JSON.stringify(info));
       return;
     }
 
     // persist mode - use IndexedDB
-    const db = await this.openDekDb();
-    await this.putDekToStore(db, keyId, info);
+    const db = await this.openContentKeyDb();
+    await this.putContentKeyToStore(db, keyId, info);
   }
 
-  private dekDbPromise: Promise<IDBDatabase> | null = null;
+  private async removeStoredContentKey(keyId: string): Promise<void> {
+    if (this.contentKeyStorage === "memory") return;
 
-  private async openDekDb(): Promise<IDBDatabase> {
-    if (this.dekDbPromise) return this.dekDbPromise;
+    if (this.contentKeyStorage === "session") {
+      sessionStorage.removeItem(CONTENT_KEY_STORAGE_PREFIX + keyId);
+      return;
+    }
 
-    this.dekDbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open("capsule-deks", 1);
+    const db = await this.openContentKeyDb();
+    await this.deleteContentKeyFromStore(db, keyId);
+  }
+
+  private contentKeyDbPromise: Promise<IDBDatabase> | null = null;
+
+  private async openContentKeyDb(): Promise<IDBDatabase> {
+    if (this.contentKeyDbPromise) return this.contentKeyDbPromise;
+
+    this.contentKeyDbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open("capsule-content-keys", 1);
       request.onerror = () => reject(request.error);
       request.onupgradeneeded = () => {
-        request.result.createObjectStore("deks");
+        request.result.createObjectStore("content-keys");
       };
       request.onsuccess = () => resolve(request.result);
     });
 
-    return this.dekDbPromise;
+    return this.contentKeyDbPromise;
   }
 
-  private getDekFromStore(
+  private getContentKeyFromStore(
     db: IDBDatabase,
     keyId: string,
-  ): Promise<StoredDek | null> {
+  ): Promise<StoredContentKey | null> {
     return new Promise((resolve, reject) => {
-      const tx = db.transaction("deks", "readonly");
-      const store = tx.objectStore("deks");
+      const tx = db.transaction("content-keys", "readonly");
+      const store = tx.objectStore("content-keys");
       const request = store.get(keyId);
       request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => reject(request.error);
     });
   }
 
-  private putDekToStore(
+  private putContentKeyToStore(
     db: IDBDatabase,
     keyId: string,
-    info: StoredDek,
+    info: StoredContentKey,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const tx = db.transaction("deks", "readwrite");
-      const store = tx.objectStore("deks");
+      const tx = db.transaction("content-keys", "readwrite");
+      const store = tx.objectStore("content-keys");
       const request = store.put(info, keyId);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
   }
 
-  private clearDekStore(db: IDBDatabase): Promise<void> {
+  private deleteContentKeyFromStore(db: IDBDatabase, keyId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const tx = db.transaction("deks", "readwrite");
-      const store = tx.objectStore("deks");
+      const tx = db.transaction("content-keys", "readwrite");
+      const store = tx.objectStore("content-keys");
+      const request = store.delete(keyId);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  private clearContentKeyStore(db: IDBDatabase): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("content-keys", "readwrite");
+      const store = tx.objectStore("content-keys");
       const request = store.clear();
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
@@ -1226,17 +1512,17 @@ export class CapsuleClient {
   // =========================================================================
 
   /**
-   * Unwrap a DEK using the private key.
+   * Unwrap a content key using the private key.
    */
-  private async unwrapDek(
+  private async unwrapContentKey(
     privateKey: CryptoKey,
-    encryptedDekB64: string,
+    encryptedContentKeyB64: string,
   ): Promise<CryptoKey> {
-    const encryptedDek = this.base64ToArrayBuffer(encryptedDekB64);
+    const encryptedContentKey = this.base64ToArrayBuffer(encryptedContentKeyB64);
 
     return crypto.subtle.unwrapKey(
       "raw",
-      encryptedDek,
+      encryptedContentKey,
       privateKey,
       { name: "RSA-OAEP" },
       { name: "AES-GCM", length: 256 },
@@ -1246,18 +1532,18 @@ export class CapsuleClient {
   }
 
   /**
-   * Decrypt content with an unwrapped DEK.
+   * Decrypt content with an unwrapped content key.
    */
-  private async decryptWithDek(
+  private async decryptWithContentKey(
     article: EncryptedArticle,
-    dek: CryptoKey,
+    contentKey: CryptoKey,
   ): Promise<string> {
     const iv = this.base64ToArrayBuffer(article.iv);
     const ciphertext = this.base64ToArrayBuffer(article.encryptedContent);
 
     const decrypted = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv },
-      dek,
+      contentKey,
       ciphertext,
     );
 

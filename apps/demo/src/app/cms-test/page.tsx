@@ -6,15 +6,15 @@ import { CodeBlock } from "@/components/CodeBlock";
 interface Config {
   keyExchange: {
     method: string;
-    bucketPeriodSeconds: number;
+    periodDurationSeconds: number;
     description: string;
   };
-  currentBucket: {
+  currentPeriod: {
     id: string;
     expiresAt: string;
     expiresIn: string;
   };
-  nextBucket: {
+  nextPeriod: {
     id: string;
     expiresAt: string;
   };
@@ -25,7 +25,7 @@ interface Config {
 
 export default function CmsTestPage() {
   const [apiKey, setApiKey] = useState("demo-cms-api-key-change-in-production");
-  const [tier, setTier] = useState("premium");
+  const [contentId, setContentId] = useState("premium");
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,7 +42,7 @@ export default function CmsTestPage() {
         console.error("Failed to fetch config:", e);
       }
     };
-    
+
     fetchConfig();
     const interval = setInterval(fetchConfig, 5000); // Refresh every 5 seconds
     return () => clearInterval(interval);
@@ -54,13 +54,13 @@ export default function CmsTestPage() {
     setResult(null);
 
     try {
-      const response = await fetch("/api/cms/bucket-keys", {
+      const response = await fetch("/api/cms/period-keys", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ tier }),
+        body: JSON.stringify({ contentId }),
       });
 
       const data = await response.json();
@@ -107,9 +107,9 @@ export default function CmsTestPage() {
       </p>
 
       {config && (
-        <div style={{ 
-          background: "var(--code-bg)", 
-          padding: "1rem", 
+        <div style={{
+          background: "var(--code-bg)",
+          padding: "1rem",
           borderRadius: "8px",
           marginBottom: "1.5rem"
         }}>
@@ -119,8 +119,8 @@ export default function CmsTestPage() {
               <tr>
                 <td><strong>Key Exchange Method:</strong></td>
                 <td>
-                  <code style={{ 
-                    background: config.keyExchange.method === "totp" ? "#22c55e33" : "#3b82f633",
+                  <code style={{
+                    background: config.keyExchange.method === "period" ? "#22c55e33" : "#3b82f633",
                     padding: "2px 8px",
                     borderRadius: "4px"
                   }}>
@@ -129,14 +129,14 @@ export default function CmsTestPage() {
                 </td>
               </tr>
               <tr>
-                <td><strong>Bucket Period:</strong></td>
-                <td>{config.keyExchange.bucketPeriodSeconds} seconds</td>
+                <td><strong>Period Duration:</strong></td>
+                <td>{config.keyExchange.periodDurationSeconds} seconds</td>
               </tr>
               <tr>
-                <td><strong>Current Bucket:</strong></td>
+                <td><strong>Current Period:</strong></td>
                 <td>
-                  <code>{config.currentBucket.id}</code>
-                  {" "}(expires in {config.currentBucket.expiresIn})
+                  <code>{config.currentPeriod.id}</code>
+                  {" "}(expires in {config.currentPeriod.expiresIn})
                 </td>
               </tr>
               <tr>
@@ -153,17 +153,17 @@ export default function CmsTestPage() {
 
       <h2>Key Exchange Methods</h2>
       <p>Configure via environment variables:</p>
-      <CodeBlock language="bash">{`# TOTP mode (default) - 30 second buckets
-CAPSULE_KEY_METHOD=totp
+      <CodeBlock language="bash">{`# period mode (default) - 30 second periods
+CAPSULE_KEY_METHOD=period
 CAPSULE_BUCKET_PERIOD=30
-CAPSULE_MASTER_SECRET=<base64-shared-secret>
+PERIOD_SECRET=<base64-shared-secret>
 
 # API mode - server controls rotation
 CAPSULE_KEY_METHOD=api
 CAPSULE_BUCKET_PERIOD=900  # 15 minutes`}</CodeBlock>
 
       <h2>Test API Key Authentication</h2>
-      
+
       <div style={{ marginBottom: "1rem" }}>
         <label style={{ display: "block", marginBottom: "0.5rem" }}>
           <strong>API Key:</strong>
@@ -184,12 +184,12 @@ CAPSULE_BUCKET_PERIOD=900  # 15 minutes`}</CodeBlock>
 
       <div style={{ marginBottom: "1rem" }}>
         <label style={{ display: "block", marginBottom: "0.5rem" }}>
-          <strong>Tier:</strong>
+          <strong>Content ID:</strong>
         </label>
         <input
           type="text"
-          value={tier}
-          onChange={(e) => setTier(e.target.value)}
+          value={contentId}
+          onChange={(e) => setContentId(e.target.value)}
           style={{
             width: "100%",
             padding: "0.5rem",
@@ -212,7 +212,7 @@ CAPSULE_BUCKET_PERIOD=900  # 15 minutes`}</CodeBlock>
           opacity: loading ? 0.6 : 1,
         }}
       >
-        {loading ? "Testing..." : "Request Bucket Keys"}
+        {loading ? "Testing..." : "Request Period Keys"}
       </button>
 
       <button
@@ -256,25 +256,27 @@ CAPSULE_BUCKET_PERIOD=900  # 15 minutes`}</CodeBlock>
 
       <h2>API Documentation</h2>
 
-      <h3>POST /api/cms/bucket-keys</h3>
-      <p>Request time-bucket keys for encrypting content.</p>
-      <CodeBlock>{`curl -X POST http://localhost:3000/api/cms/bucket-keys \\
+      <h3>POST /api/cms/period-keys</h3>
+      <p>Request time-period keys for encrypting content.</p>
+      <CodeBlock>{`curl -X POST http://localhost:3000/api/cms/period-keys \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"tier":"premium"}'`}</CodeBlock>
+  -d '{"contentId":"premium"}'`}</CodeBlock>
 
       <h4>Response Format</h4>
       <CodeBlock language="json">{`{
-  "tier": "premium",
+  "contentId": "premium",
+  "method": "period",
+  "periodDurationSeconds": 30,
   "current": {
-    "bucketId": "123456",
+    "periodId": "123456",
     "key": "base64-encoded-256-bit-aes-key",
     "expiresAt": "2026-01-16T15:00:00.000Z"
   },
   "next": {
-    "bucketId": "123457",
+    "periodId": "123457",
     "key": "base64-encoded-256-bit-aes-key",
-    "expiresAt": "2026-01-16T15:15:00.000Z"
+    "expiresAt": "2026-01-16T15:00:30.000Z"
   },
   "authenticatedWith": "api-key",
   "cmsId": "api-key-cms"
@@ -293,27 +295,27 @@ CAPSULE_BUCKET_PERIOD=900  # 15 minutes`}</CodeBlock>
       <p>List all registered CMS instances.</p>
       <CodeBlock>{`curl http://localhost:3000/api/cms/register`}</CodeBlock>
 
-      <h2>Time-Bucket Keys</h2>
+      <h2>Time-Period Keys</h2>
       <p>
-        Keys rotate every <strong>15 minutes</strong>. The server always returns both:
+        Keys rotate every <strong>{config ? config.keyExchange.periodDurationSeconds : 30} seconds</strong> (configurable via <code>CAPSULE_BUCKET_PERIOD</code>). The server always returns both:
       </p>
       <ul>
-        <li><strong>Current bucket:</strong> Valid now</li>
-        <li><strong>Next bucket:</strong> Valid in the next 15-minute window</li>
+        <li><strong>Current period:</strong> Valid now</li>
+        <li><strong>Next period:</strong> Valid in the next period window</li>
       </ul>
 
       <p>
-        CMS should wrap article DEKs with <strong>both</strong> bucket keys. This ensures
-        content remains decryptable during bucket transitions.
+        CMS should wrap content keys with <strong>both</strong> period keys. This ensures
+        content remains decryptable during period transitions.
       </p>
 
       <h2>Security Notes</h2>
       <ul>
         <li>🔒 API key should be stored in environment variables, never in code</li>
         <li>🔒 In production, use HTTPS for all requests</li>
-        <li>🔒 Bucket keys should be cached for the duration of the bucket (15 min)</li>
-        <li>🔒 Master secret never leaves the Subscription Server</li>
-        <li>🔒 CMS can only decrypt content it encrypted (has bucket keys for 15 min)</li>
+        <li>🔒 Period keys should be cached for the duration of the period ({config ? config.keyExchange.periodDurationSeconds : 30}s)</li>
+        <li>🔒 Period secret never leaves the Subscription Server</li>
+        <li>🔒 CMS can only decrypt content it encrypted (has period keys for one period)</li>
       </ul>
     </main>
   );

@@ -1,0 +1,346 @@
+/**
+ * DCA (Delegated Content Access) - Type Definitions
+ *
+ * Wire format types for the DCA standard: what publishers produce and clients consume.
+ * All binary values are base64url-encoded strings (RFC 4648 §5, no padding).
+ */
+
+// ============================================================================
+// dca-data JSON structure (goes in <script class="dca-data">)
+// ============================================================================
+
+/**
+ * Top-level DCA data structure.
+ * One per page — embedded in `<script type="application/json" class="dca-data">`.
+ */
+export interface DcaData {
+    /** Format version */
+    version: "1";
+    /** Publisher metadata (unsigned copy for pre-verification key lookup) */
+    resource: DcaResource;
+    /** ES256 JWT signing the `resource` object — authoritative for access decisions */
+    resourceJWT: string;
+    /** Map of issuerName → ES256 JWT (integrity proofs for that issuer's sealed blobs) */
+    issuerJWT: Record<string, string>;
+    /** Per content item: MIME type, nonce, and AAD for decryption */
+    contentSealData: Record<string, DcaContentSealData>;
+    /** Per content item: array of contentKeys sealed with periodKeys */
+    sealedContentKeys: Record<string, DcaSealedContentKey[]>;
+    /** Per issuer: sealed keys, unlock URL, and key ID */
+    issuerData: Record<string, DcaIssuerEntry>;
+}
+
+/**
+ * Publisher resource metadata.
+ * This is the JWT payload for `resourceJWT`.
+ */
+export interface DcaResource {
+    /** Random base64url string (min 8 bytes), binds resourceJWT and issuerJWT */
+    renderId: string;
+    /** Publisher domain (issuer uses for signing key lookup) */
+    domain: string;
+    /** Render timestamp (ISO 8601, debug metadata) */
+    issuedAt: string;
+    /** Publisher's article/resource identifier */
+    resourceId: string;
+    /** Publisher-defined metadata for access decisions */
+    data: Record<string, unknown>;
+}
+
+/**
+ * Per-content-item decryption parameters.
+ */
+export interface DcaContentSealData {
+    /** MIME type of the content (e.g., "text/html", "application/json") */
+    contentType: string;
+    /** base64url-encoded 12-byte AES-GCM IV for content decryption */
+    nonce: string;
+    /** Opaque AAD string — pass as-is to AES-GCM via TextEncoder.encode() */
+    aad: string;
+}
+
+/**
+ * A contentKey sealed (wrapped) with a periodKey.
+ */
+export interface DcaSealedContentKey {
+    /** Period bucket label (e.g., "251023T13"). Bookkeeping — not validated. */
+    t: string;
+    /** base64url-encoded 12-byte nonce for unwrapping */
+    nonce: string;
+    /** base64url-encoded wrapped contentKey (AES-GCM ciphertext + tag, 48 bytes → 64 chars) */
+    key: string;
+}
+
+/**
+ * Per-issuer entry in `issuerData`.
+ */
+export interface DcaIssuerEntry {
+    /** Map of contentName → sealed keys for this issuer */
+    sealed: Record<string, DcaIssuerSealed>;
+    /** Issuer's unlock endpoint URL */
+    unlockUrl: string;
+    /** Identifies which issuer private key to use */
+    keyId: string;
+}
+
+/**
+ * Sealed keys for one content item, for one issuer.
+ * Both contentKey and periodKeys are sealed with the issuer's public key.
+ */
+export interface DcaIssuerSealed {
+    /** contentKey sealed with issuer public key (base64url opaque blob) */
+    contentKey: string;
+    /** Map of period bucket "t" → periodKey sealed with issuer public key */
+    periodKeys: Record<string, string>;
+}
+
+// ============================================================================
+// issuerJWT payload
+// ============================================================================
+
+/**
+ * Payload of an issuerJWT — integrity proofs for one issuer's sealed blobs.
+ */
+export interface DcaIssuerJwtPayload {
+    /** Must match resource.renderId */
+    renderId: string;
+    /** The issuer this JWT is for */
+    issuerName: string;
+    /** SHA-256 hashes of sealed blobs, mirroring the structure of issuerData.*.sealed */
+    proof: Record<string, DcaIssuerProof>;
+}
+
+/**
+ * Integrity proof for one content item's sealed keys.
+ * Each hash = base64url(SHA-256(base64url_string_as_utf8_bytes)).
+ */
+export interface DcaIssuerProof {
+    /** Hash of the sealed contentKey blob */
+    contentKey: string;
+    /** Map of period bucket "t" → hash of sealed periodKey blob */
+    periodKeys: Record<string, string>;
+}
+
+// ============================================================================
+// JSON API variant
+// ============================================================================
+
+/**
+ * JSON API response — combines dca-data and sealed content in one object.
+ * For headless CMS, mobile apps, SPAs.
+ */
+export interface DcaJsonApiResponse extends DcaData {
+    /** Map of contentName → base64url ciphertext */
+    sealedContent: Record<string, string>;
+}
+
+// ============================================================================
+// sealed content in HTML
+// ============================================================================
+
+/**
+ * Sealed content is placed in:
+ *   <template class="dca-sealed-content">
+ *     <div data-dca-content-name="bodytext">base64url_ciphertext...</div>
+ *   </template>
+ */
+
+// ============================================================================
+// Publisher configuration types
+// ============================================================================
+
+/**
+ * Configuration for creating a DCA publisher.
+ */
+export interface DcaPublisherConfig {
+    /** Publisher domain (e.g., "www.news-site.com") */
+    domain: string;
+    /** ES256 (ECDSA P-256) private key PEM — for signing resourceJWT and issuerJWT */
+    signingKeyPem: string;
+    /** Period secret for periodKey derivation (base64 string or raw bytes) */
+    periodSecret: Uint8Array | string;
+    /** Period duration in hours (default: 1). Determines the time bucket granularity */
+    periodDurationHours?: number;
+}
+
+/**
+ * A content item to encrypt.
+ */
+export interface DcaContentItem {
+    /** Publisher-defined name, e.g., "bodytext". ASCII: [a-zA-Z][a-zA-Z0-9-]* */
+    contentName: string;
+    /** Plaintext content to encrypt */
+    content: string;
+    /** MIME type (default: "text/html") */
+    contentType?: string;
+}
+
+/**
+ * Issuer configuration for rendering.
+ */
+export interface DcaIssuerConfig {
+    /** Canonical issuer identifier (stable ASCII token) */
+    issuerName: string;
+    /** Issuer's public key PEM (ECDH P-256 or RSA-OAEP) */
+    publicKeyPem: string;
+    /** Algorithm: "ECDH-P256" or "RSA-OAEP" (auto-detected from key if omitted) */
+    algorithm?: "ECDH-P256" | "RSA-OAEP";
+    /** Identifies which issuer private key matches */
+    keyId: string;
+    /** Issuer's unlock endpoint URL */
+    unlockUrl: string;
+    /** Which content items this issuer gets sealed keys for */
+    contentNames: string[];
+}
+
+/**
+ * Options for a single render (page generation).
+ */
+export interface DcaRenderOptions {
+    /** Publisher's unique resource identifier */
+    resourceId: string;
+    /** Content items to encrypt */
+    contentItems: DcaContentItem[];
+    /** Issuers to seal keys for */
+    issuers: DcaIssuerConfig[];
+    /** Publisher-defined metadata for access decisions (goes in resource.data) */
+    resourceData?: Record<string, unknown>;
+}
+
+/**
+ * Result of a render operation.
+ */
+export interface DcaRenderResult {
+    /** The complete dca-data JSON object */
+    dcaData: DcaData;
+    /** Sealed content: contentName → base64url ciphertext */
+    sealedContent: Record<string, string>;
+    /** Pre-built HTML strings for embedding */
+    html: {
+        /** `<script type="application/json" class="dca-data">...</script>` */
+        dcaDataScript: string;
+        /** `<template class="dca-sealed-content">...</template>` */
+        sealedContentTemplate: string;
+    };
+    /** JSON API variant (dca-data + sealedContent combined) */
+    json: DcaJsonApiResponse;
+}
+
+// ============================================================================
+// Issuer-side types
+// ============================================================================
+
+/**
+ * Per-publisher trust configuration.
+ *
+ * Allows fine-grained control over what each publisher is permitted to claim
+ * in unlock requests. Every publisher MUST be explicitly listed — there is no
+ * fallback / wildcard lookup.
+ */
+export interface DcaTrustedPublisher {
+    /** ES256 public key PEM for JWT verification */
+    signingKeyPem: string;
+    /**
+     * Optional allowlist of resourceId patterns this publisher may claim.
+     *
+     * - Exact strings are matched with `===`.
+     * - RegExp instances are tested with `.test(resourceId)`.
+     *
+     * When **omitted or empty**, the publisher may claim any resourceId
+     * (i.e. the constraint is not applied).
+     */
+    allowedResourceIds?: (string | RegExp)[];
+}
+
+/**
+ * Configuration for creating a DCA issuer.
+ */
+export interface DcaIssuerServerConfig {
+    /** This issuer's canonical name */
+    issuerName: string;
+    /** Private key PEM (ECDH P-256 or RSA-OAEP) for unsealing */
+    privateKeyPem: string;
+    /** Key ID that matches the publisher's keyId for this issuer */
+    keyId: string;
+    /**
+     * Trusted-publisher allowlist.
+     *
+     * Maps **normalized** publisher domains to trust configuration.
+     * Domains are lowercased and trailing dots are stripped at construction
+     * time; requests from domains not in this map are rejected outright.
+     *
+     * Accepts two forms per entry:
+     *   - **Simple** (plain PEM string): trusts all resources from the domain.
+     *   - **Extended** (`DcaTrustedPublisher`): adds per-publisher constraints
+     *     such as `allowedResourceIds`.
+     *
+     * @example
+     * ```ts
+     * trustedPublisherKeys: {
+     *   // Simple: any resourceId from this domain is accepted
+     *   "news.example.com": process.env.NEWS_ES256_PUB!,
+     *   // Extended: only specific resourceIds are allowed
+     *   "blog.example.com": {
+     *     signingKeyPem: process.env.BLOG_ES256_PUB!,
+     *     allowedResourceIds: ["article-1", /^premium-/],
+     *   },
+     * }
+     * ```
+     */
+    trustedPublisherKeys: Record<string, string | DcaTrustedPublisher>;
+}
+
+/**
+ * Unlock request — what the client sends to the issuer.
+ */
+export interface DcaUnlockRequest {
+    /** Unsigned resource (for domain-based key lookup before JWT verification) */
+    resource: DcaResource;
+    /** Signed resource JWT */
+    resourceJWT: string;
+    /** This issuer's JWT (integrity proofs) */
+    issuerJWT: string;
+    /** This issuer's sealed keys */
+    sealed: Record<string, DcaIssuerSealed>;
+    /** Key ID for the issuer key to use */
+    keyId: string;
+    /** Issuer name (for context binding) */
+    issuerName: string;
+    /**
+     * Client's RSA-OAEP public key (base64url-encoded SPKI).
+     * When present, the issuer wraps returned keys with this key
+     * so no readable key material is sent over the network.
+     * This enables client-bound transport mode.
+     */
+    clientPublicKey?: string;
+}
+
+/**
+ * Unlock response — what the issuer returns to the client.
+ * Contains either contentKeys or periodKeys (issuer's choice per request).
+ */
+export interface DcaUnlockResponse {
+    /** Map of contentName → key material for granted content items */
+    keys: Record<string, DcaUnlockedKeys>;
+    /**
+     * Transport mode used for key delivery:
+     *   - "direct": keys are plaintext base64url strings (default)
+     *   - "client-bound": keys are RSA-OAEP wrapped with the client's public key
+     */
+    transport?: "direct" | "client-bound";
+}
+
+/**
+ * Unlocked keys for one content item.
+ * The issuer returns either contentKey or periodKeys (or both, though unusual).
+ *
+ * In direct transport: values are base64url-encoded raw key bytes.
+ * In client-bound transport: values are base64url-encoded RSA-OAEP ciphertext
+ * that only the client's non-extractable private key can decrypt.
+ */
+export interface DcaUnlockedKeys {
+    /** base64url-encoded contentKey (raw in direct mode, RSA-OAEP wrapped in client-bound mode) */
+    contentKey?: string;
+    /** Map of period bucket "t" → base64url-encoded periodKey (raw or RSA-OAEP wrapped) */
+    periodKeys?: Record<string, string>;
+}

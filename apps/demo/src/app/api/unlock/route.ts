@@ -3,29 +3,41 @@ import {
   createSubscriptionServer,
   createTokenManager,
 } from "@sesamy/capsule-server";
+import type { SubscriptionServer, TokenManager } from "@sesamy/capsule-server";
 import {
-  MASTER_SECRET,
-  BUCKET_PERIOD_SECONDS,
-  totp,
-  TOKEN_SECRET,
+  PERIOD_DURATION_SECONDS,
+  getKeyProvider,
+  getTokenSecret,
+  getPeriodSecret,
 } from "@/lib/capsule";
 
-/**
- * Create subscription server with the same master secret as the CMS.
- */
-const server = createSubscriptionServer({
-  masterSecret: MASTER_SECRET,
-  bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
-});
+// ---------------------------------------------------------------------------
+// Lazy singletons – avoid calling secret getters at module-init time so that
+// `next build` can collect pages without the env vars being set.
+// ---------------------------------------------------------------------------
 
-/**
- * Token manager for validating pre-signed share tokens.
- */
-const tokens = createTokenManager({
-  secret: TOKEN_SECRET,
-  issuer: "capsule-demo",
-  keyId: "demo-key-2026",
-});
+let _server: SubscriptionServer | undefined;
+function getServer() {
+  if (!_server) {
+    _server = createSubscriptionServer({
+      periodSecret: getPeriodSecret(),
+      periodDurationSeconds: PERIOD_DURATION_SECONDS,
+    });
+  }
+  return _server;
+}
+
+let _tokens: TokenManager | undefined;
+function getTokens() {
+  if (!_tokens) {
+    _tokens = createTokenManager({
+      secret: getTokenSecret(),
+      issuer: "capsule-demo",
+      keyId: "demo-key-2026",
+    });
+  }
+  return _tokens;
+}
 
 /**
  * POST /api/unlock
@@ -37,44 +49,44 @@ const tokens = createTokenManager({
  *    Used for share links (social media, email, etc.)
  *    → Full audit trail, no user auth needed
  *
- * 2. TIER KEY MODE (mode: "tier" or default for tier keys)
- *    Returns the key-wrapping key (KEK) for a tier.
- *    Client can then unwrap any article's DEK locally.
+ * 2. SHARED KEY MODE (mode: "shared" or default for shared keys)
+ *    Returns the key-wrapping key (KEK) for a content ID.
+ *    Client can then unwrap any article's content key locally.
  *    → "Unlock once, access all premium content"
  *
  * 3. ARTICLE KEY MODE (for article:xxx keys)
- *    Returns the unwrapped DEK for a specific article.
+ *    Returns the unwrapped content key for a specific article.
  *    → Single article access
  *
  * Request body:
  * {
  *   // For token mode:
  *   token?: string (pre-signed share token),
- *   wrappedDek: string (required for token mode),
+ *   wrappedContentKey: string (required for token mode),
  *   publicKey: string (Base64 SPKI format),
- *   articleId?: string (optional, for logging),
+ *   resourceId?: string (optional, for content validation),
  *
- *   // For tier/article mode:
+ *   // For shared/article mode:
  *   keyId: string (e.g., "premium:123456" or "article:crypto-guide"),
- *   wrappedDek?: string (required for article keys, optional for tier keys),
+ *   wrappedContentKey?: string (required for article keys, optional for shared keys),
  *   publicKey: string (Base64 SPKI format),
- *   mode?: "tier" | "article" (default: auto-detect from keyId)
+ *   mode?: "shared" | "article" (default: auto-detect from keyId)
  * }
  *
  * Response:
  * {
- *   encryptedDek: string (Base64 RSA-OAEP wrapped key),
+ *   encryptedContentKey: string (Base64 RSA-OAEP wrapped key),
  *   keyId: string,
- *   bucketId?: string,
+ *   periodId?: string,
  *   expiresAt: string (ISO 8601),
- *   keyType: "kek" | "dek" (indicates what encryptedDek contains),
+ *   keyType: "kek" | "dek" (indicates what encryptedContentKey contains),
  *   tokenId?: string (for token mode, useful for tracking)
  * }
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { token, keyId, wrappedDek, publicKey, mode, contentId } = body;
+    const { token, keyId, wrappedContentKey, publicKey, mode, resourceId } = body;
 
     // Validate public key (required for all modes)
     if (!publicKey || typeof publicKey !== "string") {
@@ -84,17 +96,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Validate optional resourceId if provided
+    if (resourceId !== undefined && typeof resourceId !== "string") {
+      return NextResponse.json(
+        { error: "Invalid resourceId – must be a string when provided" },
+        { status: 400 },
+      );
+    }
+
     // TOKEN MODE: Pre-signed share link unlock
     if (token) {
-      if (!wrappedDek || typeof wrappedDek !== "string") {
+      if (!wrappedContentKey || typeof wrappedContentKey !== "string") {
         return NextResponse.json(
-          { error: "Missing wrappedDek (required for token mode)" },
+          { error: "Missing wrappedContentKey (required for token mode)" },
           { status: 400 },
         );
       }
 
       // Validate the token
-      const validation = await tokens.validate(token);
+      const validation = await getTokens().validate(token);
       if (!validation.valid) {
         console.log(
           `Token validation failed: ${validation.error} - ${validation.message}`,
@@ -109,13 +129,12 @@ export async function POST(request: NextRequest) {
 
       // Log the unlock for analytics
       console.log(
-        `[UNLOCK] Token ${payload.tid} used for tier '${payload.tier}'`,
+        `[UNLOCK] Token ${payload.tid} used for contentId '${payload.contentId}'`,
         {
           tokenId: payload.tid,
           issuer: payload.iss,
           keyId: payload.kid,
-          tier: payload.tier,
-          contentId: contentId || payload.contentId,
+          contentId: payload.contentId,
           userId: payload.userId,
           maxUses: payload.maxUses,
           ip:
@@ -129,11 +148,11 @@ export async function POST(request: NextRequest) {
       // This would require a Redis/DB lookup to track usage
 
       // Unlock using the token (validates contentId matches)
-      const result = await server.unlockWithToken(
+      const result = await getServer().unlockWithToken(
         payload,
-        wrappedDek,
+        wrappedContentKey,
         publicKey,
-        contentId,
+        resourceId,
       );
 
       return NextResponse.json({
@@ -142,11 +161,11 @@ export async function POST(request: NextRequest) {
         tokenId: payload.tid,
         issuer: payload.iss,
         contentId: payload.contentId,
-        bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+        periodDurationSeconds: PERIOD_DURATION_SECONDS,
       });
     }
 
-    // TIER/ARTICLE MODE: Requires keyId
+    // SHARED/ARTICLE MODE: Requires keyId
     if (!keyId || typeof keyId !== "string") {
       return NextResponse.json(
         { error: "Missing or invalid keyId (or provide a token)" },
@@ -154,47 +173,66 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Determine if this is a tier key or article key
+    // Determine if this is a shared key or article key
     const isArticleKey = keyId.startsWith("article:");
-    const useTierMode =
-      mode === "tier" || (!isArticleKey && mode !== "article");
+    const useSharedMode =
+      mode === "shared" || (!isArticleKey && mode !== "article");
 
-    if (useTierMode && !isArticleKey) {
-      // TIER KEY MODE: Return the key-wrapping key (KEK)
-      // Parse tier:bucketId
-      const colonIndex = keyId.lastIndexOf(":");
-      if (colonIndex === -1) {
+    // Early validation: article keyIds must have a non-empty slug
+    if (isArticleKey) {
+      const slug = keyId.slice(8);
+      if (!slug || !slug.trim()) {
         return NextResponse.json(
-          { error: "Invalid tier keyId format. Expected 'tier:bucketId'" },
+          { error: "Invalid article keyId: slug must be non-empty. Expected 'article:<slug>'" },
+          { status: 400 },
+        );
+      }
+    }
+
+    // Early validation: shared keyIds must contain exactly "contentId:periodId"
+    if (useSharedMode && !isArticleKey) {
+      if (!keyId.includes(":")) {
+        return NextResponse.json(
+          { error: "Invalid shared keyId format. Expected 'contentId:periodId'" },
           { status: 400 },
         );
       }
 
-      const tier = keyId.substring(0, colonIndex);
-      const bucketId = keyId.substring(colonIndex + 1);
+      // SHARED KEY MODE: Return the key-wrapping key (KEK)
+      // Parse contentId:periodId
+      const colonIndex = keyId.lastIndexOf(":");
+      const contentId = keyId.substring(0, colonIndex);
+      const periodId = keyId.substring(colonIndex + 1);
 
-      const result = await server.getTierKeyForUser(tier, bucketId, publicKey);
+      if (!contentId || !contentId.trim() || !periodId || !periodId.trim()) {
+        return NextResponse.json(
+          { error: "Invalid shared keyId: both contentId and periodId must be non-empty. Expected 'contentId:periodId'" },
+          { status: 400 },
+        );
+      }
+
+      const result = await getServer().getSharedKeyForUser(contentId, periodId, publicKey);
 
       return NextResponse.json({
         ...result,
-        keyType: "kek", // Key-encrypting key (can unwrap DEKs)
-        bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+        keyType: "kek", // Key-encrypting key (can unwrap content keys)
+        periodDurationSeconds: PERIOD_DURATION_SECONDS,
       });
     }
 
-    // ARTICLE KEY MODE: Return the unwrapped DEK
-    if (!wrappedDek || typeof wrappedDek !== "string") {
+    // ARTICLE KEY MODE: Return the unwrapped content key
+    if (!wrappedContentKey || typeof wrappedContentKey !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid wrappedDek (required for article keys)" },
+        { error: "Missing or invalid wrappedContentKey (required for article keys)" },
         { status: 400 },
       );
     }
 
-    // Static key lookup for article keys - derive from same TOTP provider as CMS
+    // Static key lookup for article keys - derive from same period key provider as CMS
     const staticKeyLookup = async (keyId: string): Promise<Uint8Array | null> => {
       if (keyId.startsWith("article:")) {
-        const articleId = keyId.slice(8);
-        const keyEntry = await totp.getArticleKey(articleId);
+        const contentId = keyId.slice(8);
+        const keyEntry = await getKeyProvider().getArticleKey(contentId);
         if (keyEntry.key instanceof Uint8Array) {
           return keyEntry.key;
         }
@@ -209,8 +247,8 @@ export async function POST(request: NextRequest) {
       return null;
     };
 
-    const result = await server.unlockForUser(
-      { keyId, wrappedDek },
+    const result = await getServer().unlockForUser(
+      { keyId, wrappedContentKey },
       publicKey,
       staticKeyLookup,
     );
@@ -218,7 +256,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ...result,
       keyType: "dek", // Data encryption key (decrypts content directly)
-      bucketPeriodSeconds: BUCKET_PERIOD_SECONDS,
+      periodDurationSeconds: PERIOD_DURATION_SECONDS,
     });
   } catch (error) {
     console.error("Unlock error:", error);

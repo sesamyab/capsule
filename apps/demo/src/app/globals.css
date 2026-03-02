@@ -146,11 +146,9 @@ p {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(
-    135deg,
-    rgba(0, 112, 243, 0.05) 0%,
-    rgba(0, 112, 243, 0.1) 100%
-  );
+  background: linear-gradient(135deg,
+      rgba(0, 112, 243, 0.05) 0%,
+      rgba(0, 112, 243, 0.1) 100%);
 }
 
 .locked-overlay {
@@ -316,6 +314,12 @@ p {
   font-size: 0.75rem;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+
+.unlock-key-manager {
+  padding: 0.5rem 1rem;
+  background: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid var(--border);
 }
 
 .premium-content {
@@ -748,9 +752,11 @@ p {
 .console-dot.red {
   background: #ff5f57;
 }
+
 .console-dot.yellow {
   background: #febc2e;
 }
+
 .console-dot.green {
   background: #28c840;
 }
@@ -828,10 +834,12 @@ p {
 }
 
 @keyframes blink {
+
   0%,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0;
   }
@@ -915,7 +923,8 @@ body.with-console main {
   box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
 }
 
-.key-tag.dek-tier {
+.key-tag.dek-tier,
+.key-tag.dek-shared {
   background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%);
   color: white;
   box-shadow: 0 2px 4px rgba(139, 92, 246, 0.3);

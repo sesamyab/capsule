@@ -1,7 +1,7 @@
 /**
  * AES-256-GCM encryption utilities.
  *
- * Provides content encryption with unique DEKs and key wrapping.
+ * Provides content encryption with unique content keys and key wrapping.
  * Uses Web Crypto API for cross-platform compatibility (Node.js, Cloudflare Workers, browsers).
  */
 
@@ -27,7 +27,7 @@ export const AES_KEY_SIZE = WC_AES_KEY_SIZE;
 /**
  * Generate a random 256-bit AES key (DEK).
  */
-export function generateDek(): Uint8Array {
+export function generateContentKey(): Uint8Array {
   return generateAesKeyBytes();
 }
 
@@ -42,53 +42,57 @@ export function generateIv(): Uint8Array {
  * Encrypt content with AES-256-GCM.
  *
  * @param content - Plaintext content to encrypt
- * @param dek - 256-bit AES key
+ * @param contentKey - 256-bit AES key
  * @param iv - 96-bit initialization vector (generated if not provided)
+ * @param aad - Optional additional authenticated data (binds ciphertext to context)
  * @returns Encrypted content (ciphertext + auth tag) and IV
  */
 export async function encryptContent(
   content: string | Uint8Array,
-  dek: Uint8Array,
+  contentKey: Uint8Array,
   iv?: Uint8Array,
+  aad?: Uint8Array,
 ): Promise<{ encryptedContent: Uint8Array; iv: Uint8Array }> {
   const plaintext =
     typeof content === "string" ? new TextEncoder().encode(content) : content;
 
-  return aesGcmEncrypt(plaintext, dek, iv);
+  return aesGcmEncrypt(plaintext, contentKey, iv, aad);
 }
 
 /**
  * Decrypt content with AES-256-GCM.
  *
  * @param encryptedContent - Ciphertext + auth tag
- * @param dek - 256-bit AES key
+ * @param contentKey - 256-bit AES key
  * @param iv - Initialization vector used for encryption
+ * @param aad - Optional additional authenticated data (must match encryption)
  * @returns Decrypted plaintext
  */
 export async function decryptContent(
   encryptedContent: Uint8Array,
-  dek: Uint8Array,
+  contentKey: Uint8Array,
   iv: Uint8Array,
+  aad?: Uint8Array,
 ): Promise<Uint8Array> {
-  return aesGcmDecrypt(encryptedContent, dek, iv);
+  return aesGcmDecrypt(encryptedContent, contentKey, iv, aad);
 }
 
 /**
- * Wrap (encrypt) a DEK with a key-wrapping key using AES-256-GCM.
+ * Wrap (encrypt) a content key with a key-wrapping key using AES-256-GCM.
  *
- * This is used to create multiple wrapped versions of the same DEK,
+ * This is used to create multiple wrapped versions of the same content key,
  * each encrypted with a different key-wrapping key.
  *
- * @param dek - The data encryption key to wrap
+ * @param contentKey - The content key to wrap
  * @param wrappingKey - The key-wrapping key (256-bit AES)
  * @returns Wrapped DEK (IV + ciphertext + auth tag)
  */
-export async function wrapDek(
-  dek: Uint8Array,
+export async function wrapContentKey(
+  contentKey: Uint8Array,
   wrappingKey: Uint8Array,
 ): Promise<Uint8Array> {
   const iv = generateIv();
-  const { encryptedContent } = await encryptContent(dek, wrappingKey, iv);
+  const { encryptedContent } = await encryptContent(contentKey, wrappingKey, iv);
 
   // Prepend IV so it can be extracted during unwrap
   const result = new Uint8Array(iv.length + encryptedContent.length);
@@ -98,18 +102,18 @@ export async function wrapDek(
 }
 
 /**
- * Unwrap (decrypt) a DEK with a key-wrapping key.
+ * Unwrap (decrypt) a content key with a key-wrapping key.
  *
- * @param wrappedDek - The wrapped DEK (IV + ciphertext + auth tag)
+ * @param wrappedContentKey - The wrapped content key (IV + ciphertext + auth tag)
  * @param wrappingKey - The key-wrapping key used to wrap
- * @returns The unwrapped DEK
+ * @returns The unwrapped content key
  */
-export async function unwrapDek(
-  wrappedDek: Uint8Array,
+export async function unwrapContentKey(
+  wrappedContentKey: Uint8Array,
   wrappingKey: Uint8Array,
 ): Promise<Uint8Array> {
-  const iv = wrappedDek.subarray(0, GCM_IV_SIZE);
-  const encryptedContent = wrappedDek.subarray(GCM_IV_SIZE);
+  const iv = wrappedContentKey.subarray(0, GCM_IV_SIZE);
+  const encryptedContent = wrappedContentKey.subarray(GCM_IV_SIZE);
 
   return decryptContent(encryptedContent, wrappingKey, iv);
 }

@@ -23,12 +23,12 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 // Helper to create encrypted article data for testing
 async function createTestEncryptedArticle(
-  articleId: string,
+  resourceId: string,
   content: string,
   publicKey: CryptoKey
-): Promise<{ article: EncryptedArticle; encryptedDekB64: string }> {
-  // Generate a DEK
-  const dek = await crypto.subtle.generateKey(
+): Promise<{ article: EncryptedArticle; encryptedContentKeyB64: string }> {
+  // Generate a content key
+  const contentKey = await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt", "decrypt"]
@@ -39,34 +39,34 @@ async function createTestEncryptedArticle(
   const encoder = new TextEncoder();
   const encryptedContent = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
-    dek,
+    contentKey,
     encoder.encode(content)
   );
 
   // Export and wrap DEK with public key
-  const rawDek = await crypto.subtle.exportKey("raw", dek);
-  const wrappedDek = await crypto.subtle.encrypt(
+  const rawDek = await crypto.subtle.exportKey("raw", contentKey);
+  const wrappedContentKey = await crypto.subtle.encrypt(
     { name: "RSA-OAEP" },
     publicKey,
     rawDek
   );
 
   const article: EncryptedArticle = {
-    articleId,
+    resourceId,
     encryptedContent: arrayBufferToBase64(encryptedContent),
     iv: arrayBufferToBase64(iv),
     wrappedKeys: [
       {
         keyId: "premium:12345",
-        wrappedDek: arrayBufferToBase64(wrappedDek),
+        wrappedContentKey: arrayBufferToBase64(wrappedContentKey),
       },
     ],
   };
 
-  // The encrypted DEK for the client - same as wrappedDek
-  const encryptedDekB64 = arrayBufferToBase64(wrappedDek);
+  // The encrypted content key for the client - same as wrappedContentKey
+  const encryptedContentKeyB64 = arrayBufferToBase64(wrappedContentKey);
 
-  return { article, encryptedDekB64 };
+  return { article, encryptedContentKeyB64 };
 }
 
 describe("CapsuleClient", () => {
@@ -92,7 +92,7 @@ describe("CapsuleClient", () => {
         autoProcess: false,
         executeScripts: false,
         selector: ".my-encrypted",
-        dekStorage: "session",
+        contentKeyStorage: "session",
         renewBuffer: 10000,
         logger,
       });
@@ -196,7 +196,7 @@ describe("CapsuleClient", () => {
   });
 
   describe("decrypt", () => {
-    it("decrypts content with provided encryptedDek", async () => {
+    it("decrypts content with provided encryptedContentKey", async () => {
       const client = new CapsuleClient();
 
       // Get the client's public key
@@ -214,14 +214,14 @@ describe("CapsuleClient", () => {
 
       // Create test encrypted article
       const originalContent = "Hello, encrypted world!";
-      const { article, encryptedDekB64 } = await createTestEncryptedArticle(
+      const { article, encryptedContentKeyB64 } = await createTestEncryptedArticle(
         "test-article",
         originalContent,
         publicKey
       );
 
       // Decrypt
-      const decrypted = await client.decrypt(article, encryptedDekB64);
+      const decrypted = await client.decrypt(article, encryptedContentKeyB64);
 
       expect(decrypted).toBe(originalContent);
     });
@@ -241,13 +241,13 @@ describe("CapsuleClient", () => {
       );
 
       const originalContent = "你好世界 🌍 مرحبا العالم";
-      const { article, encryptedDekB64 } = await createTestEncryptedArticle(
+      const { article, encryptedContentKeyB64 } = await createTestEncryptedArticle(
         "unicode-article",
         originalContent,
         publicKey
       );
 
-      const decrypted = await client.decrypt(article, encryptedDekB64);
+      const decrypted = await client.decrypt(article, encryptedContentKeyB64);
 
       expect(decrypted).toBe(originalContent);
     });
@@ -269,7 +269,7 @@ describe("CapsuleClient", () => {
       );
 
       const originalContent = "Premium content here!";
-      const { article, encryptedDekB64 } = await createTestEncryptedArticle(
+      const { article, encryptedContentKeyB64 } = await createTestEncryptedArticle(
         "premium-article",
         originalContent,
         publicKey
@@ -277,9 +277,9 @@ describe("CapsuleClient", () => {
 
       // Create mock unlock function
       const mockUnlock = vi.fn().mockResolvedValue({
-        encryptedDek: encryptedDekB64,
+        encryptedContentKey: encryptedContentKeyB64,
         expiresAt: new Date(Date.now() + 60000).toISOString(),
-        bucketId: "12345",
+        periodId: "12345",
       } satisfies UnlockResponse);
 
       // Create client with unlock function - use same storage
@@ -292,8 +292,8 @@ describe("CapsuleClient", () => {
       expect(mockUnlock).toHaveBeenCalledWith(
         expect.objectContaining({
           keyId: "premium:12345",
-          wrappedDek: article.wrappedKeys[0].wrappedDek,
-          articleId: "premium-article",
+          wrappedContentKey: article.wrappedKeys[0].wrappedContentKey,
+          resourceId: "premium-article",
         })
       );
       expect(decrypted).toBe(originalContent);
@@ -303,10 +303,10 @@ describe("CapsuleClient", () => {
       const client = new CapsuleClient(); // No unlock function
 
       const article: EncryptedArticle = {
-        articleId: "test",
+        resourceId: "test",
         encryptedContent: "abc",
         iv: "def",
-        wrappedKeys: [{ keyId: "key1", wrappedDek: "ghi" }],
+        wrappedKeys: [{ keyId: "key1", wrappedContentKey: "ghi" }],
       };
 
       await expect(client.unlock(article)).rejects.toThrow(
@@ -331,7 +331,7 @@ describe("CapsuleClient", () => {
       );
 
       // Generate DEK and encrypt content
-      const dek = await crypto.subtle.generateKey(
+      const contentKey = await crypto.subtle.generateKey(
         { name: "AES-GCM", length: 256 },
         true,
         ["encrypt", "decrypt"]
@@ -341,13 +341,13 @@ describe("CapsuleClient", () => {
       const originalContent = "Simple payload content";
       const encryptedContent = await crypto.subtle.encrypt(
         { name: "AES-GCM", iv },
-        dek,
+        contentKey,
         new TextEncoder().encode(originalContent)
       );
 
       // Wrap DEK with client's public key
-      const rawDek = await crypto.subtle.exportKey("raw", dek);
-      const encryptedDek = await crypto.subtle.encrypt(
+      const rawDek = await crypto.subtle.exportKey("raw", contentKey);
+      const encryptedContentKey = await crypto.subtle.encrypt(
         { name: "RSA-OAEP" },
         publicKey,
         rawDek
@@ -356,7 +356,7 @@ describe("CapsuleClient", () => {
       const payload = {
         encryptedContent: arrayBufferToBase64(encryptedContent),
         iv: arrayBufferToBase64(iv),
-        encryptedDek: arrayBufferToBase64(encryptedDek),
+        encryptedContentKey: arrayBufferToBase64(encryptedContentKey),
       };
 
       const decrypted = await client.decryptPayload(payload);

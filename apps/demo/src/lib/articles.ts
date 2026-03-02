@@ -66,14 +66,14 @@ Uses a key pair: public key for encryption, private key for decryption.
 
 This is exactly what Capsule implements! Envelope encryption combines the best of both worlds:
 
-1. Generate a random symmetric key (Data Encryption Key - DEK)
-2. Encrypt your data with the DEK (fast, efficient)
-3. Encrypt the DEK with the recipient's public key (secure key exchange)
+1. Generate a random symmetric key (content key - DEK)
+2. Encrypt your data with the content key (fast, efficient)
+3. Encrypt the content key with the recipient's public key (secure key exchange)
 4. Send both the encrypted data and encrypted DEK
 
 The recipient can then:
-1. Decrypt the DEK using their private key
-2. Decrypt the data using the DEK
+1. Decrypt the content key using their private key
+2. Decrypt the data using the content key
 
 This approach provides the efficiency of symmetric encryption with the key management 
 benefits of asymmetric encryption.
