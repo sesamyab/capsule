@@ -89,7 +89,11 @@ export function getPeriodExpiration(
     throw new Error(`periodId out of safe integer range: "${periodId}"`);
   }
   const expiresAtMs = (periodNum + 1) * periodDurationSeconds * 1000;
-  if (!Number.isFinite(expiresAtMs)) {
+  if (
+    !Number.isFinite(expiresAtMs) ||
+    expiresAtMs > 8_640_000_000_000_000 ||
+    expiresAtMs < -8_640_000_000_000_000
+  ) {
     throw new RangeError(
       `Computed expiration overflows for periodId "${periodId}" with periodDurationSeconds ${periodDurationSeconds}`,
     );

@@ -653,7 +653,7 @@ describe("DCA end-to-end", () => {
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
-        ).rejects.toThrow("Unknown publisher domain");
+        ).rejects.toThrow("Untrusted publisher domain");
     });
 
     it("issuer verify returns verified resource data", async () => {
@@ -763,6 +763,313 @@ describe("DCA end-to-end", () => {
         });
 
         expect(result.dcaData.contentSealData["bodytext"].aad).toBe("aad.example.com|aad-article|bodytext|1");
+    });
+});
+
+// ============================================================================
+// 7. Trusted-publisher allowlist hardening
+// ============================================================================
+
+describe("Trusted-publisher allowlist", () => {
+    it("rejects empty trustedPublisherKeys", () => {
+        expect(() =>
+            createDcaIssuer({
+                issuerName: "test",
+                privateKeyPem: "unused",
+                keyId: "k-1",
+                trustedPublisherKeys: {},
+            }),
+        ).toThrow("trustedPublisherKeys must contain at least one entry");
+    });
+
+    it("rejects invalid domain names in config", () => {
+        expect(() =>
+            createDcaIssuer({
+                issuerName: "test",
+                privateKeyPem: "unused",
+                keyId: "k-1",
+                trustedPublisherKeys: { "https://evil.com/path": "-----BEGIN PUBLIC KEY-----\ntest" },
+            }),
+        ).toThrow("Invalid domain");
+    });
+
+    it("rejects domains with spaces", () => {
+        expect(() =>
+            createDcaIssuer({
+                issuerName: "test",
+                privateKeyPem: "unused",
+                keyId: "k-1",
+                trustedPublisherKeys: { "evil .com": "-----BEGIN PUBLIC KEY-----\ntest" },
+            }),
+        ).toThrow("Invalid domain");
+    });
+
+    it("normalises domain case and trailing dots (config-time)", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "case.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "case-article",
+            contentItems: [{ contentName: "bodytext", content: "Case test" }],
+            issuers: [
+                {
+                    issuerName: "case-issuer",
+                    publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                    keyId: "c-1",
+                    unlockUrl: "https://case.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        // Config uses uppercase + trailing dot — should still match
+        const issuer = createDcaIssuer({
+            issuerName: "case-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "c-1",
+            trustedPublisherKeys: {
+                "Case.Example.COM.": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        const response = await issuer.unlock(
+            {
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["case-issuer"],
+                sealed: result.dcaData.issuerData["case-issuer"].sealed,
+                keyId: "c-1",
+                issuerName: "case-issuer",
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+    });
+
+    it("rejects duplicate domains after normalisation", () => {
+        expect(() =>
+            createDcaIssuer({
+                issuerName: "test",
+                privateKeyPem: "unused",
+                keyId: "k-1",
+                trustedPublisherKeys: {
+                    "Example.com": "-----BEGIN PUBLIC KEY-----\nkey-a",
+                    "example.com": "-----BEGIN PUBLIC KEY-----\nkey-b",
+                },
+            }),
+        ).toThrow(/duplicate domain.*example\.com/i);
+    });
+
+    it("supports extended DcaTrustedPublisher config with allowedResourceIds (exact)", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "constrained.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const allowed = await publisher.render({
+            resourceId: "article-ok",
+            contentItems: [{ contentName: "bodytext", content: "Allowed" }],
+            issuers: [
+                {
+                    issuerName: "constrained-issuer",
+                    publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                    keyId: "cr-1",
+                    unlockUrl: "https://constrained.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        const denied = await publisher.render({
+            resourceId: "article-forbidden",
+            contentItems: [{ contentName: "bodytext", content: "Forbidden" }],
+            issuers: [
+                {
+                    issuerName: "constrained-issuer",
+                    publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                    keyId: "cr-1",
+                    unlockUrl: "https://constrained.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "constrained-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "cr-1",
+            trustedPublisherKeys: {
+                "constrained.example.com": {
+                    signingKeyPem: keys.signingPems.publicKeyPem,
+                    allowedResourceIds: ["article-ok"],
+                },
+            },
+        });
+
+        // Allowed resource
+        const response = await issuer.unlock(
+            {
+                resource: allowed.dcaData.resource,
+                resourceJWT: allowed.dcaData.resourceJWT,
+                issuerJWT: allowed.dcaData.issuerJWT["constrained-issuer"],
+                sealed: allowed.dcaData.issuerData["constrained-issuer"].sealed,
+                keyId: "cr-1",
+                issuerName: "constrained-issuer",
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+
+        // Denied resource
+        await expect(
+            issuer.unlock(
+                {
+                    resource: denied.dcaData.resource,
+                    resourceJWT: denied.dcaData.resourceJWT,
+                    issuerJWT: denied.dcaData.issuerJWT["constrained-issuer"],
+                    sealed: denied.dcaData.issuerData["constrained-issuer"].sealed,
+                    keyId: "cr-1",
+                    issuerName: "constrained-issuer",
+                },
+                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            ),
+        ).rejects.toThrow(/not allowed to claim resourceId/);
+    });
+
+    it("supports allowedResourceIds with RegExp patterns", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "regex.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const premium = await publisher.render({
+            resourceId: "premium-article-42",
+            contentItems: [{ contentName: "bodytext", content: "Premium" }],
+            issuers: [
+                {
+                    issuerName: "regex-issuer",
+                    publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                    keyId: "rx-1",
+                    unlockUrl: "https://regex.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        const free = await publisher.render({
+            resourceId: "free-article-1",
+            contentItems: [{ contentName: "bodytext", content: "Free" }],
+            issuers: [
+                {
+                    issuerName: "regex-issuer",
+                    publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                    keyId: "rx-1",
+                    unlockUrl: "https://regex.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "regex-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "rx-1",
+            trustedPublisherKeys: {
+                "regex.example.com": {
+                    signingKeyPem: keys.signingPems.publicKeyPem,
+                    allowedResourceIds: [/^premium-/],
+                },
+            },
+        });
+
+        // "premium-article-42" matches /^premium-/
+        const response = await issuer.unlock(
+            {
+                resource: premium.dcaData.resource,
+                resourceJWT: premium.dcaData.resourceJWT,
+                issuerJWT: premium.dcaData.issuerJWT["regex-issuer"],
+                sealed: premium.dcaData.issuerData["regex-issuer"].sealed,
+                keyId: "rx-1",
+                issuerName: "regex-issuer",
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+
+        // "free-article-1" does NOT match
+        await expect(
+            issuer.unlock(
+                {
+                    resource: free.dcaData.resource,
+                    resourceJWT: free.dcaData.resourceJWT,
+                    issuerJWT: free.dcaData.issuerJWT["regex-issuer"],
+                    sealed: free.dcaData.issuerData["regex-issuer"].sealed,
+                    keyId: "rx-1",
+                    issuerName: "regex-issuer",
+                },
+                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            ),
+        ).rejects.toThrow(/not allowed to claim resourceId/);
+    });
+
+    it("plain string entries (backward compat) allow all resourceIds", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "compat.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "anything-at-all",
+            contentItems: [{ contentName: "bodytext", content: "Compat" }],
+            issuers: [
+                {
+                    issuerName: "compat-issuer",
+                    publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                    keyId: "co-1",
+                    unlockUrl: "https://compat.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        // Plain string entry (no constraints)
+        const issuer = createDcaIssuer({
+            issuerName: "compat-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "co-1",
+            trustedPublisherKeys: {
+                "compat.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        const response = await issuer.unlock(
+            {
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["compat-issuer"],
+                sealed: result.dcaData.issuerData["compat-issuer"].sealed,
+                keyId: "co-1",
+                issuerName: "compat-issuer",
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
     });
 });
 

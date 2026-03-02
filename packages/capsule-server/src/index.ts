@@ -213,6 +213,7 @@ export type {
   DcaRenderOptions,
   DcaRenderResult,
   DcaIssuerServerConfig,
+  DcaTrustedPublisher,
   DcaUnlockRequest,
   DcaUnlockResponse,
   DcaUnlockedKeys,

@@ -178,21 +178,33 @@ export async function POST(request: NextRequest) {
     const useSharedMode =
       mode === "shared" || (!isArticleKey && mode !== "article");
 
+    // Early validation: article keyIds must have a non-empty slug
+    if (isArticleKey) {
+      const slug = keyId.slice(8);
+      if (!slug || !slug.trim()) {
+        return NextResponse.json(
+          { error: "Invalid article keyId: slug must be non-empty. Expected 'article:<slug>'" },
+          { status: 400 },
+        );
+      }
+    }
+
+    // Early validation: shared keyIds must contain exactly "contentId:periodId"
     if (useSharedMode && !isArticleKey) {
-      // SHARED KEY MODE: Return the key-wrapping key (KEK)
-      // Parse contentId:periodId
-      const colonIndex = keyId.lastIndexOf(":");
-      if (colonIndex === -1) {
+      if (!keyId.includes(":")) {
         return NextResponse.json(
           { error: "Invalid shared keyId format. Expected 'contentId:periodId'" },
           { status: 400 },
         );
       }
 
+      // SHARED KEY MODE: Return the key-wrapping key (KEK)
+      // Parse contentId:periodId
+      const colonIndex = keyId.lastIndexOf(":");
       const contentId = keyId.substring(0, colonIndex);
       const periodId = keyId.substring(colonIndex + 1);
 
-      if (!contentId || !periodId) {
+      if (!contentId || !contentId.trim() || !periodId || !periodId.trim()) {
         return NextResponse.json(
           { error: "Invalid shared keyId: both contentId and periodId must be non-empty. Expected 'contentId:periodId'" },
           { status: 400 },

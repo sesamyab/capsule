@@ -231,6 +231,28 @@ export interface DcaRenderResult {
 // ============================================================================
 
 /**
+ * Per-publisher trust configuration.
+ *
+ * Allows fine-grained control over what each publisher is permitted to claim
+ * in unlock requests. Every publisher MUST be explicitly listed — there is no
+ * fallback / wildcard lookup.
+ */
+export interface DcaTrustedPublisher {
+    /** ES256 public key PEM for JWT verification */
+    signingKeyPem: string;
+    /**
+     * Optional allowlist of resourceId patterns this publisher may claim.
+     *
+     * - Exact strings are matched with `===`.
+     * - RegExp instances are tested with `.test(resourceId)`.
+     *
+     * When **omitted or empty**, the publisher may claim any resourceId
+     * (i.e. the constraint is not applied).
+     */
+    allowedResourceIds?: (string | RegExp)[];
+}
+
+/**
  * Configuration for creating a DCA issuer.
  */
 export interface DcaIssuerServerConfig {
@@ -240,8 +262,32 @@ export interface DcaIssuerServerConfig {
     privateKeyPem: string;
     /** Key ID that matches the publisher's keyId for this issuer */
     keyId: string;
-    /** Map of publisher domain → ES256 public key PEM for JWT verification */
-    trustedPublisherKeys: Record<string, string>;
+    /**
+     * Trusted-publisher allowlist.
+     *
+     * Maps **normalized** publisher domains to trust configuration.
+     * Domains are lowercased and trailing dots are stripped at construction
+     * time; requests from domains not in this map are rejected outright.
+     *
+     * Accepts two forms per entry:
+     *   - **Simple** (plain PEM string): trusts all resources from the domain.
+     *   - **Extended** (`DcaTrustedPublisher`): adds per-publisher constraints
+     *     such as `allowedResourceIds`.
+     *
+     * @example
+     * ```ts
+     * trustedPublisherKeys: {
+     *   // Simple: any resourceId from this domain is accepted
+     *   "news.example.com": process.env.NEWS_ES256_PUB!,
+     *   // Extended: only specific resourceIds are allowed
+     *   "blog.example.com": {
+     *     signingKeyPem: process.env.BLOG_ES256_PUB!,
+     *     allowedResourceIds: ["article-1", /^premium-/],
+     *   },
+     * }
+     * ```
+     */
+    trustedPublisherKeys: Record<string, string | DcaTrustedPublisher>;
 }
 
 /**

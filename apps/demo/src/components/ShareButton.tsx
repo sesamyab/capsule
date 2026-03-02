@@ -41,7 +41,7 @@ export function ShareButton({ resourceId }: ShareButtonProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contentId: resourceId,
+          articleSlug: resourceId,
           expiresIn,
           maxUses: maxUses ? parseInt(maxUses, 10) : undefined,
         }),

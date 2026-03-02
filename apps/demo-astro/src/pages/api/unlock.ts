@@ -35,6 +35,14 @@ const server = createSubscriptionServer({
 export const POST: APIRoute = async ({ request }) => {
   try {
     const body = await request.json();
+
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return new Response(
+        JSON.stringify({ error: "Request body must be a JSON object" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     const { keyId, wrappedContentKey, publicKey } = body;
 
     if (typeof publicKey !== "string" || typeof keyId !== "string" || typeof wrappedContentKey !== "string") {
@@ -51,19 +59,24 @@ export const POST: APIRoute = async ({ request }) => {
 
     // Static key lookup for article keys - derive from same period key provider as CMS
     const staticKeyLookup = async (id: string): Promise<Uint8Array | null> => {
-      if (id.startsWith("article:")) {
-        const contentId = id.slice(8);
-        const keyEntry = await keyProvider.getArticleKey(contentId);
-        if (keyEntry.key instanceof Uint8Array) {
-          return keyEntry.key;
+      try {
+        if (id.startsWith("article:")) {
+          const contentId = id.slice(8);
+          const keyEntry = await keyProvider.getArticleKey(contentId);
+          if (keyEntry.key instanceof Uint8Array) {
+            return keyEntry.key;
+          }
+          // Decode base64 string to Uint8Array
+          const binaryString = atob(keyEntry.key);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          return bytes;
         }
-        // Decode base64 string to Uint8Array
-        const binaryString = atob(keyEntry.key);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return bytes;
+      } catch (error) {
+        console.error(`[capsule] Failed to resolve key for "${id}":`, error);
+        return null;
       }
       return null;
     };

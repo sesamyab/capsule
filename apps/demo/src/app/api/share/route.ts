@@ -26,7 +26,7 @@ function getTokens() {
  *
  * Request body:
  * {
- *   contentId: string (required, publisher's content ID),
+ *   articleSlug: string (required, article identifier for URL routing),
  *   url?: string (optional, full URL for the content),
  *   expiresIn: string (e.g., "24h", "7d"),
  *   maxUses?: number (optional, limit total uses),
@@ -48,12 +48,12 @@ function getTokens() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { contentId, url, expiresIn, maxUses, userId, meta } = body;
+    const { articleSlug, url, expiresIn, maxUses, userId, meta } = body;
 
     // Validate required fields
-    if (!contentId || typeof contentId !== "string") {
+    if (!articleSlug || typeof articleSlug !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid contentId" },
+        { error: "Missing or invalid articleSlug" },
         { status: 400 },
       );
     }
@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
     // In the demo, all articles use the "premium" tier for encryption.
     // The contentId in the token must match the tier used during encryption
     // so the server can derive the correct period key for unlocking.
+    // The articleSlug is stored in meta so the token carries the full context.
     const token = await getTokens().generate({
       tier: "premium",
       contentId: "premium",
@@ -76,7 +77,7 @@ export async function POST(request: NextRequest) {
       expiresIn,
       maxUses,
       userId,
-      meta,
+      meta: { ...meta, articleSlug },
     });
 
     // Extract token info for response
@@ -90,20 +91,19 @@ export async function POST(request: NextRequest) {
 
     // Build share URL
     const baseUrl = request.headers.get("origin") || request.nextUrl.origin;
-    const path = `/article/${contentId}`;
+    const path = `/article/${articleSlug}`;
     const defaultUrl = `${baseUrl}${path}`;
     const targetUrl = url || defaultUrl;
     const separator = targetUrl.includes("?") ? "&" : "?";
     const shareUrl = `${targetUrl}${separator}token=${encodeURIComponent(token)}`;
 
     // Log token generation for audit
-    // Use the token's contentId ("premium") to stay consistent with the token scope.
     console.log(`[SHARE] Token generated`, {
       tokenId: payload.tid,
       issuer: payload.iss,
       keyId: payload.kid,
       contentId: payload.contentId,
-      articleSlug: contentId,
+      articleSlug,
       expiresIn,
       maxUses,
       userId,
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
       issuer: payload.iss,
       keyId: payload.kid,
       contentId: payload.contentId,
-      articleSlug: contentId,
+      articleSlug,
       expiresAt: new Date(payload.exp * 1000).toISOString(),
       shareUrl,
     });

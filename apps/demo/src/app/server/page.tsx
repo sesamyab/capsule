@@ -168,7 +168,7 @@ const { data, json, attribute, html } = await cms.encryptForTemplate(id, content
         </ol>
 
         <h3>CMS Setup</h3>
-        <CodeBlock>{`import { generateSigningKeyPair, AsymmetricTokenManager } from '@sesamy/capsule-server';
+        <CodeBlock>{`import { generateSigningKeyPair, createAsymmetricTokenManager } from '@sesamy/capsule-server';
 
 // Generate a key pair once and store the private key securely
 const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
@@ -276,7 +276,7 @@ const wrappedContentKey = wrapContentKey(contentKey, current.key);
 
         <h3>Period Key Client</h3>
         <p>The CMS fetches period keys from the Subscription Server, authenticated with a signed JWT:</p>
-        <CodeBlock>{`import { createAsymmetricTokenManager } from '@sesamy/capsule-server';
+        <CodeBlock>{`import { createAsymmetricTokenManager, AsymmetricTokenManager } from '@sesamy/capsule-server';
 
 interface PeriodKeys {
   current: { periodId: string; key: Buffer; expiresAt: Date };
@@ -568,7 +568,7 @@ const tokens = await createAsymmetricTokenManager({
 const jwt = await tokens.generate({ contentId: 'premium', expiresIn: '5m' });
 
 // 4. Fetch period keys
-const res = await fetch('http://localhost:3000/api/cms/period-keys', {
+const res = await fetch('http://localhost:3000/api/period-keys', {
   method: 'POST',
   headers: {
     'Authorization': \`Bearer \${jwt}\`,
@@ -604,7 +604,9 @@ curl -X POST http://localhost:3000/api/unlock \\
             🔒 <strong>Rate limit</strong> period-keys and unlock endpoints
           </li>
           <li>
-            🔒 <strong>Log all requests</strong> for audit trails
+            🔒 <strong>Log requests with redaction</strong> — never log raw
+            tokens, keys, or credentials; mask Authorization headers and
+            truncate identifiers in audit logs
           </li>
           <li>
             🔒 <strong>Rotate secrets periodically</strong>
