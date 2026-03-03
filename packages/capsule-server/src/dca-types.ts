@@ -313,6 +313,12 @@ export interface DcaUnlockRequest {
      * This enables client-bound transport mode.
      */
     clientPublicKey?: string;
+    /**
+     * Share link token (ES256 JWT signed by the publisher).
+     * When present, the issuer uses this token as the access decision
+     * instead of requiring a subscription check.
+     */
+    shareToken?: string;
 }
 
 /**
@@ -343,4 +349,63 @@ export interface DcaUnlockedKeys {
     contentKey?: string;
     /** Map of period bucket "t" → base64url-encoded periodKey (raw or RSA-OAEP wrapped) */
     periodKeys?: Record<string, string>;
+}
+
+// ============================================================================
+// Share Link Tokens
+// ============================================================================
+
+/**
+ * Share Link Token payload — a publisher-signed JWT that grants
+ * pre-authenticated access to specific content.
+ *
+ * DCA-compatible: the periodSecret never leaves the publisher.
+ * The token is purely an authorization grant — key material flows
+ * through the normal DCA seal/unseal channel.
+ *
+ * Flow:
+ *   1. Publisher creates a share link token (ES256 JWT) granting access
+ *   2. User clicks the share link, loads the page with DCA-sealed content
+ *   3. Client includes the share link token in the unlock request
+ *   4. Issuer verifies the token signature (publisher-signed, trusted)
+ *   5. Issuer grants access based on the token's claims (no subscription check)
+ *   6. Issuer unseals keys from the normal DCA sealed data and returns them
+ */
+export interface DcaShareLinkTokenPayload {
+    /** Token type discriminator */
+    type: "dca-share";
+    /** Publisher domain (must match the resource domain) */
+    domain: string;
+    /** Resource ID this token grants access to */
+    resourceId: string;
+    /** Content items this token grants access to */
+    contentNames: string[];
+    /** Token issued-at (Unix timestamp, seconds) */
+    iat: number;
+    /** Token expiry (Unix timestamp, seconds) */
+    exp: number;
+    /** Optional: maximum number of uses (advisory — enforced by issuer) */
+    maxUses?: number;
+    /** Optional: unique token ID (for revocation or use-count tracking by issuer) */
+    jti?: string;
+    /** Optional: publisher-defined metadata (e.g., sharer identity, campaign) */
+    data?: Record<string, unknown>;
+}
+
+/**
+ * Options for creating a share link token.
+ */
+export interface DcaShareLinkOptions {
+    /** Resource ID this token grants access to */
+    resourceId: string;
+    /** Content items to grant access to */
+    contentNames: string[];
+    /** Token lifetime in seconds (default: 7 days = 604800) */
+    expiresIn?: number;
+    /** Maximum number of uses (optional, advisory) */
+    maxUses?: number;
+    /** Unique token ID (auto-generated if omitted) */
+    jti?: string;
+    /** Publisher-defined metadata */
+    data?: Record<string, unknown>;
 }

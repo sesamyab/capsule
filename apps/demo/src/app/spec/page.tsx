@@ -366,606 +366,229 @@ observer.observe(document.body, {
           media sharing, email distribution, and promotional campaigns.
         </p>
 
-        <h3>The Share Link Problem</h3>
+        <h3>DCA-Compatible Design</h3>
         <p>
-          When creating a shareable link, you need to grant access to content
-          that the link creator doesn't have access to yet. The solution:{" "}
-          <strong>signed tokens</strong> that encode the content ID, enabling
-          any holder to unlock content.
+          The critical design insight: a share link token is <strong>purely an
+            authorization grant</strong>, not a key-delivery mechanism. The
+          publisher&apos;s <code>periodSecret</code> never leaves the publisher.
+          Key material flows through the normal DCA seal/unseal channel — the
+          sealed keys are already embedded in the page&apos;s DCA data, and the
+          issuer unseals them as usual.
+        </p>
+        <p>
+          This is DCA-compatible because the issuer never needs the publisher&apos;s{" "}
+          <code>periodSecret</code>. The publisher creates a signed JWT that says
+          &ldquo;this bearer may access these content items for this resource.&rdquo;
+          The issuer validates the token signature (the publisher already has a
+          trusted signing key in the allowlist), uses the token&apos;s claims as the
+          access decision, and returns unsealed keys from the normal DCA sealed data.
         </p>
 
-        <CodeBlock>{`// Share Link Flow
-Publisher → creates token → shares URL → Recipient clicks → content unlocks
-
-// Key Insight: Token contains contentId, not the content key
-// The content key comes from the encrypted article at unlock time`}</CodeBlock>
+        <CodeBlock>{`// Share Link Flow (DCA-compatible)
+//
+// 1. Publisher signs a share token (ES256 JWT) granting access
+// 2. User clicks the share link → loads page with normal DCA-sealed content
+// 3. Client includes the share token in the unlock request
+// 4. Issuer verifies token (publisher-signed, trusted key) → access decision
+// 5. Issuer unseals keys from normal DCA sealed data → returns to client
+// 6. Client decrypts content locally
+//
+// Key insight: periodSecret never leaves the publisher.
+// The token is authorization only — key material uses normal DCA channels.`}</CodeBlock>
 
         <h3>Token Structure</h3>
         <p>
-          Tokens are HMAC-SHA256 signed, base64url-encoded payloads containing:
+          Share link tokens are ES256 (ECDSA P-256) signed JWTs, using the
+          same publisher signing key that signs <code>resourceJWT</code> and{" "}
+          <code>issuerJWT</code>. The issuer already trusts this key via its{" "}
+          <code>trustedPublisherKeys</code> allowlist.
         </p>
 
-        <CodeBlock>{`{
-  "v": 1,                      // Token version
-  "tid": "abc123...",          // Unique token ID (for tracking/revocation)
-  "iss": "my-publisher",       // Issuer (who created the token)
-  "kid": "key-2026-01",        // Key ID (which signing key was used)
-  "contentId": "premium",           // Required: content ID
-  "url": "https://...",        // Optional: full URL for the content
-  "maxUses": 100,              // Optional: usage limit
-  "userId": "publisher-123",   // Optional: for analytics
-  "meta": { "campaign": "fb" },// Optional: custom metadata
-  "iat": 1707400800,           // Issued at (Unix timestamp)
-  "exp": 1708005600            // Expires at (Unix timestamp)
+        <CodeBlock>{`// DcaShareLinkTokenPayload (ES256 JWT payload)
+{
+  "type": "dca-share",                // Type discriminator
+  "domain": "news.example.com",       // Publisher domain (must match resource)
+  "resourceId": "article-123",        // Resource this token grants access to
+  "contentNames": ["bodytext"],        // Content items to unlock
+  "iat": 1707400800,                  // Issued at (Unix timestamp)
+  "exp": 1708005600,                  // Expires at (Unix timestamp)
+  "maxUses": 100,                     // Optional: usage limit (advisory)
+  "jti": "share-abc123",              // Optional: unique ID (for tracking/revocation)
+  "data": { "campaign": "twitter" }   // Optional: publisher-defined metadata
 }`}</CodeBlock>
 
-        <h3>Token Generation</h3>
-        <CodeBlock>{`import { createTokenManager } from '@sesamy/capsule-server';
+        <h3>Token Generation (Publisher)</h3>
+        <p>
+          The publisher creates share tokens using the same{" "}
+          <code>createDcaPublisher</code> instance that renders pages:
+        </p>
+        <CodeBlock>{`import { createDcaPublisher } from '@sesamy/capsule-server';
 
-// Create manager with signing secret, issuer, and key ID
-const tokens = createTokenManager({
-  secret: process.env.TOKEN_SECRET,
-  issuer: 'my-publisher',      // Identifies who issues tokens
-  keyId: 'key-2026-01',        // Enables key rotation
+const publisher = createDcaPublisher({
+  domain: "news.example.com",
+  signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
+  periodSecret: process.env.PERIOD_SECRET!,
 });
 
-// Generate a share token
-const token = await tokens.generate({
-  contentId: 'premium',          // Required: content name this token grants access to
-  url: 'https://example.com/article/crypto-guide', // Optional
-  expiresIn: '24h',
-  maxUses: 50,
-  userId: 'publisher-123',
-  meta: { campaign: 'twitter-launch' }
+// Generate a share link token
+const token = await publisher.createShareLinkToken({
+  resourceId: "article-123",
+  contentNames: ["bodytext"],
+  expiresIn: 7 * 24 * 3600,             // 7 days (default)
+  maxUses: 50,                           // Optional
+  jti: "share-" + crypto.randomUUID(),   // Optional: for tracking
+  data: { sharedBy: "user-42" },         // Optional: metadata
 });
 
 // Create shareable URL
-const shareUrl = \`https://example.com/article/crypto-guide?token=\${token}\`;`}</CodeBlock>
+const shareUrl = \`https://news.example.com/article/123?share=\${token}\`;`}</CodeBlock>
 
-        <h3>Client-Side Token Validation</h3>
+        <h3>Issuer-Side Validation</h3>
         <p>
-          Clients can validate tokens locally without calling the server. This
-          enables:
+          The issuer validates the share token using the publisher&apos;s signing
+          key (already in <code>trustedPublisherKeys</code>). No new secrets
+          or key material are needed:
         </p>
-        <ul>
-          <li>Checking expiry before making network requests</li>
-          <li>Redirecting to the correct content URL</li>
-          <li>Displaying issuer/attribution info in the UI</li>
-          <li>Validating that the token matches the current content</li>
-        </ul>
+        <CodeBlock>{`import { createDcaIssuer } from '@sesamy/capsule-server';
 
-        <CodeBlock>{`import { parseShareToken, validateTokenForContent } from '@sesamy/capsule';
-
-// Parse token from URL
-const token = new URLSearchParams(window.location.search).get('token');
-if (token) {
-  const result = parseShareToken(token);
-  
-  if (!result.valid) {
-    showError('Invalid share link');
-    return;
-  }
-  
-  if (result.expired) {
-    showError('This share link has expired');
-    return;
-  }
-  
-  // Validate it's for the current content
-  const validation = validateTokenForContent(result, currentResourceId);
-  if (!validation.valid) {
-    // Redirect to correct content
-    window.location.href = result.payload.url || \`/article/\${result.payload.contentId}\`;
-    return;
-  }
-  
-  // Token is valid - proceed with unlock
-  console.log(\`Shared by \${result.payload.iss}, expires in \${result.expiresIn}s\`);
-}`}</CodeBlock>
-
-        <h3>HMAC Signature Validation (Server-Side Only)</h3>
-        <p>
-          <strong>⚠️ Security Warning:</strong> HMAC uses symmetric secrets -
-          anyone with the secret can <em>forge</em> tokens. Never expose the
-          signing secret in client-side code (no <code>NEXT_PUBLIC_</code> env
-          vars). Use <code>TokenValidator</code> only in server-side code (API
-          routes, middleware). For client-side validation, use{" "}
-          <code>JwksTokenValidator</code> with Ed25519.
-        </p>
-
-        <CodeBlock>{`// ⚠️ SERVER-SIDE ONLY - app/api/validate-token/route.ts
-import { TokenValidator } from '@sesamy/capsule';
-
-const validator = new TokenValidator({
-  trustedKeys: {
-    'my-publisher:key-2026-01': process.env.TOKEN_SECRET, // Server-only env var!
+const issuer = createDcaIssuer({
+  issuerName: "sesamy",
+  privateKeyPem: process.env.ISSUER_ECDH_P256_PRIVATE_KEY!,
+  keyId: "2025-10",
+  trustedPublisherKeys: {
+    "news.example.com": process.env.PUBLISHER_ES256_PUBLIC_KEY!,
   },
-  requireTrustedIssuer: true,
 });
 
+// In unlock endpoint:
 export async function POST(request: Request) {
-  const { token } = await request.json();
-  const result = await validator.validate(token);
+  const body = await request.json();
 
-  if (!result.valid) {
-    return Response.json({ error: result.message }, { status: 401 });
+  if (body.shareToken) {
+    // Share link flow: token IS the access decision
+    const result = await issuer.unlockWithShareToken(body, {
+      deliveryMode: "contentKey",        // or "periodKey" for caching
+      onShareToken: async (payload, resource) => {
+        // Optional: use-count tracking, audit logging
+        console.log(\`Share token used: \${payload.jti}\`);
+        // Throw to reject: throw new Error("Usage limit exceeded");
+      },
+    });
+    return Response.json(result);
   }
 
-  if (result.expired) {
-    return Response.json({ error: 'Token expired' }, { status: 401 });
-  }
-
-  return Response.json({ 
-    valid: true, 
-    issuer: result.payload.iss,
-    contentId: result.payload.contentId,
-  });
+  // Normal subscription flow...
 }`}</CodeBlock>
 
-        <h3>JWKS-Based Validation (Ed25519) - Client-Side Safe</h3>
-        <p>
-          For asymmetric key signing with automatic public key discovery, use
-          the <code>JwksTokenValidator</code>. This approach:
-        </p>
-        <ul>
-          <li>
-            Uses <strong>Ed25519 asymmetric signing</strong> instead of shared
-            secrets
-          </li>
-          <li>
-            Fetches public keys from the issuer's{" "}
-            <code>/.well-known/jwks.json</code> endpoint
-          </li>
-          <li>Requires only the issuer URL, not the actual secret</li>
-          <li>Enables cross-domain token validation without sharing secrets</li>
-        </ul>
+        <p>The issuer performs these validation steps:</p>
+        <ol>
+          <li>Verifies request JWTs (same as normal unlock)</li>
+          <li>Verifies share token signature with the publisher&apos;s ES256 key</li>
+          <li>Validates type discriminator (<code>&quot;dca-share&quot;</code>)</li>
+          <li>Validates domain binding (token domain must match resource domain)</li>
+          <li>Validates resourceId binding (token must be for this resource)</li>
+          <li>Checks expiry (reject expired tokens)</li>
+          <li>Invokes optional <code>onShareToken</code> callback (use-count, audit)</li>
+          <li>Grants access to content names listed in token ∩ available sealed data</li>
+          <li>Unseals keys from normal DCA sealed blobs and returns them</li>
+        </ol>
 
-        <h4>Server-Side: Expose JWKS Endpoint</h4>
-        <p>
-          Generate Ed25519 key pairs and expose the public key at a well-known
-          URL:
-        </p>
-
-        <CodeBlock>{`import { 
-  AsymmetricTokenManager, 
-  generateSigningKeyPair 
-} from '@sesamy/capsule-server';
-
-// Generate or load a key pair (store securely!)
-const { privateKey, publicKey, keyId } = await generateSigningKeyPair();
-
-const tokenManager = new AsymmetricTokenManager({
-  issuer: 'https://api.example.com',
-  privateKey,
-  publicKey,
-  keyId,
-});
-
-// Generate an Ed25519-signed token
-const token = await tokenManager.generate({
-  contentId: 'article-123',
-  expiresIn: '7d',
-});
-
-// /.well-known/jwks.json endpoint
-export async function GET() {
-  return Response.json(await tokenManager.getJwks());
-}
-
-// Returns:
-// {
-//   "keys": [{
-//     "kty": "OKP",
-//     "crv": "Ed25519",
-//     "kid": "key-2025-01",
-//     "x": "base64url-encoded-public-key",
-//     "use": "sig",
-//     "alg": "EdDSA"
-//   }]
-// }`}</CodeBlock>
-
-        <h4>Client-Side: JWKS Validation</h4>
-        <p>
-          Use <code>JwksTokenValidator</code> to validate tokens from trusted
-          issuers. The client automatically fetches the issuer's JWKS endpoint
-          and verifies signatures:
-        </p>
-
-        <CodeBlock>{`import { JwksTokenValidator } from '@sesamy/capsule';
-
-// Whitelist trusted issuers by URL
-const validator = new JwksTokenValidator({
-  trustedIssuers: [
-    'https://api.example.com',
-    'https://partner.example.org',
-  ],
-});
-
-// Validate a token
-const result = await validator.validate(token);
-
-if (result.valid && !result.expired) {
-  console.log(\`Verified token from \${result.issuer}\`);
-  console.log(\`Key ID: \${result.keyId}\`);
-  console.log(\`Content: \${result.payload.contentId}\`);
-}
-
-// JWKS Discovery Flow:
-// 1. Token contains iss = "https://api.example.com"
-// 2. Client checks iss is in trustedIssuers (security!)
-// 3. Client fetches https://api.example.com/.well-known/jwks.json
-// 4. Client finds key with matching kid
-// 5. Client verifies Ed25519 signature using public key`}</CodeBlock>
-
-        <h4>Key Rotation: Signing Keys vs Time Period Keys</h4>
-        <p>
-          Token signing keys are <strong>separate from time period keys</strong>{" "}
-          and have different rotation schedules:
-        </p>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Key Type
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Purpose
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Rotation
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Time period keys
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Wrap content keys for subscriptions
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Every 15 minutes (controls subscription window)
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Token signing keys
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Sign share link tokens
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Infrequently (months/years)
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p>
-          Signing keys must be <strong>long-lived</strong> because share links
-          may be valid for 30+ days. If you rotate the signing key, old tokens
-          would fail validation. For key rotation, add the new key to JWKS
-          first, then start using it for new tokens. Keep old keys in JWKS until
-          all tokens signed with them have expired.
-        </p>
-
-        <CodeBlock>{`// JWKS can contain multiple keys for rotation
+        <h3>Unlock Request with Share Token</h3>
+        <CodeBlock>{`// Client → Issuer
+POST /api/unlock
 {
-  "keys": [
-    { "kid": "key-2026-01", "x": "...", ... },  // Current signing key
-    { "kid": "key-2025-01", "x": "...", ... },  // Previous key (still validating old tokens)
-  ]
-}`}</CodeBlock>
-
-        <h4>Choosing HMAC vs Ed25519</h4>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Feature
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                TokenValidator (HMAC)
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                JwksTokenValidator (Ed25519)
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Signing
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Symmetric (shared secret)
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Asymmetric (public/private)
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Secret sharing
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Client needs secret
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Client only needs issuer URL
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Key discovery
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Manual configuration
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Automatic via JWKS
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Cross-domain
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Requires secret sharing
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Works without sharing secrets
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Best for
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                First-party tokens
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Third-party/partner tokens
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <h3>Token-Based Unlock Flow</h3>
-        <p>
-          When a user clicks a share link with a token, the unlock flow differs
-          from the standard subscription flow:
-        </p>
-
-        <CodeBlock>{`// Standard Flow:
-// Client → Issuer /api/unlock { dcaFields, clientPublicKey } → validates access → returns keys
-
-// Token-Based Flow:
-// Client → /api/unlock { token, wrappedContentKey, publicKey } → validates token → returns content key`}</CodeBlock>
-
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
-          <thead>
-            <tr>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Step
-              </th>
-              <th
-                style={{
-                  textAlign: "left",
-                  padding: "0.5rem",
-                  borderBottom: "2px solid #333",
-                }}
-              >
-                Action
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                1. Client extracts token
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Parses <code>?token=...</code> from URL
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                2. Client sends unlock request
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Includes token + wrapped content key from article
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                3. Server validates token
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Verifies signature, expiry, usage limits
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                4. Server authorizes &amp; unwraps
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Checks <code>token.contentId</code> matches the requested content, then derives the period key (from period secret + time bucket) and unwraps the content key
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                5. Server re-wraps for client
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Wraps content key with client's public key
-              </td>
-            </tr>
-            <tr>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                6. Client decrypts content
-              </td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Uses content key to decrypt article
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <h3>Server-Side Token Validation</h3>
-        <CodeBlock>{`import { createTokenManager, createSubscriptionServer } from '@sesamy/capsule-server';
-
-// Create token manager (same config as generation)
-const tokens = createTokenManager({
-  secret: process.env.TOKEN_SECRET,
-  issuer: 'my-publisher',
-  keyId: 'key-2026-01',
-});
-
-const server = createSubscriptionServer({
-  periodSecret: process.env.PERIOD_SECRET,
-});
-
-// Validate token
-const validation = await tokens.validate(token);
-if (!validation.valid) {
-  throw new Error(validation.message); // "Token has expired", etc.
+  "resource": { "domain": "news.example.com", "resourceId": "article-123", … },
+  "resourceJWT": "eyJ…",
+  "issuerJWT": "eyJ…",
+  "sealed": { "bodytext": { "contentKey": "…", "periodKeys": { … } } },
+  "keyId": "issuer-key-1",
+  "issuerName": "sesamy",
+  "shareToken": "eyJ…",                  // ← Share link token
+  "clientPublicKey": "base64url-SPKI…"   // Optional: client-bound transport
 }
 
-// Unlock using validated token payload
-const result = await server.unlockWithToken(
-  validation.payload,      // Validated token payload
-  wrappedContentKey,       // From article.wrappedKeys[keyId]
-  userPublicKey,           // Client's RSA public key (Base64 SPKI)
-  contentId,               // Validates against token.contentId
-);
+// Issuer → Client (same response format as normal unlock)
+{
+  "keys": {
+    "bodytext": {
+      "contentKey": "base64url-key-or-wrapped-key"
+    }
+  },
+  "transport": "client-bound"
+}`}</CodeBlock>
 
-// result contains:
-// - encryptedContentKey: content key wrapped with user's public key
-// - keyId: Which key was used
-// - expiresAt: When the unlock expires`}</CodeBlock>
+        <h3>Client-Side Share Link Handling</h3>
+        <CodeBlock>{`import { DcaClient } from '@sesamy/capsule';
 
-        <h3>Analytics & Audit Trail</h3>
-        <p>Token-based unlocks provide full audit trail capability:</p>
-        <ul>
-          <li>
-            <strong>Token issuer:</strong> <code>iss</code> field
-          </li>
-          <li>
-            <strong>Signing key:</strong> <code>kid</code> for key rotation
-            tracking
-          </li>
-          <li>
-            <strong>Who created the link:</strong> <code>userId</code> in token
-          </li>
-          <li>
-            <strong>What content:</strong> <code>contentId</code> (required)
-          </li>
-          <li>
-            <strong>Campaign tracking:</strong> <code>meta</code> field
-          </li>
-          <li>
-            <strong>Usage counting:</strong> <code>maxUses</code> limit
-          </li>
-        </ul>
+const client = new DcaClient();
+const page = client.parsePage();
 
-        <CodeBlock>{`// Example: Log token unlock for analytics
-console.log('[UNLOCK] Token used', {
-  tokenId: payload.tid,
-  issuer: payload.iss,
-  keyId: payload.kid,
-  contentId: payload.contentId,
-  userId: payload.userId,
-  campaign: payload.meta?.campaign,  
-  timestamp: new Date().toISOString(),
+// Check for share token in URL
+const shareToken = DcaClient.getShareTokenFromUrl(); // reads ?share= param
+
+if (shareToken) {
+  // Unlock with share token (auto-includes token in unlock request)
+  const keys = await client.unlockWithShareToken(page, "sesamy", shareToken);
+  const html = await client.decrypt(page, "bodytext", keys);
+  document.querySelector('[data-dca-content-name="bodytext"]')!.innerHTML = html;
+
+  // Clean up URL (cosmetic)
+  const url = new URL(window.location.href);
+  url.searchParams.delete("share");
+  history.replaceState({}, "", url);
+}`}</CodeBlock>
+
+        <h3>Use-Count Tracking</h3>
+        <p>
+          The <code>maxUses</code> field is advisory — enforcement is the
+          issuer&apos;s responsibility. Use the <code>onShareToken</code> callback
+          to implement tracking:
+        </p>
+        <CodeBlock>{`// Example: Redis-based use-count tracking
+const result = await issuer.unlockWithShareToken(body, {
+  onShareToken: async (payload) => {
+    if (!payload.jti) return; // No tracking without token ID
+
+    const key = \`share-uses:\${payload.jti}\`;
+    const count = await redis.incr(key);
+
+    // Set TTL on first use
+    if (count === 1) {
+      await redis.expire(key, payload.exp - Math.floor(Date.now() / 1000));
+    }
+
+    if (payload.maxUses && count > payload.maxUses) {
+      throw new Error("Share link usage limit exceeded");
+    }
+  },
 });`}</CodeBlock>
+
+        <h3>Standalone Token Verification</h3>
+        <p>
+          The issuer can verify a share token without performing a full unlock,
+          useful for pre-flight checks:
+        </p>
+        <CodeBlock>{`const payload = await issuer.verifyShareToken(shareToken, "news.example.com");
+// payload: { type, domain, resourceId, contentNames, iat, exp, jti?, maxUses?, data? }`}</CodeBlock>
 
         <h3>Security Considerations for Share Links</h3>
         <ul>
           <li>
-            ✅ Tokens are cryptographically signed (HMAC-SHA256 or Ed25519)
+            ✅ Tokens are ES256-signed using the publisher&apos;s existing signing key
           </li>
+          <li>✅ Issuer validates signature via the trusted-publisher allowlist (no new secrets)</li>
+          <li>✅ <code>periodSecret</code> never leaves the publisher — DCA boundary intact</li>
           <li>✅ Expiration limits exposure window</li>
-          <li>✅ Usage limits prevent unlimited sharing</li>
-          <li>✅ Content ID binding prevents token reuse across content</li>
+          <li>✅ Usage limits via <code>maxUses</code> + <code>onShareToken</code> callback</li>
+          <li>✅ Resource and domain binding prevent token reuse across content</li>
+          <li>✅ Content-name scoping limits what each token can unlock</li>
+          <li>✅ Full audit trail via <code>jti</code>, <code>data</code>, and callback</li>
+          <li>✅ Key material uses the same DCA seal/unseal channel (no new attack surface)</li>
           <li>
-            ✅ Key ID (<code>kid</code>) enables signing key rotation
-          </li>
-          <li>✅ Client-side validation without server round-trip</li>
-          <li>✅ Full audit trail for analytics and abuse detection</li>
-          <li>✅ JWKS enables public key discovery without secret sharing</li>
-          <li>
-            ✅ Issuer whitelist (<code>trustedIssuers</code>) prevents arbitrary
-            token acceptance
+            ⚠️ Tokens are bearer credentials — anyone with the URL has access
           </li>
           <li>
-            ⚠️ Token secret (HMAC) or private key (Ed25519) must be kept secure
-          </li>
-          <li>
-            ⚠️ Tokens are bearer credentials - anyone with the URL has access
+            ⚠️ Publisher signing key must be protected (same requirement as normal DCA)
           </li>
         </ul>
 

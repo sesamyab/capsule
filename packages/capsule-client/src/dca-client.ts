@@ -245,7 +245,7 @@ export class DcaClient {
      *
      * @param page - Parsed page data
      * @param issuerName - Which issuer to call
-     * @param additionalBody - Extra fields to include in the request body (e.g., auth tokens)
+     * @param additionalBody - Extra fields to include in the request body (e.g., auth tokens, shareToken)
      * @returns Unlock response with key material
      */
     async unlock(
@@ -288,6 +288,47 @@ export class DcaClient {
         }
 
         return response.json() as Promise<DcaUnlockResponse>;
+    }
+
+    /**
+     * Unlock content using a share link token.
+     *
+     * Convenience method that includes the share token in the unlock request.
+     * The issuer validates the publisher-signed token and grants access
+     * without requiring a subscription check.
+     *
+     * @param page - Parsed page data
+     * @param issuerName - Which issuer to call
+     * @param shareToken - Publisher-signed share link token (JWT)
+     * @param additionalBody - Extra fields to include in the request body
+     * @returns Unlock response with key material
+     */
+    async unlockWithShareToken(
+        page: DcaParsedPage,
+        issuerName: string,
+        shareToken: string,
+        additionalBody?: Record<string, unknown>,
+    ): Promise<DcaUnlockResponse> {
+        return this.unlock(page, issuerName, {
+            ...additionalBody,
+            shareToken,
+        });
+    }
+
+    /**
+     * Extract a share token from the current URL's query parameters.
+     *
+     * @param paramName - Query parameter name (default: "share")
+     * @returns The share token string, or null if not present
+     */
+    static getShareTokenFromUrl(paramName = "share"): string | null {
+        if (typeof window === "undefined" || typeof URL === "undefined") return null;
+        try {
+            const url = new URL(window.location.href);
+            return url.searchParams.get(paramName);
+        } catch {
+            return null;
+        }
     }
 
     // --------------------------------------------------------------------------

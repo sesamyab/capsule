@@ -1,88 +1,46 @@
 "use client";
 
 /**
- * EncryptedSection - Demo component showing Capsule client-side decryption.
+ * EncryptedSection - Demo component showing DCA client-side decryption.
  *
- * Uses the @sesamy/capsule client library for all cryptographic operations.
+ * Uses the @sesamy/capsule DcaClient for all cryptographic operations.
  * This version provides verbose logging for demonstration purposes.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useConsole } from "./ConsoleContext";
 import { KeyManager } from "./KeyManager";
-import type {
-  CapsuleClient as CapsuleClientType,
-  EncryptedArticle,
-  UnlockFunction,
-  WrappedKey,
-  ContentKeyStorageMode,
-} from "@sesamy/capsule";
 
 interface EncryptedSectionProps {
   resourceId: string;
-  encryptedData: EncryptedArticle | null;
-  securityMode?: ContentKeyStorageMode;
-  /** Optional: pre-signed token for share link unlock */
-  token?: string;
+  /** The DCA content name / tier (e.g. "TierA", "TierB") */
+  contentName: string;
+  /** Whether the page has DCA-encrypted content embedded */
+  hasEncryptedContent: boolean;
+  /** Issuer name to unlock with */
+  issuerName?: string;
 }
 
 type UnlockState = "locked" | "unlocking" | "decrypting" | "unlocked" | "error";
+type AccessType = "article" | "tier";
 
 export function EncryptedSection({
   resourceId,
-  encryptedData,
-  securityMode = "persist",
-  token: propToken,
+  contentName,
+  hasEncryptedContent,
+  issuerName = "sesamy-demo",
 }: EncryptedSectionProps) {
   const [state, setState] = useState<UnlockState>("locked");
   const [decryptedContent, setDecryptedContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [usedKeyId, setUsedKeyId] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState<Date | null>(null);
-  const [tokenId, setTokenId] = useState<string | null>(null);
-  const [, setTick] = useState(0);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const clientRef = useRef<CapsuleClientType | null>(null);
+  const clientRef = useRef<InstanceType<typeof import("@sesamy/capsule").DcaClient> | null>(null);
+  const pageRef = useRef<import("@sesamy/capsule").DcaParsedPage | null>(null);
+  const initRanRef = useRef(false);
   const { log } = useConsole();
-
-  // Tick every second while unlocked to update the expiry countdown
-  useEffect(() => {
-    if (state !== "unlocked" || !expiresAt) return;
-    const interval = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(interval);
-  }, [state, expiresAt]);
-
-  // Parse keyId to get type and base info
-  const parseKeyId = (
-    keyId: string,
-  ): { type: "shared" | "article"; baseId: string; periodId?: string } => {
-    const [first, second] = keyId.split(":", 2);
-    if (first === "article") {
-      return { type: "article", baseId: second ?? "" };
-    }
-    // contentId:periodId format
-    return { type: "shared", baseId: first ?? "", periodId: second };
-  };
-
-  // Get available key options from wrapped keys
-  const getKeyOptions = useCallback(() => {
-    if (!encryptedData) return { sharedKeys: [], articleKeys: [] };
-
-    const sharedKeys: WrappedKey[] = [];
-    const articleKeys: WrappedKey[] = [];
-
-    for (const wk of encryptedData.wrappedKeys) {
-      const parsed = parseKeyId(wk.keyId);
-      if (parsed.type === "article") {
-        articleKeys.push(wk);
-      } else {
-        sharedKeys.push(wk);
-      }
-    }
-
-    return { sharedKeys, articleKeys };
-  }, [encryptedData]);
 
   // Execute scripts and dispatch event after content is decrypted
   useEffect(() => {
@@ -103,387 +61,348 @@ export function EncryptedSection({
         log(`Executed ${scripts.length} embedded script(s)`, "info");
       }
 
-      // Dispatch custom event for external scripts to react to unlocked content
-      const event = new CustomEvent("capsule:unlocked", {
+      // Dispatch custom event for external scripts
+      const event = new CustomEvent("dca:unlocked", {
         bubbles: true,
-        detail: {
-          resourceId,
-          element: contentElement,
-          keyId: usedKeyId,
-        },
+        detail: { resourceId, element: contentElement },
       });
       contentElement.dispatchEvent(event);
-      log(
-        `Dispatched 'capsule:unlocked' event for article "${resourceId}"`,
-        "info",
-      );
+      log(`Dispatched 'dca:unlocked' event for "${resourceId}"`, "info");
     }
-  }, [state, decryptedContent, log, resourceId, usedKeyId]);
+  }, [state, decryptedContent, log, resourceId]);
 
-  // Initialize the Capsule client
+  // Initialize the DCA client (guarded against React Strict Mode double-mount)
   useEffect(() => {
-    let mounted = true;
+    // Prevent duplicate initialization from React Strict Mode double-mount
+    if (initRanRef.current) return;
+    initRanRef.current = true;
 
     async function init() {
       try {
         log(`Loading article "${resourceId}"...`, "info");
-        log("Initializing @sesamy/capsule client...", "key");
+        log("Initializing DCA client (@sesamy/capsule)...", "key");
 
-        // Dynamic import for client-side only
-        const { CapsuleClient } = await import("@sesamy/capsule");
+        const { DcaClient } = await import("@sesamy/capsule");
 
-        // Create unlock function with verbose logging
-        const unlock: UnlockFunction = async ({
-          keyId,
-          wrappedContentKey,
-          publicKey,
-          token,
-        }) => {
-          const parsed = parseKeyId(keyId);
-          const isSharedKey = parsed.type === "shared";
+        const periodKeyCache = createIdbPeriodKeyCache();
 
-          // Token-based unlock
-          if (token) {
-            log(
-              `POST /api/unlock { token: "...", wrappedContentKey: "...", publicKey: "..." } (share link mode)`,
-              "network",
-            );
+        const client = new DcaClient({ clientBound: true, periodKeyCache });
+        clientRef.current = client;
 
-            const response = await fetch("/api/unlock", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                token,
-                wrappedContentKey,
-                publicKey,
-                resourceId,
-              }),
-            });
+        // Eagerly generate the RSA key pair so it shows immediately in KeyManager
+        // (getPublicKey() calls ensureKeyPair() internally)
+        await client.getPublicKey();
+        log("Client-bound transport enabled (RSA-OAEP key pair)", "crypto");
 
-            if (!response.ok) {
-              const data = await response.json();
-              log(`Server error: ${data.error}`, "error");
-              throw new Error(
-                data.error || `Server returned ${response.status}`,
-              );
+        // Try to parse DCA data from the page
+        try {
+          const page = client.parsePage();
+          pageRef.current = page;
+
+          const contentNames = Object.keys(page.dcaData.contentSealData);
+          const issuerNames = Object.keys(page.dcaData.issuerData);
+          log(`DCA data parsed: ${contentNames.length} content item(s), ${issuerNames.length} issuer(s)`, "info");
+          log(`Resource: ${page.dcaData.resource.resourceId}, domain: ${page.dcaData.resource.domain}`, "info");
+          log(`Content items: ${contentNames.join(", ")}`, "info");
+          log(`Issuers: ${issuerNames.join(", ")}`, "info");
+
+          // Check for share link token in URL
+          const shareToken = DcaClient.getShareTokenFromUrl();
+          if (shareToken) {
+            log("Share link token detected in URL!", "key");
+            log("Auto-unlocking with share token...", "network");
+
+            setIsInitializing(false);
+            setState("unlocking");
+
+            // Auto-unlock with share token
+            const keys = await client.unlockWithShareToken(page, issuerName, shareToken);
+            const keyMode = Object.values(keys.keys).some((k) => k.contentKey)
+              ? "contentKey (direct)"
+              : "periodKeys (cacheable)";
+            log(`Share link unlock successful! Key mode: ${keyMode}`, "success");
+
+            setState("decrypting");
+            log("Decrypting content with AES-256-GCM + AAD...", "crypto");
+
+            const html = await client.decrypt(page, contentName, keys);
+
+            // Store content key metadata so KeyManager can display it
+            await storeContentKeyRecord(resourceId);
+            await storeSubscriptionRecord(contentName);
+
+            setDecryptedContent(html);
+            setState("unlocked");
+            log(`Content decrypted successfully (${html.length} chars)`, "success");
+            log("✨ Article unlocked via share link!", "success");
+
+            // Clean up the share token from the URL (cosmetic)
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete("share");
+              window.history.replaceState({}, "", url.toString());
+            } catch {
+              // Ignore URL cleanup errors
+            }
+            return;
+          }
+
+          // Try auto-unlock from cached period keys.
+          // Period keys are shared across all articles (keyed by contentName + timeBucket),
+          // so any previously cached subscription key can unlock any article.
+          const hasSubscription = await hasActiveSubscription(contentName);
+
+          if (!hasSubscription) {
+            log("No active subscription — skipping cached key auto-unlock", "info");
+          }
+
+          if (hasSubscription) try {
+            const sealedEntries = page.dcaData.sealedContentKeys[contentName] ?? [];
+            const bucketIds = sealedEntries.map((e) => e.t);
+            log(`Checking for cached period keys (buckets: ${bucketIds.join(", ") || "none"})...`, "crypto");
+
+            if (sealedEntries.length === 0) {
+              throw new Error(`No sealedContentKeys for ${contentName}`);
             }
 
-            const result = await response.json();
-            log(
-              `Share link unlocked! Token ID: ${result.tokenId || "unknown"}`,
-              "success",
-            );
-            log(
-              `Received encrypted DEK (${result.encryptedContentKey.length} chars)`,
-              "success",
-            );
-
-            if (mounted) {
-              setExpiresAt(new Date(result.expiresAt));
-              setTokenId(result.tokenId || null);
-            }
-
-            return result;
-          }
-
-          // Regular unlock (shared or article key)
-          if (isSharedKey) {
-            log(
-              `POST /api/unlock { keyId: "${keyId}", publicKey: "..." } (shared mode - getting KEK)`,
-              "network",
-            );
-          } else {
-            log(
-              `POST /api/unlock { keyId: "${keyId}", wrappedContentKey: "...", publicKey: "..." }`,
-              "network",
-            );
-          }
-
-          const response = await fetch("/api/unlock", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              keyId,
-              wrappedContentKey,
-              publicKey,
-              mode: isSharedKey ? "shared" : undefined,
-            }),
-          });
-
-          if (!response.ok) {
-            const data = await response.json();
-            log(`Server error: ${data.error}`, "error");
-            throw new Error(data.error || `Server returned ${response.status}`);
-          }
-
-          const result = await response.json();
-          log(
-            `Received encrypted ${result.keyType?.toUpperCase() || "content key"} (${result.encryptedContentKey.length
-            } chars)`,
-            "success",
-          );
-          log(
-            `Key valid until: ${new Date(
-              result.expiresAt,
-            ).toLocaleTimeString()} (period ${result.periodId || "static"}, ${result.periodDurationSeconds
-            }s period)`,
-            "info",
-          );
-
-          // Store expiry for display
-          if (mounted) {
-            setExpiresAt(new Date(result.expiresAt));
-          }
-
-          return result;
-        };
-
-        // Create client with logging
-        const client = new CapsuleClient({
-          unlock,
-          contentKeyStorage: securityMode,
-          renewBuffer: 5000,
-          executeScripts: true,
-          logger: (message, level) => {
-            // Map client log levels to console log types
-            const typeMap: Record<
-              string,
-              "info" | "success" | "error" | "crypto" | "key"
-            > = {
-              info: "info",
-              debug: "crypto",
-              error: "error",
-            };
-            log(message, typeMap[level] || "info");
-          },
-        });
-
-        // Initialize keys
-        log("Checking for existing RSA key pair...", "key");
-        const hasKeys = await client.hasKeyPair();
-
-        if (hasKeys) {
-          log("Found existing RSA key pair in IndexedDB", "success");
-          const keyInfo = await client.getKeyInfo();
-          if (keyInfo) {
-            log(
-              `Key size: RSA-${keyInfo.keySize}, created: ${new Date(
-                keyInfo.createdAt,
-              ).toLocaleDateString()}`,
-              "info",
-            );
-          }
-        } else {
-          log(
-            "No existing keys found. Generating new RSA-2048 key pair...",
-            "key",
-          );
-        }
-
-        // Get public key (creates if needed)
-        const publicKey = await client.getPublicKey();
-        log(
-          `Public key ready (${publicKey.length} chars, Base64 SPKI)`,
-          "success",
-        );
-
-        if (!hasKeys) {
-          log("RSA key pair generated and stored securely", "success");
-          log("Private key is non-extractable (cannot be exported)", "crypto");
-        }
-
-        if (mounted) {
-          clientRef.current = client;
-          setIsInitializing(false);
-
-          if (encryptedData) {
-            // Check for token in URL or props
-            const urlParams = new URLSearchParams(window.location.search);
-            const token = propToken || urlParams.get("token");
-
-            if (token) {
-              // Auto-unlock with share token
-              log("🔗 Share link token detected! Auto-unlocking...", "info");
-              setState("unlocking");
-
-              try {
-                const content = await client.unlockWithToken(
-                  encryptedData,
-                  token,
-                );
-
-                const sharedKey = encryptedData.wrappedKeys.find(
-                  (k) => !k.keyId.startsWith("article:"),
-                );
-
-                setDecryptedContent(content);
-                setUsedKeyId(sharedKey?.keyId || "token");
-                setState("unlocked");
-                log("✨ Article unlocked via share link!", "success");
-
-                // Clean up token from URL (optional, prevents re-use on refresh)
-                if (urlParams.has("token")) {
-                  const newUrl = new URL(window.location.href);
-                  newUrl.searchParams.delete("token");
-                  window.history.replaceState({}, "", newUrl.toString());
-                  log("Token removed from URL for security", "info");
-                }
-                return;
-              } catch (err) {
-                log(
-                  `Share link unlock failed: ${err instanceof Error ? err.message : "Unknown error"
-                  }`,
-                  "error",
-                );
-                // Fall through to regular unlock flow
+            // Verify cache has at least one matching key
+            let cacheHit = false;
+            for (const entry of sealedEntries) {
+              const cached = await periodKeyCache.get(`dca:pk:${contentName}:${entry.t}`);
+              if (cached) {
+                log(`Cache hit for period bucket "${entry.t}"`, "crypto");
+                cacheHit = true;
+                break;
               }
             }
 
-            // Content is ready — try cached keys first
-            const cachedContent = await client.tryUnlockFromCache(encryptedData);
-            if (cachedContent) {
-              log("Found cached content key — auto-unlocking...", "success");
-              const sharedKey = encryptedData.wrappedKeys.find(
-                (k) => !k.keyId.startsWith("article:"),
-              );
-              setDecryptedContent(cachedContent);
-              setUsedKeyId(sharedKey?.keyId || "cached");
+            if (!cacheHit) {
+              throw new Error("No cached period keys found for any bucket");
+            }
+
+            // Build a synthetic unlock response with empty keys to trigger
+            // the cached-periodKey fallback path inside DcaClient.decrypt()
+            const emptyKeys: import("@sesamy/capsule").DcaUnlockResponse = {
+              keys: Object.fromEntries(
+                contentNames.map((name) => [name, {}]),
+              ),
+            };
+
+            const html = await client.decrypt(page, contentName, emptyKeys);
+
+            log("Cached period key found — decrypting automatically!", "success");
+
+            // Refresh subscription TTL
+            await storeSubscriptionRecord(contentName);
+
+            setDecryptedContent(html);
+            setState("unlocked");
+            setIsInitializing(false);
+            log(`Content decrypted successfully (${html.length} chars)`, "success");
+            log("✨ Article auto-unlocked from cached subscription key!", "success");
+            return;
+          } catch (cacheErr) {
+            const msg = cacheErr instanceof Error ? cacheErr.message : String(cacheErr);
+            log(`Period key cache: ${msg}`, "info");
+          }
+
+          // Fallback: if we have an active subscription, re-call the issuer
+          try {
+            if (hasSubscription) {
+              log("Active subscription — re-requesting keys from issuer...", "network");
+
+              setIsInitializing(false);
+              setState("unlocking");
+
+              const keys = await client.unlock(page, issuerName, { accessType: "tier" });
+
+              setState("decrypting");
+              log("Decrypting content with AES-256-GCM + AAD...", "crypto");
+
+              const html = await client.decrypt(page, contentName, keys);
+              await storeSubscriptionRecord(contentName);
+
+              setDecryptedContent(html);
               setState("unlocked");
-              log("✨ Article unlocked from cached key!", "success");
+              setIsInitializing(false);
+              log(`Content decrypted successfully (${html.length} chars)`, "success");
+              log("✨ Article auto-unlocked (re-authenticated)!", "success");
               return;
             }
-
-            // No valid cached keys — check if expired keys were cleaned up
-            // for THIS article (not some other article). If so, auto-renew
-            // with the same key type the user originally used.
-            if (client.hadExpiredKeys) {
-              const renewKeyType = client.expiredKeyType || "shared";
-              log(`Cached ${renewKeyType} key expired — auto-renewing from server...`, "info");
-              setState("unlocking");
-              try {
-                const content = await client.unlock(encryptedData, renewKeyType);
-                const usedKey = renewKeyType === "shared"
-                  ? encryptedData.wrappedKeys.find((k) => !k.keyId.startsWith("article:"))
-                  : encryptedData.wrappedKeys.find((k) => k.keyId.startsWith("article:"));
-                setDecryptedContent(content);
-                setUsedKeyId(usedKey?.keyId || "renewed");
-                setState("unlocked");
-                log("✨ Article unlocked with renewed key!", "success");
-                return;
-              } catch (err) {
-                log(
-                  `Auto-renewal failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-                  "error",
-                );
-                // Fall through to locked state
-              }
-            }
-
-            // No cached keys — wait for user to click unlock
-            const { sharedKeys, articleKeys } = getKeyOptions();
-            log(`Encrypted content ready (${securityMode} mode)`, "info");
-            log(
-              `Available keys: ${sharedKeys.length} shared, ${articleKeys.length} article`,
-              "info",
-            );
-            log("Click 'Unlock' to request decryption key", "info");
-            setState("locked");
+          } catch (reAuthErr) {
+            const msg = reAuthErr instanceof Error ? reAuthErr.message : String(reAuthErr);
+            log(`Auto re-auth failed: ${msg}`, "info");
           }
+
+          // Fallback: if we previously unlocked this specific article, re-request a contentKey
+          const hasArticle = await hasActiveArticleRecord(resourceId);
+          if (hasArticle) {
+            try {
+              log("Active article record — re-requesting content key from issuer...", "network");
+
+              setIsInitializing(false);
+              setState("unlocking");
+
+              const keys = await client.unlock(page, issuerName, { accessType: "article" });
+
+              setState("decrypting");
+              log("Decrypting content with AES-256-GCM + AAD...", "crypto");
+
+              const html = await client.decrypt(page, contentName, keys);
+              await storeContentKeyRecord(resourceId);
+
+              setDecryptedContent(html);
+              setState("unlocked");
+              setIsInitializing(false);
+              log(`Content decrypted successfully (${html.length} chars)`, "success");
+              log("✨ Article auto-unlocked (content key re-requested)!", "success");
+              return;
+            } catch (articleErr) {
+              const msg = articleErr instanceof Error ? articleErr.message : String(articleErr);
+              log(`Article re-auth failed: ${msg}`, "info");
+            }
+          }
+
+          log("Click 'Unlock' to request decryption keys from the issuer", "info");
+        } catch {
+          log("No DCA data found on page", "info");
         }
+
+        setIsInitializing(false);
+        setState("locked");
       } catch (err) {
-        console.error("Failed to initialize Capsule client:", err);
-        log(
-          `Error: ${err instanceof Error ? err.message : "Failed to initialize"
-          }`,
-          "error",
-        );
-        if (mounted) {
-          setError(err instanceof Error ? err.message : "Failed to initialize");
-          setState("error");
-          setIsInitializing(false);
-        }
+        console.error("Failed to initialize DCA client:", err);
+        log(`Error: ${err instanceof Error ? err.message : "Failed to initialize"}`, "error");
+        setError(err instanceof Error ? err.message : "Failed to initialize");
+        setState("error");
+        setIsInitializing(false);
       }
     }
 
     init();
-    return () => {
-      mounted = false;
-    };
-  }, [resourceId, encryptedData, getKeyOptions, log, securityMode]);
+  }, [resourceId, contentName, issuerName, log]);
 
   // Handle unlock button click
-  const handleUnlock = async (keyType: "shared" | "article") => {
-    if (!clientRef.current || !encryptedData) {
+  const handleUnlock = async (accessType: AccessType) => {
+    const client = clientRef.current;
+    const page = pageRef.current;
+
+    if (!client || !page) {
       setError("Not ready");
-      return;
-    }
-
-    const { sharedKeys, articleKeys } = getKeyOptions();
-    const keys = keyType === "shared" ? sharedKeys : articleKeys;
-
-    if (keys.length === 0) {
-      setError(`No ${keyType} keys available`);
       return;
     }
 
     setError(null);
     setState("unlocking");
 
+    const accessLabels: Record<AccessType, string> = {
+      article: "Single Article (contentKey — one-time, non-cacheable)",
+      tier: `Tier Subscription: ${contentName} (periodKey — cacheable for 1 hour across tier)`,
+    };
+
     try {
-      log(`Trying to unlock with ${keyType} key...`, "info");
-      log("Exporting public key as SPKI format...", "key");
+      log(`Access type: ${accessLabels[accessType]}`, "info");
+      log(`Calling issuer "${issuerName}" unlock endpoint...`, "network");
+      log(`POST ${page.dcaData.issuerData[issuerName]?.unlockUrl ?? "/api/unlock"}`, "network");
 
-      const content = await clientRef.current.unlock(encryptedData, keyType);
+      let currentPage = page;
+      let keys: import("@sesamy/capsule").DcaUnlockResponse;
 
-      // Find which key was used
-      const usedKey =
-        keyType === "shared"
-          ? encryptedData.wrappedKeys.find(
-            (k) => !k.keyId.startsWith("article:"),
-          )
-          : encryptedData.wrappedKeys.find((k) =>
-            k.keyId.startsWith("article:"),
-          );
+      try {
+        keys = await client.unlock(currentPage, issuerName, { accessType });
+      } catch (unlockErr) {
+        // If 403 (e.g. stale JWTs after dev server restart), re-fetch page for fresh DCA data
+        if (unlockErr instanceof Error && unlockErr.message.includes("403")) {
+          log("Stale DCA data detected — refreshing page data...", "network");
+          const freshPage = await refreshDcaData(client);
+          if (freshPage) {
+            pageRef.current = freshPage;
+            currentPage = freshPage;
+            log("DCA data refreshed, retrying unlock...", "network");
+            keys = await client.unlock(currentPage, issuerName, { accessType });
+          } else {
+            throw unlockErr;
+          }
+        } else {
+          throw unlockErr;
+        }
+      }
 
-      log(
-        "DEK unwrapped successfully (AES-256-GCM, non-extractable)",
-        "success",
-      );
-      log("Decrypting content with AES-256-GCM...", "crypto");
+      const keyMode = Object.values(keys.keys).some((k) => k.contentKey)
+        ? "contentKey (direct)"
+        : "periodKeys (cacheable)";
+      log(`Unlock successful! Key mode: ${keyMode}`, "success");
 
-      setDecryptedContent(content);
-      setUsedKeyId(usedKey?.keyId || "unknown");
+      if (keys.transport === "client-bound") {
+        log("Transport: client-bound (RSA-OAEP wrapped)", "crypto");
+      } else {
+        log("Transport: direct", "info");
+      }
+
+      setState("decrypting");
+      log("Decrypting content with AES-256-GCM + AAD...", "crypto");
+
+      const html = await client.decrypt(currentPage, contentName, keys);
+
+      // Store content key metadata so KeyManager can display it.
+      if (accessType === "article") {
+        await storeContentKeyRecord(resourceId);
+      } else {
+        await storeSubscriptionRecord(contentName);
+      }
+
+      setDecryptedContent(html);
       setState("unlocked");
-      log(
-        `Content decrypted successfully (${content.length} chars)`,
-        "success",
-      );
-      log("✨ Article unlocked!", "success");
+      log(`Content decrypted successfully (${html.length} chars)`, "success");
+      log(`✨ Article unlocked via ${accessType}!`, "success");
     } catch (err) {
-      console.error("Unlock failed:", err);
-      log(
-        `Unlock failed: ${err instanceof Error ? err.message : "Unknown error"
-        }`,
-        "error",
-      );
+      console.error("DCA unlock failed:", err);
+      log(`Unlock failed: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
       setError(err instanceof Error ? err.message : "Unlock failed");
       setState("error");
     }
   };
 
-  // Get time until expiry display
-  const getExpiryDisplay = () => {
-    if (!expiresAt) return null;
-    const ms = expiresAt.getTime() - Date.now();
-    if (ms <= 0) return "expired";
-    const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}m ${seconds % 60}s`;
+  // Handle share link generation
+  const handleShare = async () => {
+    setIsSharing(true);
+    try {
+      log("Generating share link token...", "network");
+      const response = await fetch("/api/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resourceId,
+          contentNames: [contentName],
+          expiresIn: 7 * 24 * 3600, // 7 days
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create share link: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setShareUrl(data.shareUrl);
+      log(`Share link created (expires in 7 days)`, "success");
+      log(`Share URL: ${data.shareUrl}`, "info");
+
+      // Copy to clipboard
+      try {
+        await navigator.clipboard.writeText(data.shareUrl);
+        log("Share link copied to clipboard!", "success");
+      } catch {
+        log("Share link generated (copy manually from the URL below)", "info");
+      }
+    } catch (err) {
+      log(`Share link error: ${err instanceof Error ? err.message : "Unknown error"}`, "error");
+    } finally {
+      setIsSharing(false);
+    }
   };
 
   // Render states
-  if (!encryptedData) {
+  if (!hasEncryptedContent) {
     return (
       <div className="locked-section">
         <div className="locked-overlay error">
@@ -499,43 +418,50 @@ export function EncryptedSection({
       <div className="locked-section">
         <div className="locked-overlay">
           <div className="lock-icon">🔐</div>
-          <p>Initializing secure keys...</p>
+          <p>Initializing DCA client...</p>
           <div className="loading-spinner" />
         </div>
       </div>
     );
   }
 
-  if (state === "unlocked" && decryptedContent && usedKeyId) {
-    const parsed = parseKeyId(usedKeyId);
-    const keyLabel = tokenId
-      ? `share link`
-      : parsed.type === "shared"
-        ? `shared "\${parsed.baseId}"`
-        : `article "${parsed.baseId}"`;
-    const expiryDisplay = getExpiryDisplay();
-
+  if (state === "unlocked" && decryptedContent) {
     return (
       <div className="unlocked-section">
         <div className="unlock-banner">
-          <span>{tokenId ? "🔗" : "🔓"}</span>
-          <span>
-            Content decrypted locally (using {keyLabel}
-            {tokenId ? ` • token: ${tokenId.slice(0, 8)}...` : ""} key)
-          </span>
-          {expiryDisplay && (
-            <span
-              className="key-expiry-badge"
-              title="Content key auto-renews before expiry"
-              suppressHydrationWarning
-            >
-              ⏱️ {expiryDisplay}
-            </span>
-          )}
+          <span>🔓</span>
+          <span>Content decrypted locally via DCA (issuer: {issuerName})</span>
         </div>
-        <div className="unlock-key-manager">
+        <div className="unlock-key-manager" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <KeyManager />
+          <button
+            onClick={handleShare}
+            disabled={isSharing}
+            style={{
+              padding: "0.4rem 0.8rem",
+              fontSize: "0.85rem",
+              cursor: isSharing ? "wait" : "pointer",
+              opacity: isSharing ? 0.6 : 1,
+            }}
+          >
+            {isSharing ? "Creating..." : "🔗 Share Link"}
+          </button>
         </div>
+        {shareUrl && (
+          <div style={{
+            margin: "0.5rem 0",
+            padding: "0.5rem",
+            background: "var(--color-surface, #f0f0f0)",
+            borderRadius: "4px",
+            fontSize: "0.8rem",
+            wordBreak: "break-all",
+          }}>
+            <strong>Share URL:</strong>{" "}
+            <a href={shareUrl} style={{ color: "var(--color-link, #0070f3)" }}>
+              {shareUrl}
+            </a>
+          </div>
+        )}
         <div
           ref={contentRef}
           className="premium-content"
@@ -547,97 +473,75 @@ export function EncryptedSection({
     );
   }
 
-  const { sharedKeys, articleKeys } = getKeyOptions();
-
   return (
     <div className="locked-section">
-      <template
-        id={`encrypted-${resourceId}`}
-        data-encrypted-article={JSON.stringify(encryptedData)}
-      />
-
       <div className="locked-overlay">
         {state === "error" ? (
           <>
             <div className="lock-icon">⚠️</div>
             <p className="error-message">{error}</p>
             <div className="unlock-buttons">
-              {sharedKeys.length > 0 && (
-                <button onClick={() => handleUnlock("shared")}>
-                  Try Shared Key
-                </button>
-              )}
-              {articleKeys.length > 0 && (
-                <button
-                  onClick={() => handleUnlock("article")}
-                  className="secondary"
-                >
-                  Try Article Key
-                </button>
-              )}
+              <button onClick={() => handleUnlock("article")}>Try Again</button>
             </div>
           </>
-        ) : state === "unlocking" ? (
+        ) : state === "unlocking" || state === "decrypting" ? (
           <>
-            <div className="lock-icon">��</div>
-            <p>Getting decryption key...</p>
+            <div className="lock-icon">🔑</div>
+            <p>{state === "unlocking" ? "Requesting keys from issuer..." : "Decrypting content..."}</p>
             <div className="loading-spinner" />
-            <p className="status-detail">
-              Sending public key to server for key exchange
-            </p>
-          </>
-        ) : state === "decrypting" ? (
-          <>
-            <div className="lock-icon">🔓</div>
-            <p>Decrypting content...</p>
-            <div className="loading-spinner" />
-            <p className="status-detail">
-              Using @sesamy/capsule for AES-256-GCM decryption
-            </p>
           </>
         ) : (
           <>
             <div className="lock-icon">🔒</div>
             <h3>Premium Content</h3>
-            <p>Choose how to unlock this encrypted content:</p>
+            <p>This content is encrypted with DCA (Delegated Content Access).</p>
             <div className="unlock-buttons">
-              {sharedKeys.length > 0 && (
-                <button
-                  onClick={() => handleUnlock("shared")}
-                  className="primary"
-                >
-                  <span className="button-icon">🎫</span>
-                  <span className="button-text">
-                    <strong>Premium Shared</strong>
-                    <small>
-                      Unlocks all premium articles ({sharedKeys.length} keys)
-                    </small>
-                  </span>
-                </button>
-              )}
-              {articleKeys.length > 0 && (
-                <button
-                  onClick={() => handleUnlock("article")}
-                  className="secondary"
-                >
-                  <span className="button-icon">📄</span>
-                  <span className="button-text">
-                    <strong>Article Only</strong>
-                    <small>Unlocks just this article</small>
-                  </span>
-                </button>
-              )}
+              <button onClick={() => handleUnlock("article")} className="primary">
+                <span className="button-icon">📄</span>
+                <span className="button-text">
+                  <strong>Unlock Article</strong>
+                  <small>Single article — contentKey (one-time)</small>
+                </span>
+              </button>
+              <button onClick={() => handleUnlock("tier")} className="secondary">
+                <span className="button-icon">🔑</span>
+                <span className="button-text">
+                  <strong>Unlock {contentName}</strong>
+                  <small>periodKey — cacheable across {contentName} articles</small>
+                </span>
+              </button>
             </div>
             <p className="hint">
-              <strong>Shared keys</strong> unlock all articles in the subscription.
-              <strong>Article keys</strong> are specific to this article
-              only.
+              <strong>Article:</strong> returns a direct contentKey (non-cacheable).<br />
+              <strong>{contentName}:</strong> returns periodKeys (cacheable for 1 hour, reusable across {contentName} articles).
             </p>
           </>
         )}
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Re-fetch the current page HTML and re-parse DCA data.
+// Used when the embedded JWTs are stale (e.g., after server key rotation / HMR).
+// ---------------------------------------------------------------------------
+
+async function refreshDcaData(
+  client: InstanceType<typeof import("@sesamy/capsule").DcaClient>,
+): Promise<import("@sesamy/capsule").DcaParsedPage | null> {
+  try {
+    const resp = await fetch(window.location.href, {
+      headers: { Accept: "text/html" },
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    return client.parsePage(doc);
+  } catch {
+    return null;
+  }
 }
 
 // Simple markdown-to-HTML converter
@@ -653,4 +557,182 @@ function formatMarkdown(content: string): string {
     .replace(/^\d+\. (.*$)/gim, "<li>$1</li>")
     .replace(/^---$/gim, "<hr />")
     .replace(/\n\n/g, "</p><p>");
+}
+
+// ---------------------------------------------------------------------------
+// Store a content key record in IndexedDB so KeyManager can display it.
+// This mirrors the StoredContentKey shape that KeyManager reads.
+// ---------------------------------------------------------------------------
+
+const CONTENT_KEY_DB_NAME = "capsule-content-keys";
+const CONTENT_KEY_STORE_NAME = "content-keys";
+/** Default TTL for a stored content key record (1 hour) */
+const CONTENT_KEY_TTL_MS = 60 * 60 * 1000;
+
+async function storeContentKeyRecord(
+  resourceId: string,
+): Promise<void> {
+  try {
+    const db = await openContentKeyDb();
+    const storeKey = `article:${resourceId}`;
+    const record = {
+      type: "article" as const,
+      baseId: resourceId,
+      encryptedContentKey: "(decrypted in memory)",
+      expiresAt: Date.now() + CONTENT_KEY_TTL_MS,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(CONTENT_KEY_STORE_NAME, "readwrite");
+      const store = tx.objectStore(CONTENT_KEY_STORE_NAME);
+      store.put(record, storeKey);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  } catch {
+    // IndexedDB may not be available; ignore
+  }
+}
+
+/**
+ * Store a tier-scoped subscription record.
+ * Each tier (contentName) has its own subscription lifecycle.
+ */
+async function storeSubscriptionRecord(contentName: string): Promise<void> {
+  try {
+    const db = await openContentKeyDb();
+    const storeKey = `subscription:${contentName}`;
+    const record = {
+      type: "subscription" as const,
+      baseId: contentName,
+      encryptedContentKey: "(period keys in cache)",
+      expiresAt: Date.now() + CONTENT_KEY_TTL_MS,
+    };
+
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(CONTENT_KEY_STORE_NAME, "readwrite");
+      const store = tx.objectStore(CONTENT_KEY_STORE_NAME);
+      store.put(record, storeKey);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  } catch {
+    // IndexedDB may not be available; ignore
+  }
+}
+
+/**
+ * Check if there is an active (non-expired) subscription for a specific tier.
+ */
+async function hasActiveSubscription(contentName: string): Promise<boolean> {
+  try {
+    const db = await openContentKeyDb();
+    return new Promise((resolve) => {
+      const tx = db.transaction(CONTENT_KEY_STORE_NAME, "readonly");
+      const store = tx.objectStore(CONTENT_KEY_STORE_NAME);
+      const req = store.get(`subscription:${contentName}`);
+
+      req.onsuccess = () => {
+        const rec = req.result;
+        db.close();
+        resolve(!!rec && rec.expiresAt > Date.now());
+      };
+      req.onerror = () => { db.close(); resolve(false); };
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if there is an active (non-expired) article record for a specific resourceId.
+ */
+async function hasActiveArticleRecord(resourceId: string): Promise<boolean> {
+  try {
+    const db = await openContentKeyDb();
+    return new Promise((resolve) => {
+      const tx = db.transaction(CONTENT_KEY_STORE_NAME, "readonly");
+      const store = tx.objectStore(CONTENT_KEY_STORE_NAME);
+      const req = store.get(`article:${resourceId}`);
+
+      req.onsuccess = () => {
+        const rec = req.result;
+        db.close();
+        resolve(!!rec && rec.expiresAt > Date.now());
+      };
+      req.onerror = () => { db.close(); resolve(false); };
+    });
+  } catch {
+    return false;
+  }
+}
+
+function openContentKeyDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CONTENT_KEY_DB_NAME, 1);
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(CONTENT_KEY_STORE_NAME);
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// IndexedDB-backed period key cache for DcaClient.
+//
+// Period keys are stored as simple key→value pairs so the DcaClient can
+// reuse subscription keys across page navigations without a new unlock call.
+// ---------------------------------------------------------------------------
+
+const PERIOD_KEY_DB_NAME = "capsule-period-keys";
+const PERIOD_KEY_STORE_NAME = "period-keys";
+
+function createIdbPeriodKeyCache(): import("@sesamy/capsule").DcaPeriodKeyCache {
+  let dbPromise: Promise<IDBDatabase> | null = null;
+
+  function openDb(): Promise<IDBDatabase> {
+    if (!dbPromise) {
+      dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(PERIOD_KEY_DB_NAME, 1);
+        request.onerror = () => reject(request.error);
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore(PERIOD_KEY_STORE_NAME);
+        };
+        request.onsuccess = () => resolve(request.result);
+      });
+    }
+    return dbPromise;
+  }
+
+  return {
+    async get(key: string): Promise<string | null> {
+      try {
+        const db = await openDb();
+        return new Promise((resolve) => {
+          const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readonly");
+          const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
+          const req = store.get(key);
+          req.onsuccess = () => resolve((req.result as string) ?? null);
+          req.onerror = () => resolve(null);
+        });
+      } catch {
+        return null;
+      }
+    },
+    async set(key: string, value: string): Promise<void> {
+      try {
+        const db = await openDb();
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readwrite");
+          const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
+          store.put(value, key);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+        });
+      } catch {
+        // ignore
+      }
+    },
+  };
 }

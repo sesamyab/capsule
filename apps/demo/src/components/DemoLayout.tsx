@@ -3,7 +3,6 @@
 import { ReactNode, useEffect } from "react";
 import { ConsoleProvider } from "./ConsoleContext";
 import { DevConsole } from "./DevConsole";
-import { ConfigInfoButton } from "./ConfigInfoButton";
 
 export function DemoLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -17,7 +16,6 @@ export function DemoLayout({ children }: { children: ReactNode }) {
     <ConsoleProvider>
       {children}
       <DevConsole />
-      <ConfigInfoButton />
     </ConsoleProvider>
   );
 }

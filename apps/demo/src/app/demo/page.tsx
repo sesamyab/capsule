@@ -1,16 +1,13 @@
 import Link from "next/link";
-import { ConfigInfoButton } from "@/components/ConfigInfoButton";
 
 export default function DemoPage() {
   return (
     <main className="content-page">
       <h1>Interactive Demo</h1>
       <p>
-        Try Capsule with these demo articles. Unlock individual articles or get a 
-        subscription key to unlock all premium content at once.
+        Try the DCA demo with these articles. Each article has a free preview and 
+        encrypted premium content. Unlock them to see DCA in action.
       </p>
-
-      <ConfigInfoButton />
 
       <div style={{ 
         background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(147, 51, 234, 0.1))',
@@ -20,30 +17,16 @@ export default function DemoPage() {
         marginBottom: '1.5rem',
         fontSize: '0.85rem'
       }}>
-        <strong>⏱️ Demo Mode:</strong> Keys rotate every <strong>30 seconds</strong> for 
-        demonstration purposes. In production, this would typically be <strong>1 hour</strong> or longer.
-        Watch the console to see automatic key renewal in action!
-      </div>
-
-      <div style={{ 
-        background: 'var(--border)', 
-        padding: '1.5rem', 
-        borderRadius: '12px',
-        marginBottom: '2rem'
-      }}>
-        <h3 style={{ marginTop: 0 }}>📊 Your Keys</h3>
-        <p style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '1rem' }}>
-          Keys are stored securely in your browser's IndexedDB.
-        </p>
-        <div id="key-status">
-          {/* This will be populated by client component */}
-        </div>
+        <strong>🔐 DCA Mode:</strong> Content is encrypted server-side using HKDF-derived 
+        period keys with <strong>1-hour</strong> rotation. Articles are grouped into 
+        <strong>tiers</strong> via <code>contentName</code> — articles in the same tier share 
+        period keys and can auto-unlock each other.
       </div>
 
       <h2>Demo Articles</h2>
       <p>
         Each article has a free preview and encrypted premium content. 
-        Try unlocking them to see Capsule in action.
+        TierA and TierB use separate period keys — unlocking one tier does not grant access to the other.
       </p>
 
       <div style={{ 
@@ -70,16 +53,29 @@ export default function DemoPage() {
             Learn about encryption fundamentals, envelope encryption, and how Capsule 
             implements client-side decryption.
           </p>
-          <div style={{ 
-            display: 'inline-block',
-            padding: '0.25rem 0.75rem',
-            background: '#fef3c7',
-            color: '#92400e',
-            borderRadius: '20px',
-            fontSize: '0.8rem',
-            fontWeight: '600'
-          }}>
-            🔒 Premium Content
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ 
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              background: '#fef3c7',
+              color: '#92400e',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: '600'
+            }}>
+              🔒 Premium Content
+            </div>
+            <div style={{ 
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              background: '#dbeafe',
+              color: '#1e40af',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: '600'
+            }}>
+              TierA
+            </div>
           </div>
         </Link>
 
@@ -101,16 +97,73 @@ export default function DemoPage() {
             A beginner-friendly introduction to symmetric and asymmetric encryption, 
             and how the Web Crypto API makes it all accessible.
           </p>
-          <div style={{ 
-            display: 'inline-block',
-            padding: '0.25rem 0.75rem',
-            background: '#fef3c7',
-            color: '#92400e',
-            borderRadius: '20px',
-            fontSize: '0.8rem',
-            fontWeight: '600'
-          }}>
-            🔒 Premium Content
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ 
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              background: '#fef3c7',
+              color: '#92400e',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: '600'
+            }}>
+              🔒 Premium Content
+            </div>
+            <div style={{ 
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              background: '#dbeafe',
+              color: '#1e40af',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: '600'
+            }}>
+              TierA
+            </div>
+          </div>
+        </Link>
+
+        <Link 
+          href="/article/zero-trust"
+          style={{
+            display: 'block',
+            padding: '1.5rem',
+            border: '2px solid var(--border)',
+            borderRadius: '12px',
+            transition: 'all 0.2s'
+          }}
+          className="article-card"
+        >
+          <h3 style={{ marginBottom: '0.5rem', color: 'var(--accent)' }}>
+            Zero Trust Architecture for APIs
+          </h3>
+          <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+            How Zero Trust principles apply to API design and how DCA enables 
+            fine-grained cryptographic access control with independent tiers.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div style={{ 
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              background: '#fef3c7',
+              color: '#92400e',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: '600'
+            }}>
+              🔒 Premium Content
+            </div>
+            <div style={{ 
+              display: 'inline-block',
+              padding: '0.25rem 0.75rem',
+              background: '#fce7f3',
+              color: '#9d174d',
+              borderRadius: '20px',
+              fontSize: '0.8rem',
+              fontWeight: '600'
+            }}>
+              TierB
+            </div>
           </div>
         </Link>
       </div>
@@ -131,16 +184,18 @@ export default function DemoPage() {
             securely in IndexedDB with <code>extractable: false</code>.
           </li>
           <li>
-            <strong>Click unlock:</strong> Your public key is sent to the server, which 
-            returns the encrypted decryption key for the "premium" content ID.
+            <strong>Unlock Article:</strong> Returns a one-time <em>contentKey</em> — 
+            works for a single article, non-cacheable.
           </li>
           <li>
-            <strong>Decrypt locally:</strong> Your browser unwraps the key and decrypts 
-            the content. The unwrapped key is cached for the session.
+            <strong>Unlock Tier:</strong> Returns <em>periodKeys</em> derived via HKDF 
+            from the tier&apos;s <code>contentName</code>. Cached for 1 hour and reusable 
+            across all articles in the same tier.
           </li>
           <li>
-            <strong>Subsequent articles:</strong> Since the key is cached, other premium 
-            articles decrypt instantly—even offline!
+            <strong>Cross-article unlock:</strong> Articles in the same tier share period 
+            keys, so unlocking TierA on one article auto-unlocks all TierA articles. 
+            TierB remains locked.
           </li>
         </ol>
         <p style={{ 
@@ -150,8 +205,9 @@ export default function DemoPage() {
           borderRadius: '8px',
           fontSize: '0.9rem'
         }}>
-          💡 <strong>Try this:</strong> Unlock one article, then open another in a new tab. 
-          You'll see it decrypts immediately without contacting the server.
+          💡 <strong>Try this:</strong> Unlock &quot;TierA&quot; on one article, then open 
+          the other TierA article — it decrypts automatically! Then try the TierB article 
+          and notice it stays locked.
         </p>
       </div>
 

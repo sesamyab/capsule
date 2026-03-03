@@ -1,140 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createTokenManager } from "@sesamy/capsule-server";
-import { getTokenSecret } from "@/lib/capsule";
-
-/**
- * Token manager for generating share tokens.
- * Lazily initialized to avoid calling getTokenSecret() at build time.
- */
-let _tokens: ReturnType<typeof createTokenManager> | undefined;
-function getTokens() {
-  if (!_tokens) {
-    _tokens = createTokenManager({
-      secret: getTokenSecret(),
-      issuer: "capsule-demo",
-      keyId: "demo-key-2026",
-    });
-  }
-  return _tokens;
-}
+import { getPublisher } from "@/lib/capsule";
 
 /**
  * POST /api/share
  *
- * Generate a pre-signed share token for content access.
- * Used by publishers to create shareable links.
+ * Generate a share link token for a DCA-protected resource.
+ *
+ * The publisher creates a signed JWT (ES256) that grants pre-authenticated
+ * access to the specified content items. This token can be included in a
+ * URL query parameter (e.g., ?share=<token>) and the client will send it
+ * with the unlock request.
+ *
+ * DCA-compatible: the periodSecret never leaves the publisher.
+ * The share token is purely an authorization grant — key material flows
+ * through the normal DCA seal/unseal channel.
  *
  * Request body:
- * {
- *   articleSlug: string (required, article identifier for URL routing),
- *   url?: string (optional, full URL for the content),
- *   expiresIn: string (e.g., "24h", "7d"),
- *   maxUses?: number (optional, limit total uses),
- *   userId?: string (optional, for attribution),
- *   meta?: object (optional, custom metadata)
- * }
- *
- * Response:
- * {
- *   token: string,
- *   tokenId: string,
- *   expiresAt: string (ISO 8601),
- *   shareUrl: string (full URL with token)
- * }
- *
- * Note: In production, this endpoint should be protected
- * and only accessible by authenticated publishers.
+ *   - resourceId: string — which resource to share
+ *   - contentNames: string[] — which content items to grant (e.g., ["TierA"])
+ *   - expiresIn: number — token lifetime in seconds (default: 7 days)
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { articleSlug, url, expiresIn, maxUses, userId, meta } = body;
 
-    // Validate required fields
-    if (!articleSlug || typeof articleSlug !== "string") {
+    const resourceId = body.resourceId;
+    if (!resourceId || typeof resourceId !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid articleSlug" },
+        { error: "resourceId is required" },
         { status: 400 },
       );
     }
 
-    if (!expiresIn || typeof expiresIn !== "string") {
-      return NextResponse.json(
-        { error: "Missing or invalid expiresIn (e.g., '24h', '7d')" },
-        { status: 400 },
-      );
-    }
+    const contentNames = body.contentNames ?? ["TierA"];
+    const expiresIn = body.expiresIn ?? 7 * 24 * 3600; // 7 days
 
-    // Generate the token
-    // In the demo, all articles use the "premium" content name for encryption.
-    // The contentId in the token must match the content name used during encryption
-    // so the server can derive the correct period key for unlocking.
-    // The articleSlug is stored in meta so the token carries the full context.
-    const token = await getTokens().generate({
-      contentId: "premium",
-      url,
+    const publisher = await getPublisher();
+
+    const token = await publisher.createShareLinkToken({
+      resourceId,
+      contentNames,
       expiresIn,
-      maxUses,
-      userId,
-      meta: { ...meta, articleSlug },
+      data: body.data,
     });
 
-    // Extract token info for response
-    const payload = await getTokens().peek(token);
-    if (!payload) {
-      return NextResponse.json(
-        { error: "Failed to generate token" },
-        { status: 500 },
-      );
-    }
-
-    // Derive all downstream values from the token payload (source of truth)
-    // so the share URL and audit records can never diverge from the token scope.
-    const tokenContentId = payload.contentId;
-    const metaSlug = payload.meta?.articleSlug;
-    const tokenArticleSlug = typeof metaSlug === "string" ? metaSlug : articleSlug;
-    const tokenUrl = payload.url;
-
-    // Build share URL
-    const baseUrl = request.headers.get("origin") || request.nextUrl.origin;
-    const path = `/article/${tokenArticleSlug}`;
-    const defaultUrl = `${baseUrl}${path}`;
-    const targetUrl = tokenUrl || defaultUrl;
-    const separator = targetUrl.includes("?") ? "&" : "?";
-    const shareUrl = `${targetUrl}${separator}token=${encodeURIComponent(token)}`;
-
-    // Log token generation for audit
-    console.log(`[SHARE] Token generated`, {
-      tokenId: payload.tid,
-      issuer: payload.iss,
-      keyId: payload.kid,
-      contentId: tokenContentId,
-      articleSlug: tokenArticleSlug,
-      expiresIn,
-      maxUses,
-      userId,
-      expiresAt: new Date(payload.exp * 1000).toISOString(),
-    });
+    // Build the share URL
+    const origin = request.nextUrl.origin;
+    const shareUrl = `${origin}/article/${encodeURIComponent(resourceId)}?share=${encodeURIComponent(token)}`;
 
     return NextResponse.json({
       token,
-      tokenId: payload.tid,
-      issuer: payload.iss,
-      keyId: payload.kid,
-      contentId: tokenContentId,
-      articleSlug: tokenArticleSlug,
-      expiresAt: new Date(payload.exp * 1000).toISOString(),
       shareUrl,
+      expiresIn,
+      resourceId,
+      contentNames,
     });
   } catch (error) {
-    console.error("Share token generation error:", error);
-
-    if (error instanceof Error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
-    }
-
+    console.error("Share link creation error:", error);
     return NextResponse.json(
-      { error: "Failed to generate share token" },
+      { error: "Failed to create share link" },
       { status: 500 },
     );
   }

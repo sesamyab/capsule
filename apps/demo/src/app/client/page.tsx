@@ -429,165 +429,93 @@ function Article({ encryptedData }) {
           (which never leaves the browser's crypto subsystem).
         </p>
 
-        <h2>Share Link Token Validation</h2>
+        <h2>Share Link Token Handling</h2>
         <p>
-          The client library includes utilities for validating share link tokens
-          without server round-trips. This enables quick expiry checks, content
-          routing, and full signature verification.
+          The client library provides utilities for working with DCA share link
+          tokens — publisher-signed ES256 JWTs that grant access to specific
+          content without a subscription.
         </p>
 
-        <h3>Basic Token Parsing</h3>
+        <h3>Auto-Detecting Share Tokens from URL</h3>
         <p>
-          Parse tokens without signature verification (for routing/display):
+          Use the static <code>getShareTokenFromUrl()</code> helper to check if
+          the current URL contains a share token:
         </p>
-        <CodeBlock>{`import { parseShareToken, getShareTokenFromUrl } from '@sesamy/capsule';
+        <CodeBlock>{`import { DcaClient } from '@sesamy/capsule';
 
-// Parse from URL parameter
-const token = new URLSearchParams(window.location.search).get('token');
-if (token) {
-  const result = parseShareToken(token);
+// Reads ?share= from the current URL (default param name)
+const shareToken = DcaClient.getShareTokenFromUrl();
+
+// Or use a custom parameter name
+const shareToken = DcaClient.getShareTokenFromUrl('token');`}</CodeBlock>
+
+        <h3>Unlocking with a Share Token</h3>
+        <p>
+          Call <code>unlockWithShareToken()</code> instead of the normal{" "}
+          <code>unlock()</code>. The share token is included in the unlock
+          request body so the issuer can validate it:
+        </p>
+        <CodeBlock>{`import { DcaClient } from '@sesamy/capsule';
+
+const client = new DcaClient();
+const page = client.parsePage();
+
+const shareToken = DcaClient.getShareTokenFromUrl();
+if (shareToken) {
+  // Unlock using share token as authorization
+  const keys = await client.unlockWithShareToken(page, "sesamy", shareToken);
+  const html = await client.decrypt(page, "bodytext", keys);
+  document.querySelector('[data-dca-content-name="bodytext"]')!.innerHTML = html;
   
-  if (result.valid && !result.expired) {
-    console.log(\`Content: \${result.payload.contentId}\`);
-    console.log(\`Issuer: \${result.payload.iss}\`);
-    console.log(\`Expires in: \${result.expiresIn}s\`);
-  }
-}
-
-// Or use the helper
-const urlToken = getShareTokenFromUrl();
-if (urlToken?.valid) {
-  // Redirect to correct content if needed
-  if (urlToken.payload.contentId !== currentResourceId) {
-    window.location.href = urlToken.payload.url || \`/article/\${urlToken.payload.contentId}\`;
-  }
-}`}</CodeBlock>
-
-        <h3>HMAC Signature Validation (Server-Side Only)</h3>
-        <p>
-          <strong>⚠️ Security Note:</strong> HMAC uses symmetric secrets. Never
-          expose the signing secret in client-side code. Use{" "}
-          <code>TokenValidator</code> only on the server (API routes,
-          middleware). For client-side validation, use{" "}
-          <code>JwksTokenValidator</code> with Ed25519 (asymmetric keys).
-        </p>
-        <CodeBlock>{`// ⚠️ SERVER-SIDE ONLY - api/validate-token/route.ts
-import { TokenValidator } from '@sesamy/capsule';
-
-const validator = new TokenValidator({
-  trustedKeys: {
-    'my-publisher:key-2026-01': process.env.TOKEN_SECRET, // Server env var, NOT public!
-  },
-  requireTrustedIssuer: true,
-});
-
-export async function POST(req: Request) {
-  const { token } = await req.json();
-  const result = await validator.validate(token);
-  
-  if (!result.valid || result.expired) {
-    return Response.json({ error: 'Invalid token' }, { status: 401 });
-  }
-  
-  return Response.json({ valid: true, payload: result.payload });
-}`}</CodeBlock>
-
-        <h3>JWKS Validation (Ed25519) - Client-Side Safe</h3>
-        <p>
-          For tokens signed with Ed25519, the client fetches public keys from
-          the issuer's <code>/.well-known/jwks.json</code> endpoint:
-        </p>
-        <CodeBlock>{`import { JwksTokenValidator } from '@sesamy/capsule';
-
-// Whitelist trusted issuers by URL
-const validator = new JwksTokenValidator({
-  trustedIssuers: [
-    'https://api.example.com',
-    'https://partner.example.org',
-  ],
-});
-
-// Validate - fetches JWKS automatically
-const result = await validator.validate(token);
-
-if (result.valid && !result.expired) {
-  console.log(\`Verified from \${result.issuer}\`);
-  console.log(\`Key ID: \${result.keyId}\`);
-  await capsule.unlockWithToken(article, token);
-}
-
-// JWKS Discovery Flow:
-// 1. Token contains iss = "https://api.example.com"
-// 2. Client checks iss is in trustedIssuers (security!)
-// 3. Fetches https://api.example.com/.well-known/jwks.json
-// 4. Finds key with matching kid
-// 5. Verifies Ed25519 signature`}</CodeBlock>
-
-        <h3>Issuer Whitelist Security</h3>
-        <p>
-          The <code>trustedIssuers</code> whitelist is critical - without it,
-          anyone could create their own signing key and generate valid tokens.
-          Only fetch JWKS from issuers you explicitly trust:
-        </p>
-        <CodeBlock>{`// Good: explicit whitelist
-const validator = new JwksTokenValidator({
-  trustedIssuers: ['https://api.yoursite.com'],
-});
-
-// Add partners at runtime
-validator.addTrustedIssuer('https://api.partner.com');
-
-// Check trust status
-validator.isTrustedIssuer('https://api.yoursite.com');  // true
-validator.isTrustedIssuer('https://evil.com');          // false
-
-// Tokens from untrusted issuers are rejected
-// BEFORE any network request is made`}</CodeBlock>
-
-        <h3>Complete Share Link Flow</h3>
-        <CodeBlock>{`import { CapsuleClient, JwksTokenValidator, getShareTokenFromUrl } from '@sesamy/capsule';
-
-const validator = new JwksTokenValidator({
-  trustedIssuers: ['https://api.yoursite.com'],
-});
-
-const capsule = new CapsuleClient({
-  unlock: async (params) => {
-    const res = await fetch('/api/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    return res.json();
-  },
-});
-
-async function handleShareLink() {
-  const tokenInfo = getShareTokenFromUrl();
-  if (!tokenInfo?.valid) return;
-
-  // Full signature validation via JWKS
-  const validation = await validator.validateFromUrl();
-  if (!validation?.valid) {
-    showError(\`Invalid share link: \${validation.message}\`);
-    return;
-  }
-
-  if (validation.expired) {
-    showError('This share link has expired');
-    return;
-  }
-
-  // Unlock content
-  const article = getArticleData(validation.payload.contentId);
-  const content = await capsule.unlockWithToken(article, tokenInfo.token);
-  renderContent(content);
-
-  // Clean URL
+  // Clean the share token from the URL (cosmetic)
   const url = new URL(window.location.href);
-  url.searchParams.delete('token');
-  history.replaceState({}, '', url);
+  url.searchParams.delete("share");
+  history.replaceState({}, "", url);
 }`}</CodeBlock>
+
+        <h3>How It Works Under the Hood</h3>
+        <p>
+          <code>unlockWithShareToken()</code> is a convenience wrapper around{" "}
+          <code>unlock()</code>. It adds the <code>shareToken</code> field to the
+          unlock request body so the issuer knows to use share-link authorization
+          instead of subscription checks:
+        </p>
+        <CodeBlock>{`// What unlockWithShareToken sends to the issuer:
+POST /api/unlock
+{
+  "resource": { "domain": "...", "resourceId": "..." },
+  "resourceJWT": "eyJ…",
+  "issuerJWT": "eyJ…",
+  "sealed": { "bodytext": { … } },
+  "keyId": "issuer-key-1",
+  "issuerName": "sesamy",
+  "shareToken": "eyJ…"    // ← Share link token added here
+}
+
+// The issuer verifies the share token signature (ES256, publisher-signed),
+// validates claims (domain, resourceId, expiry, contentNames),
+// then unseals keys from the normal DCA sealed data.
+// No periodSecret needed — keys flow through the normal DCA channel.`}</CodeBlock>
+
+        <h3>Security Notes</h3>
+        <ul>
+          <li>
+            The share token is an opaque ES256 JWT signed by the publisher —
+            the client does not verify its signature (the issuer does that)
+          </li>
+          <li>
+            The token carries no key material — it is purely an authorization
+            grant
+          </li>
+          <li>
+            Tokens are bearer credentials: anyone with the URL has access until
+            expiry
+          </li>
+          <li>
+            The issuer validates the token against its trusted-publisher key
+            allowlist — no new secrets needed
+          </li>
+        </ul>
 
         <h2>Security Model</h2>
 

@@ -1,170 +1,86 @@
 /**
  * @sesamy/capsule-server
  *
- * Server-side encryption library for Capsule.
+ * Server-side DCA (Delegated Content Access) library.
  *
  * This package provides:
- * - CmsServer for encrypting content (works with any key source)
- * - PeriodKeyProvider for period-based key derivation
- * - SubscriptionServer for handling unlock requests
- * - Envelope encryption with AES-256-GCM
+ * - DCA Publisher for encrypting content (local key derivation, zero network calls)
+ * - DCA Issuer for handling unlock requests
+ * - ES256 JWT signing and verification
+ * - ECDH P-256 / RSA-OAEP key sealing
+ * - Low-level AES-256-GCM encryption utilities
  *
- * @example Quick Start with Period Key Provider
+ * @example Publisher (CMS side)
  * ```typescript
- * import { createCmsServer, createPeriodKeyProvider, createSubscriptionServer } from '@sesamy/capsule-server';
+ * import { createDcaPublisher } from '@sesamy/capsule-server';
  *
- * // Create period key provider (derives keys from period secret)
- * const keyProvider = createPeriodKeyProvider({
- *   periodSecret: process.env.PERIOD_SECRET,
+ * const publisher = createDcaPublisher({
+ *   domain: "www.news-site.com",
+ *   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
+ *   periodSecret: process.env.PERIOD_SECRET!,
  * });
  *
- * // CMS side: encrypt content
- * const cms = createCmsServer({
- *   getKeys: (keyIds) => keyProvider.getKeys(keyIds),
- * });
- *
- * const encrypted = await cms.encrypt('article-123', content, {
- *   keyIds: ['premium', 'enterprise'],
- * });
- *
- * // Subscription side: handle unlock requests
- * const server = createSubscriptionServer({
- *   periodSecret: process.env.PERIOD_SECRET,
- * });
- *
- * app.post('/api/unlock', async (req) => {
- *   const { wrappedKey, publicKey } = req.body;
- *   return server.unlockForUser(wrappedKey, publicKey);
+ * const result = await publisher.render({
+ *   resourceId: "article-123",
+ *   contentItems: [
+ *     { contentName: "bodytext", content: "<p>Premium article body...</p>" },
+ *   ],
+ *   issuers: [
+ *     {
+ *       issuerName: "sesamy",
+ *       publicKeyPem: process.env.SESAMY_ECDH_PUBLIC_KEY!,
+ *       keyId: "2025-10",
+ *       unlockUrl: "https://api.sesamy.com/unlock",
+ *       contentNames: ["bodytext"],
+ *     },
+ *   ],
  * });
  * ```
  *
- * @example With External Key Provider
+ * @example Issuer (unlock side)
  * ```typescript
- * import { createCmsServer } from '@sesamy/capsule-server';
+ * import { createDcaIssuer } from '@sesamy/capsule-server';
  *
- * const cms = createCmsServer({
- *   getKeys: async (keyIds) => {
- *     // Fetch keys from your subscription server
- *     const response = await fetch('/api/keys', {
- *       method: 'POST',
- *       body: JSON.stringify({ keyIds }),
- *     });
- *     return response.json(); // [{ keyId, key, expiresAt? }]
+ * const issuer = createDcaIssuer({
+ *   issuerName: "sesamy",
+ *   privateKeyPem: process.env.ISSUER_ECDH_P256_PRIVATE_KEY!,
+ *   keyId: "2025-10",
+ *   trustedPublisherKeys: {
+ *     "www.news-site.com": process.env.PUBLISHER_ES256_PUBLIC_KEY!,
  *   },
  * });
  *
- * const encrypted = await cms.encrypt('article-123', content, {
- *   keyIds: ['premium'],
+ * app.post('/api/unlock', async (req) => {
+ *   const result = await issuer.unlock(req.body, async (verified) => {
+ *     // Check if user has access
+ *     return { granted: true, contentNames: ["bodytext"] };
+ *   });
+ *   return result;
  * });
  * ```
  */
 
-// High-level API (recommended)
-export {
-  // CMS Server
-  CmsServer,
-  createCmsServer,
-  type CmsServerOptions,
-  type EncryptOptions,
-  type KeyEntry,
-  type KeyProvider,
-  // Period Key Provider
-  PeriodKeyProvider,
-  createPeriodKeyProvider,
-  type PeriodKeyProviderOptions,
-} from "./capsule";
-
-// CMS encryption (low-level)
-export { CmsEncryptor, createPeriodEncryptor, createApiEncryptor } from "./cms";
-
-// Subscription server
-export {
-  SubscriptionServer,
-  createSubscriptionServer,
-} from "./subscription-server";
-
-// Token utilities for pre-signed unlock links
-export {
-  TokenManager,
-  createTokenManager,
-  type TokenManagerOptions,
-  type UnlockTokenPayload,
-  type GenerateTokenOptions,
-  type TokenValidationResult,
-  type TokenValidationError,
-  type UsageTracker,
-} from "./tokens";
-
-// Asymmetric token signing (Ed25519 with JWKS support)
-export {
-  AsymmetricTokenManager,
-  createAsymmetricTokenManager,
-  generateSigningKeyPair,
-  type SigningKeyPair,
-  type Jwks,
-  type JwkKey,
-  type AsymmetricTokenPayload,
-  type AsymmetricGenerateOptions,
-  type AsymmetricTokenManagerOptions,
-  type AsymmetricValidationResult,
-  type AsymmetricValidationError,
-} from "./asymmetric-tokens";
-
-// Low-level encryption utilities
-export {
-  encryptContent,
-  decryptContent,
-  wrapContentKey,
-  unwrapContentKey,
-  generateContentKey,
-  generateIv,
-  GCM_IV_SIZE,
-  GCM_TAG_LENGTH,
-  AES_KEY_SIZE,
-} from "./encryption";
-
-// Time-period utilities
-export {
-  derivePeriodKey,
-  getPeriodKeys,
-  getPeriodKey,
-  getCurrentPeriod,
-  getNextPeriod,
-  getPreviousPeriod,
-  getPeriodExpiration,
-  getPeriodId,
-  isPeriodValid,
-  hkdf,
-  DEFAULT_PERIOD_DURATION_SECONDS,
-} from "./time-periods";
-
-// Types
-export type {
-  EncryptedArticle,
-  WrappedKey,
-  KeyWrapConfig,
-  PeriodKey,
-  CmsEncryptorOptions,
-  SubscriptionClientOptions,
-  PeriodKeysResponse,
-  UnlockResponse,
-} from "./types";
-
 // ============================================================================
-// DCA (Delegated Content Access) standard support
-// ============================================================================
-
 // DCA Publisher
+// ============================================================================
+
 export { createDcaPublisher } from "./dca-publisher";
 
+// ============================================================================
 // DCA Issuer
+// ============================================================================
+
 export {
   createDcaIssuer,
   type DcaAccessDecision,
   type DcaVerifiedRequest,
+  type DcaShareLinkUnlockOptions,
 } from "./dca-issuer";
 
+// ============================================================================
 // DCA JWT (ES256 signing & integrity proofs)
+// ============================================================================
+
 export {
   createJwt,
   verifyJwt,
@@ -175,7 +91,10 @@ export {
   computeProofHash,
 } from "./dca-jwt";
 
+// ============================================================================
 // DCA Seal (ECDH P-256 / RSA-OAEP key sealing)
+// ============================================================================
+
 export {
   sealEcdhP256,
   unsealEcdhP256,
@@ -188,7 +107,10 @@ export {
   type DcaSealAlgorithm,
 } from "./dca-seal";
 
+// ============================================================================
 // DCA Time Buckets
+// ============================================================================
+
 export {
   formatTimeBucket,
   getCurrentTimeBuckets,
@@ -196,7 +118,10 @@ export {
   generateRenderId,
 } from "./dca-time-buckets";
 
+// ============================================================================
 // DCA Types
+// ============================================================================
+
 export type {
   DcaData,
   DcaResource,
@@ -217,11 +142,33 @@ export type {
   DcaUnlockRequest,
   DcaUnlockResponse,
   DcaUnlockedKeys,
+  DcaShareLinkTokenPayload,
+  DcaShareLinkOptions,
 } from "./dca-types";
 
-// Low-level crypto primitives (ECDH, ECDSA, RSA, SHA-256)
+// ============================================================================
+// Low-level encryption utilities
+// ============================================================================
+
+export {
+  encryptContent,
+  decryptContent,
+  wrapContentKey,
+  unwrapContentKey,
+  generateContentKey,
+  generateIv,
+  GCM_IV_SIZE,
+  GCM_TAG_LENGTH,
+  AES_KEY_SIZE,
+} from "./encryption";
+
+// ============================================================================
+// Low-level crypto primitives
+// ============================================================================
+
 export {
   sha256,
+  hkdf,
   generateEcdhP256KeyPair,
   exportEcdhP256PublicKeyRaw,
   importEcdhP256PublicKeyRaw,
@@ -239,4 +186,11 @@ export {
   rsaOaepEncrypt,
   importRsaPrivateKey,
   rsaOaepDecrypt,
+  generateAesKeyBytes,
+  toBase64Url,
+  fromBase64Url,
+  toBase64,
+  fromBase64,
+  encodeUtf8,
+  decodeUtf8,
 } from "./web-crypto";

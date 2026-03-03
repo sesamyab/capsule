@@ -12,7 +12,6 @@ export function Navigation() {
           <Link href="/glossary">Glossary</Link>
           <Link href="/client">Client</Link>
           <Link href="/server">Server</Link>
-          <Link href="/cms-test">CMS API</Link>
           <Link href="/demo">Demo</Link>
         </div>
       </div>
