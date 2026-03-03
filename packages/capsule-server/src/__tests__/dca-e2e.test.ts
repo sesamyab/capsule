@@ -1925,4 +1925,121 @@ describe("Share Link Tokens", () => {
         expect(payload.jti).toBe("verify-token-id");
         expect(payload.exp).toBeGreaterThan(payload.iat);
     });
+
+    describe("rejects malformed timestamp claims", () => {
+        /**
+         * Helper: craft a share-link token JWT with arbitrary payload,
+         * signed by the publisher's real key (so the signature is valid).
+         */
+        async function craftShareToken(
+            signingKeyPem: string,
+            payloadOverrides: Record<string, unknown>,
+        ): Promise<string> {
+            const now = Math.floor(Date.now() / 1000);
+            const base = {
+                type: "dca-share",
+                domain: "malformed.example.com",
+                resourceId: "malformed-article",
+                contentNames: ["bodytext"],
+                iat: now,
+                exp: now + 3600,
+            };
+            return createJwt({ ...base, ...payloadOverrides }, signingKeyPem);
+        }
+
+        async function makeIssuer() {
+            const keys = await generateTestKeys();
+            const issuer = createDcaIssuer({
+                issuerName: "mf-issuer",
+                privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+                keyId: "mf-1",
+                trustedPublisherKeys: {
+                    "malformed.example.com": keys.signingPems.publicKeyPem,
+                },
+            });
+            return { issuer, keys };
+        }
+
+        it("rejects missing exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: undefined,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects missing iat", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                iat: undefined,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/iat must be a finite number/);
+        });
+
+        it("rejects string exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: "9999999999",
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects string iat", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                iat: "0",
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/iat must be a finite number/);
+        });
+
+        it("rejects NaN exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            // NaN survives JSON round-trip as null, but let's test explicitly
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: null,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects Infinity exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            // Infinity serializes to null in JSON
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: null,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects object exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: { valueOf: 9999999999 },
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects boolean exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: true,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+    });
 });

@@ -513,6 +513,16 @@ async function verifyShareLinkToken(
         );
     }
 
+    // Runtime type guards for timestamp claims.
+    // Without these, missing or non-numeric values (undefined, NaN, strings)
+    // silently pass the numeric comparisons (e.g. `undefined <= number` → false).
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
+        throw new Error("Share token: exp must be a finite number");
+    }
+    if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat)) {
+        throw new Error("Share token: iat must be a finite number");
+    }
+
     // Validate expiry
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp <= now) {
@@ -571,15 +581,15 @@ async function processShareLinkUnlock(
 
     // 6. Build access decision from the share token's claims.
     //    Only grant content names that exist in both the token AND the sealed data.
-    const availableContentNames = Object.keys(request.sealed);
+    const availableContentNames = new Set(Object.keys(request.sealed));
     const grantedContentNames = sharePayload.contentNames.filter(
-        (name) => availableContentNames.includes(name),
+        (name) => availableContentNames.has(name),
     );
 
     if (grantedContentNames.length === 0) {
         throw new Error(
             "Share token: no matching content items — token grants " +
-            `[${sharePayload.contentNames.join(", ")}] but sealed data contains [${availableContentNames.join(", ")}]`,
+            `[${sharePayload.contentNames.join(", ")}] but sealed data contains [${[...availableContentNames].join(", ")}]`,
         );
     }
 

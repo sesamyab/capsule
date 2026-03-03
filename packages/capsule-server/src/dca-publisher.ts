@@ -13,7 +13,9 @@
 import {
     generateAesKeyBytes,
     generateIv,
+    getRandomBytes,
     toBase64Url,
+    toHex,
     fromBase64,
     encodeUtf8,
     importEcdsaP256PrivateKey,
@@ -127,7 +129,7 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
                 iat: now,
                 exp: now + (options.expiresIn ?? 7 * 24 * 3600), // default: 7 days
                 ...(options.maxUses !== undefined ? { maxUses: options.maxUses } : {}),
-                ...(options.jti !== undefined ? { jti: options.jti } : {}),
+                jti: options.jti ?? toHex(getRandomBytes(16)),
                 ...(options.data !== undefined ? { data: options.data } : {}),
             };
 
