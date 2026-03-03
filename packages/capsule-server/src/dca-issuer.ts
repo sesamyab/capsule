@@ -30,6 +30,7 @@ import type {
     DcaUnlockRequest,
     DcaUnlockResponse,
     DcaUnlockedKeys,
+    DcaShareLinkTokenPayload,
 } from "./dca-types";
 
 // ============================================================================
@@ -201,6 +202,45 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
         },
 
         /**
+         * Process an unlock request authorized by a share link token.
+         *
+         * The share link token is a publisher-signed JWT that grants
+         * pre-authenticated access to specific content. The issuer:
+         *   1. Verifies the request JWTs (same as normal unlock)
+         *   2. Verifies the share link token signature (publisher-signed)
+         *   3. Validates token claims (type, domain, resourceId, expiry)
+         *   4. Grants access to the content names specified in the token
+         *
+         * DCA-compatible: no periodSecret required. Key material flows
+         * through the normal seal/unseal channel.
+         *
+         * @param request - The unlock request from the client (must include shareToken)
+         * @param options - Optional overrides (deliveryMode, onShareToken callback)
+         * @returns Unlock response with decrypted key material
+         */
+        unlockWithShareToken: async (
+            request: DcaUnlockRequest,
+            options?: DcaShareLinkUnlockOptions,
+        ): Promise<DcaUnlockResponse> => {
+            return processShareLinkUnlock(config, publisherMap, getPrivateKey, request, options);
+        },
+
+        /**
+         * Verify a share link token and return its payload.
+         * Useful for pre-flight checks or custom access logic.
+         *
+         * @param shareToken - The share link token JWT
+         * @param expectedDomain - Expected publisher domain (from the request)
+         * @returns Verified share link token payload
+         */
+        verifyShareToken: async (
+            shareToken: string,
+            expectedDomain: string,
+        ): Promise<DcaShareLinkTokenPayload> => {
+            return verifyShareLinkToken(publisherMap, shareToken, expectedDomain);
+        },
+
+        /**
          * Verify the request JWTs without unsealing.
          * Useful for pre-flight checks before making access decisions.
          */
@@ -226,6 +266,34 @@ export interface DcaAccessDecision {
      *   - "periodKey": return periodKeys (client unwraps contentKey from sealedContentKeys, enables caching)
      */
     deliveryMode: "contentKey" | "periodKey";
+}
+
+/**
+ * Options for share-link-token-authorized unlock.
+ */
+export interface DcaShareLinkUnlockOptions {
+    /**
+     * Key delivery mode (default: "contentKey").
+     * Share link unlocks default to contentKey for simplicity,
+     * but periodKey is also supported for cache-friendly flows.
+     */
+    deliveryMode?: "contentKey" | "periodKey";
+    /**
+     * Optional callback invoked after the share token is verified
+     * but before keys are unsealed. Use for:
+     *   - Use-count tracking (increment a counter, reject if maxUses exceeded)
+     *   - Audit logging
+     *   - Custom authorization checks
+     *
+     * Throw an error to reject the request.
+     *
+     * @param payload - The verified share link token payload
+     * @param resource - The verified resource from the request
+     */
+    onShareToken?: (
+        payload: DcaShareLinkTokenPayload,
+        resource: DcaResource,
+    ) => Promise<void> | void;
 }
 
 /**
@@ -318,16 +386,18 @@ async function verifyRequest(
     return { resource, issuerPayload };
 }
 
-async function processUnlock(
+/**
+ * Shared unseal-and-respond helper used by both the normal unlock path and the
+ * share-link unlock path.  Centralising this logic avoids drift when
+ * transport/security behaviour changes.
+ */
+async function unsealAndRespond(
     config: DcaIssuerServerConfig,
-    publisherMap: NormalisedPublisherMap,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
     request: DcaUnlockRequest,
-    accessDecision: DcaAccessDecision,
+    grantedContentNames: string[],
+    deliveryMode: "contentKey" | "periodKey",
 ): Promise<DcaUnlockResponse> {
-    // Verify everything first
-    await verifyRequest(config, publisherMap, request);
-
     // Verify keyId matches
     if (request.keyId !== config.keyId) {
         throw new Error(`keyId mismatch: expected "${config.keyId}", got "${request.keyId}"`);
@@ -346,13 +416,13 @@ async function processUnlock(
     // Unseal granted content items
     const keys: Record<string, DcaUnlockedKeys> = {};
 
-    for (const contentName of accessDecision.grantedContentNames) {
+    for (const contentName of grantedContentNames) {
         const sealedEntry = request.sealed[contentName];
         if (!sealedEntry) {
             throw new Error(`No sealed data for content item "${contentName}"`);
         }
 
-        if (accessDecision.deliveryMode === "contentKey") {
+        if (deliveryMode === "contentKey") {
             // Direct path: unseal and return contentKey
             if (!sealedEntry.contentKey) {
                 throw new Error(`Missing sealed contentKey for content item "${contentName}"`);
@@ -383,4 +453,154 @@ async function processUnlock(
         keys,
         ...(clientBound ? { transport: "client-bound" as const } : {}),
     };
+}
+
+async function processUnlock(
+    config: DcaIssuerServerConfig,
+    publisherMap: NormalisedPublisherMap,
+    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
+    request: DcaUnlockRequest,
+    accessDecision: DcaAccessDecision,
+): Promise<DcaUnlockResponse> {
+    // Verify everything first
+    await verifyRequest(config, publisherMap, request);
+
+    return unsealAndRespond(
+        config,
+        getPrivateKey,
+        request,
+        accessDecision.grantedContentNames,
+        accessDecision.deliveryMode,
+    );
+}
+
+// ============================================================================
+// Share Link Token verification & unlock
+// ============================================================================
+
+/**
+ * Verify a share link token (publisher-signed JWT).
+ *
+ * @param publisherMap - Trusted publisher map
+ * @param shareToken - The share link token JWT string
+ * @param expectedDomain - The domain from the request (used for key lookup)
+ * @returns Verified share link token payload
+ * @throws Error if token is invalid, expired, or from an untrusted publisher
+ */
+async function verifyShareLinkToken(
+    publisherMap: NormalisedPublisherMap,
+    shareToken: string,
+    expectedDomain: string,
+): Promise<DcaShareLinkTokenPayload> {
+    // Look up the publisher's signing key from the domain
+    const publisher = publisherMap.lookup(expectedDomain);
+    if (!publisher) {
+        throw new Error(`Share token: untrusted publisher domain "${expectedDomain}"`);
+    }
+
+    // Verify JWT signature with the publisher's signing key
+    const payload = await verifyJwt<DcaShareLinkTokenPayload>(shareToken, publisher.signingKeyPem);
+
+    // Validate type discriminator
+    if (payload.type !== "dca-share") {
+        throw new Error(`Share token: invalid type "${payload.type}", expected "dca-share"`);
+    }
+
+    // Validate domain binding
+    if (payload.domain !== expectedDomain) {
+        throw new Error(
+            `Share token: domain mismatch — token domain "${payload.domain}" vs request domain "${expectedDomain}"`,
+        );
+    }
+
+    // Runtime type guards for timestamp claims.
+    // Without these, missing or non-numeric values (undefined, NaN, strings)
+    // silently pass the numeric comparisons (e.g. `undefined <= number` → false).
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
+        throw new Error("Share token: exp must be a finite number");
+    }
+    if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat)) {
+        throw new Error("Share token: iat must be a finite number");
+    }
+
+    // Validate expiry
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp <= now) {
+        throw new Error(`Share token: expired at ${new Date(payload.exp * 1000).toISOString()}`);
+    }
+
+    // Validate iat is not in the future (with 60s clock skew tolerance)
+    if (payload.iat > now + 60) {
+        throw new Error(`Share token: issued in the future (iat: ${payload.iat})`);
+    }
+
+    // Validate contentNames is a non-empty array
+    if (!Array.isArray(payload.contentNames) || payload.contentNames.length === 0) {
+        throw new Error("Share token: contentNames must be a non-empty array");
+    }
+
+    return payload;
+}
+
+/**
+ * Process an unlock request authorized by a share link token.
+ */
+async function processShareLinkUnlock(
+    config: DcaIssuerServerConfig,
+    publisherMap: NormalisedPublisherMap,
+    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
+    request: DcaUnlockRequest,
+    options?: DcaShareLinkUnlockOptions,
+): Promise<DcaUnlockResponse> {
+    // 1. Verify the share token exists
+    if (!request.shareToken) {
+        throw new Error("Share link unlock requires a shareToken in the request");
+    }
+
+    // 2. Verify the request JWTs (same as normal unlock)
+    const { resource } = await verifyRequest(config, publisherMap, request);
+
+    // 3. Verify the share link token
+    const sharePayload = await verifyShareLinkToken(
+        publisherMap,
+        request.shareToken,
+        resource.domain,
+    );
+
+    // 4. Validate resource binding: the share token must be for this resource
+    if (sharePayload.resourceId !== resource.resourceId) {
+        throw new Error(
+            `Share token: resourceId mismatch — token "${sharePayload.resourceId}" vs request "${resource.resourceId}"`,
+        );
+    }
+
+    // 5. Invoke optional callback (use-count tracking, audit logging, etc.)
+    if (options?.onShareToken) {
+        await options.onShareToken(sharePayload, resource);
+    }
+
+    // 6. Build access decision from the share token's claims.
+    //    Only grant content names that exist in both the token AND the sealed data.
+    const availableContentNames = new Set(Object.keys(request.sealed));
+    const grantedContentNames = sharePayload.contentNames.filter(
+        (name) => availableContentNames.has(name),
+    );
+
+    if (grantedContentNames.length === 0) {
+        throw new Error(
+            "Share token: no matching content items — token grants " +
+            `[${sharePayload.contentNames.join(", ")}] but sealed data contains [${[...availableContentNames].join(", ")}]`,
+        );
+    }
+
+    // 7. Delegate to the shared unseal-and-respond helper
+    const deliveryMode = options?.deliveryMode ?? "contentKey";
+
+    return unsealAndRespond(
+        config,
+        getPrivateKey,
+        request,
+        grantedContentNames,
+        deliveryMode,
+    );
 }

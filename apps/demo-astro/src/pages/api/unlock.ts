@@ -1,36 +1,12 @@
 /**
- * Capsule Unlock API
+ * DCA Unlock API
  *
- * Receives client's public key and wrapped content key, unwraps the content key,
- * re-wraps it with the client's public key, and returns it.
- *
- * Uses @sesamy/capsule-server for key management.
+ * Receives a DCA unlock request, verifies the publisher JWT,
+ * unseals period keys, and returns them to the client.
  */
 
 import type { APIRoute } from "astro";
-import type { UnlockResponse } from "@sesamy/capsule";
-import { createSubscriptionServer } from "@sesamy/capsule-server";
-import { PERIOD_DURATION_SECONDS, keyProvider } from "../../lib/encryption";
-
-/** Period secret for key derivation */
-function getPeriodSecret(): string {
-  const secret = import.meta.env.CAPSULE_PERIOD_SECRET;
-  if (secret) return secret;
-  if (import.meta.env.DEV) {
-    console.warn("[capsule] CAPSULE_PERIOD_SECRET not set — using insecure demo fallback (dev only)");
-    return Buffer.from("demo-secret-do-not-use-in-production!!", "utf-8").toString("base64");
-  }
-  throw new Error("CAPSULE_PERIOD_SECRET environment variable is required in production");
-}
-const PERIOD_SECRET = getPeriodSecret();
-
-/**
- * Subscription server instance for handling unlock requests.
- */
-const server = createSubscriptionServer({
-  periodSecret: PERIOD_SECRET,
-  periodDurationSeconds: PERIOD_DURATION_SECONDS,
-});
+import { getIssuer } from "../../lib/encryption";
 
 export const POST: APIRoute = async ({ request }) => {
   try {
@@ -40,78 +16,32 @@ export const POST: APIRoute = async ({ request }) => {
     } catch {
       return new Response(
         JSON.stringify({ error: "Invalid or missing JSON body" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
 
-    if (body === null || typeof body !== "object" || Array.isArray(body)) {
-      return new Response(
-        JSON.stringify({ error: "Request body must be a JSON object" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-    }
+    const issuer = await getIssuer();
 
-    const { keyId, wrappedContentKey, publicKey } = body as Record<string, unknown>;
-
-    if (typeof publicKey !== "string" || typeof keyId !== "string" || typeof wrappedContentKey !== "string") {
-      return new Response(
-        JSON.stringify({
-          error: "Missing required fields: keyId, wrappedContentKey, publicKey must be strings",
-        }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-    }
-
-    // Use the subscription server to unlock
-    // In production, you'd validate user subscription here first!
-
-    // Static key lookup for article keys - derive from same period key provider as CMS
-    const staticKeyLookup = async (id: string): Promise<Uint8Array | null> => {
-      try {
-        if (id.startsWith("article:")) {
-          const contentId = id.slice(8);
-          const keyEntry = await keyProvider.getArticleKey(contentId);
-          if (keyEntry.key instanceof Uint8Array) {
-            return keyEntry.key;
-          }
-          // Decode base64 string to Uint8Array
-          const binaryString = atob(keyEntry.key);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          return bytes;
-        }
-      } catch (error) {
-        console.error(`[capsule] Failed to resolve key for "${id}":`, error);
-        return null;
-      }
-      return null;
-    };
-
-    const result = await server.unlockForUser(
-      { keyId, wrappedContentKey },
-      publicKey,
-      staticKeyLookup,
+    // Demo mode: grant access to all sealed content items
+    const grantedContentNames = Object.keys(
+      (body as Record<string, unknown>).sealed as Record<string, unknown> ?? {},
     );
 
-    // Build response matching UnlockResponse interface
-    const response: UnlockResponse = {
-      encryptedContentKey: result.encryptedContentKey,
-      expiresAt: result.expiresAt,
-      periodId: result.periodId,
-      periodDurationSeconds: PERIOD_DURATION_SECONDS,
-    };
+    const result = await issuer.unlock(body as any, {
+      grantedContentNames,
+      deliveryMode: "periodKey",
+    });
 
-    return new Response(JSON.stringify(response), {
+    return new Response(JSON.stringify(result), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Unlock error:", error);
+    console.error("[dca] Unlock error:", error);
+    const message = error instanceof Error ? error.message : "Internal server error";
     return new Response(
-      JSON.stringify({ error: "Failed to process unlock request" }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
+      JSON.stringify({ error: message }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
     );
   }
 };

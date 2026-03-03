@@ -10,6 +10,8 @@ export interface Article {
   publishedAt: string;
   previewContent: string;
   premiumContent: string;
+  /** Content tier — articles sharing a tier share period keys (e.g. "TierA", "TierB") */
+  tier: string;
 }
 
 export const articles: Record<string, Article> = {
@@ -18,6 +20,7 @@ export const articles: Record<string, Article> = {
     title: "The Complete Guide to Web Security",
     author: "Alex Security",
     publishedAt: "2026-01-15",
+    tier: "TierA",
     previewContent: `
 Web security is one of the most critical aspects of modern software development. 
 As our digital lives become increasingly interconnected, understanding how to protect 
@@ -152,6 +155,7 @@ just for you with a unique key.
     title: "Understanding Cryptography Basics",
     author: "Sarah Cipher",
     publishedAt: "2026-01-10",
+    tier: "TierA",
     previewContent: `
 Cryptography is the practice of securing communication and data through the use of codes.
 It's been used throughout history, from ancient Rome to modern digital communications.
@@ -221,6 +225,80 @@ handles all operations securely.
 
 **You did it!** This content was encrypted specifically for your browser session.
 The encryption happened on the server, but decryption happened entirely in your browser.
+    `.trim(),
+  },
+  "zero-trust": {
+    id: "zero-trust",
+    title: "Zero Trust Architecture for APIs",
+    author: "Kai Network",
+    publishedAt: "2026-02-01",
+    tier: "TierB",
+    previewContent: `
+Zero Trust is a security model that assumes no implicit trust — every request 
+must be verified, regardless of where it originates. This approach has become the 
+gold standard for modern API security.
+
+In this article, we explore how Zero Trust principles apply to API design and 
+how cryptographic access control enables fine-grained authorization.
+    `.trim(),
+    premiumContent: `
+## What is Zero Trust?
+
+The traditional security model ("castle and moat") assumes that anything inside 
+the network perimeter is trustworthy. Zero Trust flips this assumption:
+
+> **"Never trust, always verify."**
+
+Every request — whether from inside or outside the network — must:
+
+1. **Authenticate** the caller's identity
+2. **Authorize** the specific action being requested
+3. **Encrypt** all data in transit and at rest
+
+### Zero Trust Principles
+
+- **Least Privilege**: Grant minimum access required for each task
+- **Micro-Segmentation**: Isolate resources into small, independently secured zones
+- **Continuous Verification**: Re-authenticate and re-authorize on every request
+- **Assume Breach**: Design systems to limit blast radius of compromise
+
+## Applying Zero Trust to APIs
+
+### Token-Based Access Control
+
+Modern APIs use short-lived tokens (JWTs, opaque tokens) instead of session cookies:
+
+\`\`\`
+Authorization: Bearer eyJhbGciOiJFUzI1NiJ9...
+\`\`\`
+
+Each token carries claims that specify exactly what the bearer can access.
+
+### Delegated Content Access (DCA)
+
+DCA takes Zero Trust further by separating **content encryption** from **access control**:
+
+- **Publisher** encrypts content with unique keys per time period
+- **Issuer** holds sealed key material but only releases it upon authorization
+- **Client** decrypts locally — the issuer never sees plaintext content
+
+This is exactly what you're experiencing right now! The article content was 
+encrypted server-side, and your browser is performing the decryption.
+
+## Rate Limiting & Anomaly Detection
+
+Zero Trust APIs should implement:
+
+- **Rate limiting**: Prevent brute-force and enumeration attacks
+- **Request signing**: HMAC or digital signatures on API calls
+- **Anomaly detection**: Flag unusual patterns (geographic, temporal, volumetric)
+- **Audit logging**: Immutable logs of all access decisions
+
+---
+
+**Welcome to TierB!** 🎉 This content is in a separate encryption tier.
+Unlocking TierA articles does NOT grant access to TierB content — each tier 
+has independent period keys derived via HKDF with a different content name.
     `.trim(),
   },
 };

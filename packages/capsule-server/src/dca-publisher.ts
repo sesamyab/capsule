@@ -11,13 +11,15 @@
  */
 
 import {
-  generateAesKeyBytes,
-  generateIv,
-  toBase64Url,
-  fromBase64,
-  encodeUtf8,
-  importEcdsaP256PrivateKey,
-  type WebCryptoKey,
+    generateAesKeyBytes,
+    generateIv,
+    getRandomBytes,
+    toBase64Url,
+    toHex,
+    fromBase64,
+    encodeUtf8,
+    importEcdsaP256PrivateKey,
+    type WebCryptoKey,
 } from "./web-crypto";
 
 import { encryptContent } from "./encryption";
@@ -28,19 +30,21 @@ import { generateRenderId, getCurrentTimeBuckets, deriveDcaPeriodKey } from "./d
 
 import { seal, importIssuerPublicKey } from "./dca-seal";
 
-import { createResourceJwt, createIssuerJwt } from "./dca-jwt";
+import { createResourceJwt, createIssuerJwt, createJwt } from "./dca-jwt";
 
 import type {
-  DcaData,
-  DcaResource,
-  DcaContentSealData,
-  DcaSealedContentKey,
-  DcaIssuerEntry,
-  DcaIssuerSealed,
-  DcaPublisherConfig,
-  DcaRenderOptions,
-  DcaRenderResult,
-  DcaJsonApiResponse,
+    DcaData,
+    DcaResource,
+    DcaContentSealData,
+    DcaSealedContentKey,
+    DcaIssuerEntry,
+    DcaIssuerSealed,
+    DcaPublisherConfig,
+    DcaRenderOptions,
+    DcaRenderResult,
+    DcaJsonApiResponse,
+    DcaShareLinkTokenPayload,
+    DcaShareLinkOptions,
 } from "./dca-types";
 
 // ============================================================================
@@ -76,24 +80,63 @@ import type {
  * ```
  */
 export function createDcaPublisher(config: DcaPublisherConfig) {
-  const periodSecret = typeof config.periodSecret === "string"
-    ? fromBase64(config.periodSecret)
-    : config.periodSecret;
+    const periodSecret = typeof config.periodSecret === "string"
+        ? fromBase64(config.periodSecret)
+        : config.periodSecret;
 
-  const periodDurationHours = config.periodDurationHours ?? 1;
+    const periodDurationHours = config.periodDurationHours ?? 1;
 
-  let signingKeyPromise: Promise<WebCryptoKey> | null = null;
+    let signingKeyPromise: Promise<WebCryptoKey> | null = null;
 
-  function getSigningKey(): Promise<WebCryptoKey> {
-    if (!signingKeyPromise) {
-      signingKeyPromise = importEcdsaP256PrivateKey(config.signingKeyPem);
+    function getSigningKey(): Promise<WebCryptoKey> {
+        if (!signingKeyPromise) {
+            signingKeyPromise = importEcdsaP256PrivateKey(config.signingKeyPem);
+        }
+        return signingKeyPromise;
     }
-    return signingKeyPromise;
-  }
 
-  return {
-    render: (options: DcaRenderOptions) => render(config.domain, periodSecret, periodDurationHours, getSigningKey, options),
-  };
+    return {
+        render: (options: DcaRenderOptions) => render(config.domain, periodSecret, periodDurationHours, getSigningKey, options),
+
+        /**
+         * Create a share link token — a publisher-signed JWT that grants
+         * pre-authenticated access to specific content via a URL.
+         *
+         * DCA-compatible: the periodSecret never leaves the publisher.
+         * The token is purely an authorization grant. Key material flows
+         * through the normal DCA seal/unseal channel — the issuer receives
+         * sealed keys from the client and unseals them as usual.
+         *
+         * @example
+         * ```typescript
+         * const token = await publisher.createShareLinkToken({
+         *   resourceId: "article-123",
+         *   contentNames: ["bodytext"],
+         *   expiresIn: 7 * 24 * 3600, // 7 days
+         * });
+         *
+         * const shareUrl = `https://example.com/article/123?share=${token}`;
+         * ```
+         */
+        createShareLinkToken: async (options: DcaShareLinkOptions): Promise<string> => {
+            const now = Math.floor(Date.now() / 1000);
+
+            const payload: DcaShareLinkTokenPayload = {
+                type: "dca-share",
+                domain: config.domain,
+                resourceId: options.resourceId,
+                contentNames: options.contentNames,
+                iat: now,
+                exp: now + (options.expiresIn ?? 7 * 24 * 3600), // default: 7 days
+                ...(options.maxUses !== undefined ? { maxUses: options.maxUses } : {}),
+                jti: options.jti ?? toHex(getRandomBytes(16)),
+                ...(options.data !== undefined ? { data: options.data } : {}),
+            };
+
+            const signingKey = await getSigningKey();
+            return createJwt(payload, signingKey);
+        },
+    };
 }
 
 // ============================================================================
@@ -101,176 +144,176 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
 // ============================================================================
 
 async function render(
-  domain: string,
-  periodSecret: Uint8Array,
-  periodDurationHours: number,
-  getSigningKey: () => Promise<WebCryptoKey>,
-  options: DcaRenderOptions,
+    domain: string,
+    periodSecret: Uint8Array,
+    periodDurationHours: number,
+    getSigningKey: () => Promise<WebCryptoKey>,
+    options: DcaRenderOptions,
 ): Promise<DcaRenderResult> {
-  const { resourceId, contentItems, issuers, resourceData } = options;
+    const { resourceId, contentItems, issuers, resourceData } = options;
 
-  // 1. Generate renderId
-  const renderId = generateRenderId();
+    // 1. Generate renderId
+    const renderId = generateRenderId();
 
-  // 2. Get time buckets (current + next)
-  const buckets = getCurrentTimeBuckets(periodDurationHours);
+    // 2. Get time buckets (current + next)
+    const buckets = getCurrentTimeBuckets(periodDurationHours);
 
-  // 3. Per content item: generate contentKey, IV, encrypt
-  const contentKeys: Record<string, Uint8Array> = {};
-  const contentSealData: Record<string, DcaContentSealData> = {};
-  const sealedContent: Record<string, string> = {};
+    // 3. Per content item: generate contentKey, IV, encrypt
+    const contentKeys: Record<string, Uint8Array> = {};
+    const contentSealData: Record<string, DcaContentSealData> = {};
+    const sealedContent: Record<string, string> = {};
 
-  for (const item of contentItems) {
-    const contentName = item.contentName;
-    const contentType = item.contentType ?? "text/html";
+    for (const item of contentItems) {
+        const contentName = item.contentName;
+        const contentType = item.contentType ?? "text/html";
 
-    // Generate content key and IV
-    const contentKey = generateAesKeyBytes();
-    const iv = generateIv();
+        // Generate content key and IV
+        const contentKey = generateAesKeyBytes();
+        const iv = generateIv();
 
-    // Build AAD string: domain|resourceId|contentName|version
-    const aadString = `${domain}|${resourceId}|${contentName}|1`;
-    const aadBytes = encodeUtf8(aadString);
+        // Build AAD string: domain|resourceId|contentName|version
+        const aadString = `${domain}|${resourceId}|${contentName}|1`;
+        const aadBytes = encodeUtf8(aadString);
 
-    // Encrypt content with AAD
-    const { encryptedContent } = await encryptContent(item.content, contentKey, iv, aadBytes);
+        // Encrypt content with AAD
+        const { encryptedContent } = await encryptContent(item.content, contentKey, iv, aadBytes);
 
-    contentKeys[contentName] = contentKey;
-    contentSealData[contentName] = {
-      contentType,
-      nonce: toBase64Url(iv),
-      aad: aadString,
-    };
-    sealedContent[contentName] = toBase64Url(encryptedContent);
-  }
-
-  // 4. Derive periodKeys and wrap contentKeys
-  const sealedContentKeys: Record<string, DcaSealedContentKey[]> = {};
-
-  for (const item of contentItems) {
-    const contentName = item.contentName;
-    const entries: DcaSealedContentKey[] = [];
-
-    for (const bucket of [buckets.current, buckets.next]) {
-      const periodKey = await deriveDcaPeriodKey(periodSecret, contentName, bucket.t);
-
-      // Wrap contentKey with periodKey using AES-256-GCM (no AAD for key wrapping)
-      const wrapIv = generateIv();
-      const { encryptedContent: wrappedKey } = await aesGcmEncrypt(
-        contentKeys[contentName],
-        periodKey,
-        wrapIv,
-      );
-
-      entries.push({
-        t: bucket.t,
-        nonce: toBase64Url(wrapIv),
-        key: toBase64Url(wrappedKey),
-      });
+        contentKeys[contentName] = contentKey;
+        contentSealData[contentName] = {
+            contentType,
+            nonce: toBase64Url(iv),
+            aad: aadString,
+        };
+        sealedContent[contentName] = toBase64Url(encryptedContent);
     }
 
-    sealedContentKeys[contentName] = entries;
-  }
+    // 4. Derive periodKeys and wrap contentKeys
+    const sealedContentKeys: Record<string, DcaSealedContentKey[]> = {};
 
-  // 5. Import issuer public keys and seal contentKeys + periodKeys for each issuer
-  const issuerData: Record<string, DcaIssuerEntry> = {};
+    for (const item of contentItems) {
+        const contentName = item.contentName;
+        const entries: DcaSealedContentKey[] = [];
 
-  for (const issuerConfig of issuers) {
-    const { key: issuerPubKey, algorithm } = await importIssuerPublicKey(
-      issuerConfig.publicKeyPem,
-      issuerConfig.algorithm,
-    );
+        for (const bucket of [buckets.current, buckets.next]) {
+            const periodKey = await deriveDcaPeriodKey(periodSecret, contentName, bucket.t);
 
-    const sealed: Record<string, DcaIssuerSealed> = {};
+            // Wrap contentKey with periodKey using AES-256-GCM (no AAD for key wrapping)
+            const wrapIv = generateIv();
+            const { encryptedContent: wrappedKey } = await aesGcmEncrypt(
+                contentKeys[contentName],
+                periodKey,
+                wrapIv,
+            );
 
-    for (const contentName of issuerConfig.contentNames) {
-      const contentKey = contentKeys[contentName];
-      if (!contentKey) {
-        throw new Error(`Content item "${contentName}" not found for issuer "${issuerConfig.issuerName}"`);
-      }
+            entries.push({
+                t: bucket.t,
+                nonce: toBase64Url(wrapIv),
+                key: toBase64Url(wrappedKey),
+            });
+        }
 
-      // Seal contentKey
-      const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm);
-
-      // Seal periodKeys
-      const sealedPeriodKeys: Record<string, string> = {};
-      for (const bucket of [buckets.current, buckets.next]) {
-        const periodKey = await deriveDcaPeriodKey(periodSecret, contentName, bucket.t);
-        sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm);
-      }
-
-      sealed[contentName] = {
-        contentKey: sealedContentKey,
-        periodKeys: sealedPeriodKeys,
-      };
+        sealedContentKeys[contentName] = entries;
     }
 
-    issuerData[issuerConfig.issuerName] = {
-      sealed,
-      unlockUrl: issuerConfig.unlockUrl,
-      keyId: issuerConfig.keyId,
+    // 5. Import issuer public keys and seal contentKeys + periodKeys for each issuer
+    const issuerData: Record<string, DcaIssuerEntry> = {};
+
+    for (const issuerConfig of issuers) {
+        const { key: issuerPubKey, algorithm } = await importIssuerPublicKey(
+            issuerConfig.publicKeyPem,
+            issuerConfig.algorithm,
+        );
+
+        const sealed: Record<string, DcaIssuerSealed> = {};
+
+        for (const contentName of issuerConfig.contentNames) {
+            const contentKey = contentKeys[contentName];
+            if (!contentKey) {
+                throw new Error(`Content item "${contentName}" not found for issuer "${issuerConfig.issuerName}"`);
+            }
+
+            // Seal contentKey
+            const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm);
+
+            // Seal periodKeys
+            const sealedPeriodKeys: Record<string, string> = {};
+            for (const bucket of [buckets.current, buckets.next]) {
+                const periodKey = await deriveDcaPeriodKey(periodSecret, contentName, bucket.t);
+                sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm);
+            }
+
+            sealed[contentName] = {
+                contentKey: sealedContentKey,
+                periodKeys: sealedPeriodKeys,
+            };
+        }
+
+        issuerData[issuerConfig.issuerName] = {
+            sealed,
+            unlockUrl: issuerConfig.unlockUrl,
+            keyId: issuerConfig.keyId,
+        };
+    }
+
+    // 6. Build resource object
+    const resource: DcaResource = {
+        renderId,
+        domain,
+        issuedAt: new Date().toISOString(),
+        resourceId,
+        data: resourceData ?? {},
     };
-  }
 
-  // 6. Build resource object
-  const resource: DcaResource = {
-    renderId,
-    domain,
-    issuedAt: new Date().toISOString(),
-    resourceId,
-    data: resourceData ?? {},
-  };
+    // 7. Sign resourceJWT
+    const signingKey = await getSigningKey();
+    const resourceJWT = await createResourceJwt(resource, signingKey);
 
-  // 7. Sign resourceJWT
-  const signingKey = await getSigningKey();
-  const resourceJWT = await createResourceJwt(resource, signingKey);
+    // 8. Sign issuerJWTs
+    const issuerJWT: Record<string, string> = {};
+    for (const issuerConfig of issuers) {
+        issuerJWT[issuerConfig.issuerName] = await createIssuerJwt(
+            renderId,
+            issuerConfig.issuerName,
+            issuerData[issuerConfig.issuerName].sealed,
+            signingKey,
+        );
+    }
 
-  // 8. Sign issuerJWTs
-  const issuerJWT: Record<string, string> = {};
-  for (const issuerConfig of issuers) {
-    issuerJWT[issuerConfig.issuerName] = await createIssuerJwt(
-      renderId,
-      issuerConfig.issuerName,
-      issuerData[issuerConfig.issuerName].sealed,
-      signingKey,
-    );
-  }
+    // 9. Assemble DCA data
+    const dcaData: DcaData = {
+        version: "1",
+        resource,
+        resourceJWT,
+        issuerJWT,
+        contentSealData,
+        sealedContentKeys,
+        issuerData,
+    };
 
-  // 9. Assemble DCA data
-  const dcaData: DcaData = {
-    version: "1",
-    resource,
-    resourceJWT,
-    issuerJWT,
-    contentSealData,
-    sealedContentKeys,
-    issuerData,
-  };
+    // 10. Build HTML strings
+    // Escape closing script tags to prevent script-breakout XSS when embedding JSON in HTML
+    const dcaDataScript = `<script type="application/json" class="dca-data">${JSON.stringify(dcaData).replace(/<\//g, "\\u003c/")}</script>`;
 
-  // 10. Build HTML strings
-  // Escape closing script tags to prevent script-breakout XSS when embedding JSON in HTML
-  const dcaDataScript = `<script type="application/json" class="dca-data">${JSON.stringify(dcaData).replace(/<\//g, "\\u003c/")}</script>`;
+    const sealedContentDivs = Object.entries(sealedContent)
+        .map(([name, ct]) => `  <div data-dca-content-name="${escapeHtmlAttr(name)}">${ct}</div>`)
+        .join("\n");
+    const sealedContentTemplate = `<template class="dca-sealed-content">\n${sealedContentDivs}\n</template>`;
 
-  const sealedContentDivs = Object.entries(sealedContent)
-    .map(([name, ct]) => `  <div data-dca-content-name="${escapeHtmlAttr(name)}">${ct}</div>`)
-    .join("\n");
-  const sealedContentTemplate = `<template class="dca-sealed-content">\n${sealedContentDivs}\n</template>`;
+    // 11. Build JSON API response
+    const json: DcaJsonApiResponse = {
+        ...dcaData,
+        sealedContent,
+    };
 
-  // 11. Build JSON API response
-  const json: DcaJsonApiResponse = {
-    ...dcaData,
-    sealedContent,
-  };
-
-  return {
-    dcaData,
-    sealedContent,
-    html: {
-      dcaDataScript,
-      sealedContentTemplate,
-    },
-    json,
-  };
+    return {
+        dcaData,
+        sealedContent,
+        html: {
+            dcaDataScript,
+            sealedContentTemplate,
+        },
+        json,
+    };
 }
 
 // ============================================================================
@@ -278,5 +321,5 @@ async function render(
 // ============================================================================
 
 function escapeHtmlAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

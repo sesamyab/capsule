@@ -1323,3 +1323,723 @@ describe("DCA client-bound transport", () => {
         expect(decodeUtf8(decrypted)).toBe("Direct content");
     });
 });
+
+// ============================================================================
+// Share Link Tokens
+// ============================================================================
+
+describe("Share Link Tokens", () => {
+    it("creates and validates a share link token (full E2E)", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "share.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        // Render the page
+        const result = await publisher.render({
+            resourceId: "shared-article-1",
+            contentItems: [
+                { contentName: "bodytext", content: "<p>Shared premium content</p>" },
+            ],
+            issuers: [{
+                issuerName: "share-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "sk-1",
+                unlockUrl: "https://share.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        // Publisher creates a share link token
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "shared-article-1",
+            contentNames: ["bodytext"],
+            expiresIn: 7 * 24 * 3600, // 7 days
+        });
+
+        expect(typeof shareToken).toBe("string");
+        expect(shareToken.split(".")).toHaveLength(3); // JWT format
+
+        // Issuer validates the share token and unlocks
+        const issuer = createDcaIssuer({
+            issuerName: "share-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "sk-1",
+            trustedPublisherKeys: {
+                "share.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        const response = await issuer.unlockWithShareToken({
+            resource: result.dcaData.resource,
+            resourceJWT: result.dcaData.resourceJWT,
+            issuerJWT: result.dcaData.issuerJWT["share-issuer"],
+            sealed: result.dcaData.issuerData["share-issuer"].sealed,
+            keyId: "sk-1",
+            issuerName: "share-issuer",
+            shareToken,
+        });
+
+        // Should return contentKey (default for share links)
+        expect(response.keys["bodytext"]).toBeDefined();
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+
+        // Decrypt the content
+        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
+        const sealData = result.dcaData.contentSealData["bodytext"];
+        const decrypted = await decryptContent(
+            fromBase64Url(result.sealedContent["bodytext"]),
+            contentKeyBytes,
+            fromBase64Url(sealData.nonce),
+            encodeUtf8(sealData.aad),
+        );
+        expect(decodeUtf8(decrypted)).toBe("<p>Shared premium content</p>");
+    });
+
+    it("share link token works with periodKey delivery mode", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "share-pk.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "shared-pk-1",
+            contentItems: [
+                { contentName: "bodytext", content: "Period key shared content" },
+            ],
+            issuers: [{
+                issuerName: "share-pk-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "spk-1",
+                unlockUrl: "https://share-pk.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "shared-pk-1",
+            contentNames: ["bodytext"],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "share-pk-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "spk-1",
+            trustedPublisherKeys: {
+                "share-pk.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        const response = await issuer.unlockWithShareToken(
+            {
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["share-pk-issuer"],
+                sealed: result.dcaData.issuerData["share-pk-issuer"].sealed,
+                keyId: "spk-1",
+                issuerName: "share-pk-issuer",
+                shareToken,
+            },
+            { deliveryMode: "periodKey" },
+        );
+
+        // Should return periodKeys
+        expect(response.keys["bodytext"].periodKeys).toBeDefined();
+        expect(response.keys["bodytext"].contentKey).toBeUndefined();
+
+        // Unwrap contentKey from sealedContentKeys using periodKey
+        const periodKeys = response.keys["bodytext"].periodKeys!;
+        const sealedContentKeys = result.dcaData.sealedContentKeys["bodytext"];
+        let contentKeyBytes: Uint8Array | null = null;
+
+        for (const entry of sealedContentKeys) {
+            const pkB64 = periodKeys[entry.t];
+            if (!pkB64) continue;
+
+            const periodKeyBytes = fromBase64Url(pkB64);
+            const nonce = fromBase64Url(entry.nonce);
+            const wrappedKey = fromBase64Url(entry.key);
+
+            const decryptedKey = await aesGcmDecrypt(wrappedKey, periodKeyBytes, nonce);
+            contentKeyBytes = decryptedKey;
+            break;
+        }
+
+        expect(contentKeyBytes).not.toBeNull();
+
+        // Decrypt content
+        const sealData = result.dcaData.contentSealData["bodytext"];
+        const decrypted = await decryptContent(
+            fromBase64Url(result.sealedContent["bodytext"]),
+            contentKeyBytes!,
+            fromBase64Url(sealData.nonce),
+            encodeUtf8(sealData.aad),
+        );
+        expect(decodeUtf8(decrypted)).toBe("Period key shared content");
+    });
+
+    it("rejects expired share link tokens", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "expire.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "expired-article",
+            contentItems: [
+                { contentName: "bodytext", content: "Expired content" },
+            ],
+            issuers: [{
+                issuerName: "expire-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "ek-1",
+                unlockUrl: "https://expire.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        // Create an already-expired token
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "expired-article",
+            contentNames: ["bodytext"],
+            expiresIn: -1, // already expired
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "expire-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "ek-1",
+            trustedPublisherKeys: {
+                "expire.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        await expect(
+            issuer.unlockWithShareToken({
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["expire-issuer"],
+                sealed: result.dcaData.issuerData["expire-issuer"].sealed,
+                keyId: "ek-1",
+                issuerName: "expire-issuer",
+                shareToken,
+            }),
+        ).rejects.toThrow(/expired/);
+    });
+
+    it("rejects share token for wrong resourceId", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "mismatch.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "article-A",
+            contentItems: [
+                { contentName: "bodytext", content: "Article A content" },
+            ],
+            issuers: [{
+                issuerName: "mm-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "mm-1",
+                unlockUrl: "https://mm.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        // Create token for a different article
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "article-B", // Wrong!
+            contentNames: ["bodytext"],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "mm-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "mm-1",
+            trustedPublisherKeys: {
+                "mismatch.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        await expect(
+            issuer.unlockWithShareToken({
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["mm-issuer"],
+                sealed: result.dcaData.issuerData["mm-issuer"].sealed,
+                keyId: "mm-1",
+                issuerName: "mm-issuer",
+                shareToken,
+            }),
+        ).rejects.toThrow(/resourceId mismatch/);
+    });
+
+    it("rejects share token signed by untrusted publisher", async () => {
+        const keys = await generateTestKeys();
+        const evilKeys = await generateTestKeys(); // Different signing key
+
+        const publisher = createDcaPublisher({
+            domain: "trusted.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const evilPublisher = createDcaPublisher({
+            domain: "trusted.example.com", // Claims to be trusted
+            signingKeyPem: evilKeys.signingPems.privateKeyPem,
+            periodSecret: evilKeys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "article-trust",
+            contentItems: [
+                { contentName: "bodytext", content: "Trusted content" },
+            ],
+            issuers: [{
+                issuerName: "trust-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "tk-1",
+                unlockUrl: "https://trust.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        // Evil publisher signs a share token
+        const evilShareToken = await evilPublisher.createShareLinkToken({
+            resourceId: "article-trust",
+            contentNames: ["bodytext"],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "trust-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "tk-1",
+            trustedPublisherKeys: {
+                "trusted.example.com": keys.signingPems.publicKeyPem, // Only trusts real key
+            },
+        });
+
+        await expect(
+            issuer.unlockWithShareToken({
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["trust-issuer"],
+                sealed: result.dcaData.issuerData["trust-issuer"].sealed,
+                keyId: "tk-1",
+                issuerName: "trust-issuer",
+                shareToken: evilShareToken,
+            }),
+        ).rejects.toThrow(/signature/i);
+    });
+
+    it("rejects unlock when no shareToken provided", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "noshare.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "article-noshare",
+            contentItems: [
+                { contentName: "bodytext", content: "No share content" },
+            ],
+            issuers: [{
+                issuerName: "ns-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "ns-1",
+                unlockUrl: "https://ns.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "ns-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "ns-1",
+            trustedPublisherKeys: {
+                "noshare.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        await expect(
+            issuer.unlockWithShareToken({
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["ns-issuer"],
+                sealed: result.dcaData.issuerData["ns-issuer"].sealed,
+                keyId: "ns-1",
+                issuerName: "ns-issuer",
+                // no shareToken
+            }),
+        ).rejects.toThrow(/shareToken/);
+    });
+
+    it("share token only grants specified content names", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "partial.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "partial-article",
+            contentItems: [
+                { contentName: "preview", content: "Preview text" },
+                { contentName: "bodytext", content: "Full body text" },
+                { contentName: "bonus", content: "Bonus content" },
+            ],
+            issuers: [{
+                issuerName: "partial-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "pk-1",
+                unlockUrl: "https://partial.test/unlock",
+                contentNames: ["preview", "bodytext", "bonus"],
+            }],
+        });
+
+        // Share token only grants access to "preview" and "bodytext", not "bonus"
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "partial-article",
+            contentNames: ["preview", "bodytext"],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "partial-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "pk-1",
+            trustedPublisherKeys: {
+                "partial.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        const response = await issuer.unlockWithShareToken({
+            resource: result.dcaData.resource,
+            resourceJWT: result.dcaData.resourceJWT,
+            issuerJWT: result.dcaData.issuerJWT["partial-issuer"],
+            sealed: result.dcaData.issuerData["partial-issuer"].sealed,
+            keyId: "pk-1",
+            issuerName: "partial-issuer",
+            shareToken,
+        });
+
+        // Should only grant preview and bodytext
+        expect(Object.keys(response.keys).sort()).toEqual(["bodytext", "preview"]);
+        expect(response.keys["bonus"]).toBeUndefined();
+
+        // Verify both decrypt correctly
+        for (const [name, expected] of [
+            ["preview", "Preview text"],
+            ["bodytext", "Full body text"],
+        ] as const) {
+            const ck = fromBase64Url(response.keys[name].contentKey!);
+            const seal = result.dcaData.contentSealData[name];
+            const decrypted = await decryptContent(
+                fromBase64Url(result.sealedContent[name]),
+                ck,
+                fromBase64Url(seal.nonce),
+                encodeUtf8(seal.aad),
+            );
+            expect(decodeUtf8(decrypted)).toBe(expected);
+        }
+    });
+
+    it("supports onShareToken callback for use-count tracking", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "callback.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "callback-article",
+            contentItems: [
+                { contentName: "bodytext", content: "Callback content" },
+            ],
+            issuers: [{
+                issuerName: "cb-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "cb-1",
+                unlockUrl: "https://cb.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "callback-article",
+            contentNames: ["bodytext"],
+            maxUses: 5,
+            jti: "share-token-001",
+            data: { sharedBy: "user-42" },
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "cb-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "cb-1",
+            trustedPublisherKeys: {
+                "callback.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        let callbackInvoked = false;
+        let receivedPayload: unknown = null;
+
+        const response = await issuer.unlockWithShareToken(
+            {
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["cb-issuer"],
+                sealed: result.dcaData.issuerData["cb-issuer"].sealed,
+                keyId: "cb-1",
+                issuerName: "cb-issuer",
+                shareToken,
+            },
+            {
+                onShareToken: (payload, _resource) => {
+                    callbackInvoked = true;
+                    receivedPayload = payload;
+                },
+            },
+        );
+
+        expect(callbackInvoked).toBe(true);
+        const p = receivedPayload as { type: string; jti: string; maxUses: number; data: Record<string, unknown> };
+        expect(p.type).toBe("dca-share");
+        expect(p.jti).toBe("share-token-001");
+        expect(p.maxUses).toBe(5);
+        expect(p.data).toEqual({ sharedBy: "user-42" });
+
+        // Verify decryption works
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+    });
+
+    it("onShareToken callback can reject the request", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "reject.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "rejected-article",
+            contentItems: [
+                { contentName: "bodytext", content: "Rejected content" },
+            ],
+            issuers: [{
+                issuerName: "rj-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "rj-1",
+                unlockUrl: "https://rj.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "rejected-article",
+            contentNames: ["bodytext"],
+            maxUses: 1,
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "rj-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "rj-1",
+            trustedPublisherKeys: {
+                "reject.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        await expect(
+            issuer.unlockWithShareToken(
+                {
+                    resource: result.dcaData.resource,
+                    resourceJWT: result.dcaData.resourceJWT,
+                    issuerJWT: result.dcaData.issuerJWT["rj-issuer"],
+                    sealed: result.dcaData.issuerData["rj-issuer"].sealed,
+                    keyId: "rj-1",
+                    issuerName: "rj-issuer",
+                    shareToken,
+                },
+                {
+                    onShareToken: () => {
+                        throw new Error("Share link usage limit exceeded");
+                    },
+                },
+            ),
+        ).rejects.toThrow("Share link usage limit exceeded");
+    });
+
+    it("verifyShareToken standalone method", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "verify.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const shareToken = await publisher.createShareLinkToken({
+            resourceId: "verify-article",
+            contentNames: ["bodytext", "sidebar"],
+            expiresIn: 3600,
+            jti: "verify-token-id",
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "v-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "v-1",
+            trustedPublisherKeys: {
+                "verify.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        const payload = await issuer.verifyShareToken(shareToken, "verify.example.com");
+
+        expect(payload.type).toBe("dca-share");
+        expect(payload.domain).toBe("verify.example.com");
+        expect(payload.resourceId).toBe("verify-article");
+        expect(payload.contentNames).toEqual(["bodytext", "sidebar"]);
+        expect(payload.jti).toBe("verify-token-id");
+        expect(payload.exp).toBeGreaterThan(payload.iat);
+    });
+
+    describe("rejects malformed timestamp claims", () => {
+        /**
+         * Helper: craft a share-link token JWT with arbitrary payload,
+         * signed by the publisher's real key (so the signature is valid).
+         */
+        async function craftShareToken(
+            signingKeyPem: string,
+            payloadOverrides: Record<string, unknown>,
+        ): Promise<string> {
+            const now = Math.floor(Date.now() / 1000);
+            const base = {
+                type: "dca-share",
+                domain: "malformed.example.com",
+                resourceId: "malformed-article",
+                contentNames: ["bodytext"],
+                iat: now,
+                exp: now + 3600,
+            };
+            return createJwt({ ...base, ...payloadOverrides }, signingKeyPem);
+        }
+
+        async function makeIssuer() {
+            const keys = await generateTestKeys();
+            const issuer = createDcaIssuer({
+                issuerName: "mf-issuer",
+                privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+                keyId: "mf-1",
+                trustedPublisherKeys: {
+                    "malformed.example.com": keys.signingPems.publicKeyPem,
+                },
+            });
+            return { issuer, keys };
+        }
+
+        it("rejects missing exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: undefined,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects missing iat", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                iat: undefined,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/iat must be a finite number/);
+        });
+
+        it("rejects string exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: "9999999999",
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects string iat", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                iat: "0",
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/iat must be a finite number/);
+        });
+
+        it("rejects NaN exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            // NaN survives JSON round-trip as null, but let's test explicitly
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: null,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects Infinity exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            // Infinity serializes to null in JSON
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: null,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects object exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: { valueOf: 9999999999 },
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+
+        it("rejects boolean exp", async () => {
+            const { issuer, keys } = await makeIssuer();
+            const token = await craftShareToken(keys.signingPems.privateKeyPem, {
+                exp: true,
+            });
+            await expect(
+                issuer.verifyShareToken(token, "malformed.example.com"),
+            ).rejects.toThrow(/exp must be a finite number/);
+        });
+    });
+});

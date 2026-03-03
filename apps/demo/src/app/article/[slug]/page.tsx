@@ -1,10 +1,8 @@
 import { notFound } from "next/navigation";
 import { getArticle, getAllArticleIds } from "@/lib/articles";
-import { getEncryptedArticle } from "@/lib/server-encryption";
+import { renderDcaArticle } from "@/lib/server-encryption";
 import { EncryptedSection } from "@/components/EncryptedSection";
 import { DemoLayout } from "@/components/DemoLayout";
-import { KeyManager } from "@/components/KeyManager";
-import { ShareButton } from "@/components/ShareButton";
 
 /** Opt out of static generation — secrets are not available at build time */
 export const dynamic = "force-dynamic";
@@ -21,43 +19,31 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
     notFound();
   }
 
-  // Get the pre-encrypted content for SSR embedding (now async)
-  const encryptedData = await getEncryptedArticle(slug);
-
-  // Format encrypted data as readable JSON for view-source
-  const formattedEncryptedData = encryptedData
-    ? JSON.stringify(encryptedData, null, 2)
-    : null;
+  // Render DCA-encrypted content server-side
+  const dcaResult = await renderDcaArticle(slug);
 
   return (
     <DemoLayout>
       {/* 
         ============================================================
-        CAPSULE ENCRYPTED ARTICLE
+        DCA ENCRYPTED ARTICLE
         ============================================================
-        This page demonstrates the Capsule encryption standard.
-        The encrypted content below is embedded at build/request time.
+        This page demonstrates the DCA (Delegated Content Access) standard.
+        The encrypted content below is embedded at request time.
         Decryption happens client-side using Web Crypto API.
         ============================================================
       */}
 
-      {/* Encrypted data embedded as readable JSON for demonstration */}
-      {formattedEncryptedData && (
-        <script
-          id="capsule-encrypted-data"
-          type="application/json"
-          data-article-id={article.id}
+      {/* DCA data script + sealed content template embedded as standard DCA HTML */}
+      {dcaResult && (
+        <div
           dangerouslySetInnerHTML={{
-            __html: `\n${formattedEncryptedData}\n`,
+            __html: dcaResult.result.html.dcaDataScript + dcaResult.result.html.sealedContentTemplate,
           }}
         />
       )}
 
       <main className="article-page">
-        <div className="key-manager-container">
-          <KeyManager />
-        </div>
-
         <article>
           <header className="article-header">
             <h1>{article.title}</h1>
@@ -81,37 +67,12 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
           </section>
 
           <section className="premium-section">
-            {/* Encrypted content embedded in the page for offline/cached decryption */}
+            {/* DCA client-side decryption component */}
             <EncryptedSection
               resourceId={article.id}
-              encryptedData={encryptedData}
+              contentName={dcaResult?.tier ?? "TierA"}
+              hasEncryptedContent={!!dcaResult}
             />
-          </section>
-
-          <section
-            className="share-section"
-            style={{
-              marginTop: "2rem",
-              padding: "1rem",
-              background: "var(--border)",
-              borderRadius: "8px",
-            }}
-          >
-            <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-              🔗 Share This Article
-            </h3>
-            <p
-              style={{
-                fontSize: "0.9rem",
-                color: "var(--muted)",
-                marginBottom: "1rem",
-              }}
-            >
-              Generate a pre-signed link to share this article on social media
-              or via email. Recipients can unlock the content without logging
-              in.
-            </p>
-            <ShareButton resourceId={article.id} />
           </section>
         </article>
       </main>

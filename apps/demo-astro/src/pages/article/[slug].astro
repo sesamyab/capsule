@@ -1,18 +1,18 @@
 ---
 /**
- * Article Page - Demonstrates clean Capsule HTML output
+ * Article Page - DCA Encrypted Content
  * 
- * Uses the @sesamy/capsule client for decryption with the high-level API.
+ * Uses the DCA publisher for server-side encryption and DcaClient for
+ * client-side decryption.
  * 
  * View Page Source to see:
- * - Well-formatted HTML structure
- * - Encrypted data in data-capsule attribute (JSON)
- * - Standard HTML elements for the Capsule client
+ * - script.dca-data with signed JWTs and sealed keys
+ * - template.dca-sealed-content with AES-256-GCM ciphertext
  */
 
 import Layout from "../../layouts/Layout.astro";
 import { getArticle } from "../../lib/articles";
-import { encryptArticleContent } from "../../lib/encryption";
+import { renderDcaArticle, DEMO_ISSUER_NAME } from "../../lib/encryption";
 
 // Get article from URL
 const { slug } = Astro.params;
@@ -22,33 +22,35 @@ if (!article) {
   return Astro.redirect("/404");
 }
 
-// Pre-encrypt the content server-side (now async)
-const encryptedData = await encryptArticleContent(
+// Pre-encrypt the content server-side using DCA publisher
+const dcaResult = await renderDcaArticle(
   article.id,
   article.premiumContent,
-  "premium"
+  "bodytext"
 );
 ---
 
-<Layout title={`${article.title} - Capsule Demo`}>
+<Layout title={`${article.title} - DCA Demo`}>
   <!-- 
   ============================================================
-  CAPSULE ENCRYPTED ARTICLE
+  DCA ENCRYPTED ARTICLE
   ============================================================
-  This page demonstrates the Capsule encryption standard.
+  This page demonstrates the DCA (Delegated Content Access) standard.
   
-  Uses @sesamy/capsule client with high-level API:
-  - Auto key generation (RSA-2048)
-  - Automatic content key caching and renewal
-  - Script execution in decrypted content
-  - Custom events for unlock lifecycle
+  Uses @sesamy/capsule DcaClient:
+  - Parses dca-data script and sealed content from DOM
+  - Calls issuer /api/unlock endpoint to get period keys
+  - Decrypts content locally with AES-256-GCM + AAD
   
-  View source to see the clean HTML structure!
+  View source to see the clean DCA HTML structure!
   ============================================================
   -->
 
+  <!-- DCA data and sealed content embedded by publisher -->
+  <Fragment set:html={dcaResult.html.dcaDataScript + dcaResult.html.sealedContentTemplate} />
+
   <main class="article-page">
-    <article data-capsule-article={article.id}>
+    <article>
       
       <!-- Article Header (always visible) -->
       <header class="article-header">
@@ -73,36 +75,12 @@ const encryptedData = await encryptArticleContent(
         ))}
       </section>
 
-      <!-- 
-      ============================================================
-      CAPSULE ENCRYPTED CONTENT
-      ============================================================
-      The data-capsule attribute contains the encrypted article in JSON:
-      - contentId: Unique identifier
-      - encryptedContent: AES-256-GCM ciphertext (Base64)
-      - iv: Initialization vector (Base64)
-      - wrappedKeys: Array of wrapped content keys for different access levels
-      
-      The @sesamy/capsule client will:
-      1. Find this element by data-capsule attribute
-      2. Parse the encrypted data
-      3. Call the unlock function to get the content key
-      4. Decrypt and render the content
-      5. Execute any embedded scripts
-      6. Emit 'capsule:unlock' event
-      ============================================================
-      -->
-      <section 
-        class="encrypted-section" 
-        id={`capsule-${article.id}`}
-        data-capsule={JSON.stringify(encryptedData)}
-        data-capsule-id={article.id}
-      >
-        <!-- Locked State (shown before decryption) -->
+      <!-- Encrypted content section -->
+      <section class="encrypted-section" id={`dca-${article.id}`}>
         <div class="locked-overlay" id="locked-state">
           <div class="lock-icon">🔐</div>
           <h3>Premium Content</h3>
-          <p>This content is encrypted. Unlock to read.</p>
+          <p>This content is encrypted with DCA. Unlock to read.</p>
           <button class="unlock-button" id="unlock-btn">
             Unlock Article
           </button>
@@ -112,21 +90,14 @@ const encryptedData = await encryptArticleContent(
     </article>
   </main>
 
-  <!-- 
-  ============================================================
-  CAPSULE CLIENT INITIALIZATION
-  ============================================================
-  Using the @sesamy/capsule high-level API:
-  - Automatic key pair management
-  - Built-in content key caching
-  - Event-based notifications
-  ============================================================
-  -->
+  <!-- DCA Client Initialization -->
+  <script define:vars={{ issuerName: DEMO_ISSUER_NAME }}>
+    // Inline the issuerName from server
+    window.__DCA_ISSUER_NAME__ = issuerName;
+  </script>
   <script>
-    import { CapsuleClient } from '@sesamy/capsule';
-    import type { UnlockFunction } from '@sesamy/capsule';
+    import { DcaClient } from '@sesamy/capsule';
 
-    // Console logging helper
     function log(message: string, type = 'info') {
       const body = document.getElementById('console-body');
       if (body) {
@@ -136,96 +107,68 @@ const encryptedData = await encryptArticleContent(
         body.appendChild(line);
         body.scrollTop = body.scrollHeight;
       }
-      console.log(`[Capsule] ${message}`);
+      console.log(`[DCA] ${message}`);
     }
 
-    // Unlock function - called by the client to fetch encrypted DEK
-    const unlock: UnlockFunction = async ({ keyId, wrappedContentKey, publicKey, resourceId }) => {
-      log(`Requesting content key for ${keyId}...`, 'info');
-      
-      const response = await fetch('/api/unlock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyId, wrappedContentKey, publicKey, resourceId }),
-      });
+    const issuerName = (window as any).__DCA_ISSUER_NAME__ || 'sesamy-astro-demo';
+    const client = new DcaClient();
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || `Server returned ${response.status}`);
-      }
+    log('DCA client initialized', 'info');
 
-      const data = await response.json();
-      log(`Received encrypted DEK (expires: ${data.expiresAt})`, 'success');
-      return data;
-    };
+    // Parse DCA data from the page
+    let page: ReturnType<typeof client.parsePage> | null = null;
+    try {
+      page = client.parsePage();
+      const contentNames = Object.keys(page.dcaData.contentSealData);
+      log(`Found DCA data: ${contentNames.length} content item(s)`, 'info');
+      log(`Resource: ${page.dcaData.resource.resourceId}`, 'info');
+    } catch (e) {
+      log('No DCA data found on page', 'error');
+    }
 
-    // Initialize the Capsule client
-    const capsule = new CapsuleClient({
-      unlock,
-      executeScripts: true,
-      contentKeyStorage: 'persist',
-      logger: (msg, level) => log(msg, level === 'error' ? 'error' : level === 'debug' ? 'crypto' : 'info'),
-    });
-
-    // Get article ID from the encrypted section
-    const encryptedSection = document.querySelector('[data-capsule]') as HTMLElement;
-    const resourceId = encryptedSection?.dataset.capsuleId;
-
-    // Listen for unlock events
-    document.addEventListener('capsule:unlock', (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      log(`✨ Content unlocked using ${detail.keyId}!`, 'success');
-      
-      // Update UI
-      const section = document.querySelector('.encrypted-section');
-      section?.classList.add('unlocked');
-      
-      // Add unlock banner
-      const banner = document.createElement('div');
-      banner.className = 'unlock-banner';
-      banner.innerHTML = '✓ Premium Content Unlocked';
-      section?.insertBefore(banner, section.firstChild);
-      
-      // Hide locked state
-      const lockedState = document.getElementById('locked-state');
-      if (lockedState) lockedState.style.display = 'none';
-    });
-
-    document.addEventListener('capsule:error', (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      log(`Error: ${detail.error.message}`, 'error');
-      
-      const btn = document.getElementById('unlock-btn') as HTMLButtonElement;
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Retry';
-      }
-    });
-
-    document.addEventListener('capsule:state', (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      log(`State: ${detail.previousState} → ${detail.state}`, 'info');
-    });
-
-    // Handle unlock button click
     const unlockBtn = document.getElementById('unlock-btn');
     unlockBtn?.addEventListener('click', async () => {
+      if (!page) return;
+
       const btn = unlockBtn as HTMLButtonElement;
       btn.disabled = true;
       btn.textContent = 'Unlocking...';
 
       try {
-        if (resourceId) {
-          await capsule.unlockElement(resourceId);
+        log(`Requesting keys from issuer "${issuerName}"...`, 'info');
+        const keys = await client.unlock(page, issuerName);
+        log('Keys received, decrypting...', 'success');
+
+        const html = await client.decrypt(page, 'bodytext', keys);
+        log(`Content decrypted (${html.length} chars)`, 'success');
+
+        // Replace locked state with decrypted content
+        const section = document.querySelector('.encrypted-section');
+        if (section) {
+          section.classList.add('unlocked');
+          const lockedState = document.getElementById('locked-state');
+          if (lockedState) lockedState.style.display = 'none';
+
+          const banner = document.createElement('div');
+          banner.className = 'unlock-banner';
+          banner.innerHTML = '🔓 Content decrypted via DCA';
+          section.insertBefore(banner, section.firstChild);
+
+          const content = document.createElement('div');
+          content.className = 'premium-content';
+          content.innerHTML = html;
+          section.appendChild(content);
         }
+
+        log('✨ Article unlocked!', 'success');
       } catch (error) {
-        // Error event will handle UI update
-        console.error('Unlock failed:', error);
+        const msg = error instanceof Error ? error.message : 'Unlock failed';
+        log(`Error: ${msg}`, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Retry';
       }
     });
 
-    // Log on page load
-    log('Capsule client initialized. Click "Unlock Article" to decrypt.', 'info');
-    log(`Article ID: ${resourceId}`, 'info');
+    log('Click "Unlock Article" to decrypt.', 'info');
   </script>
 </Layout>

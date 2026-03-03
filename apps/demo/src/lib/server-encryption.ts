@@ -1,55 +1,64 @@
 /**
- * Server-side encryption utilities using @sesamy/capsule-server.
+ * Server-side DCA content encryption for the demo.
  *
- * This is a thin wrapper that provides the encrypted article data
- * for the demo pages. The actual encryption is handled by CmsServer.
+ * Uses createDcaPublisher to encrypt articles with:
+ * - Local periodKey derivation (HKDF from periodSecret, zero network calls)
+ * - ECDH P-256 key sealing for the issuer
+ * - ES256 JWT signing
+ * - AAD (Additional Authenticated Data) binding
  */
 
-import { getCms, PERIOD_DURATION_SECONDS } from "./capsule";
-import { hasArticleKey } from "./encryption-keys";
-import type { EncryptedArticle } from "@sesamy/capsule-server";
+import {
+  getPublisher,
+  getIssuerPublicKeyPem,
+  DEMO_ISSUER_NAME,
+  DEMO_KEY_ID,
+} from "./capsule";
+import type { DcaRenderResult } from "@sesamy/capsule-server";
 
-// Re-export types for consumers
-export type { EncryptedArticle };
+// Re-export for consumers
+export type { DcaRenderResult };
 
 /**
- * Cache for encrypted articles, keyed by resourceId.
- * Each entry includes the period ID it was encrypted for.
+ * Cache for rendered DCA articles, keyed by resourceId.
+ * Each entry includes the hour it was rendered for.
  */
-interface CachedEncryption {
-  data: EncryptedArticle;
-  periodId: string;
+interface CachedRender {
+  data: DcaRenderResult;
+  tier: string;
+  hourBucket: string;
 }
-const encryptionCache = new Map<string, CachedEncryption>();
+const renderCache = new Map<string, CachedRender>();
 
 /**
- * Get the current time period ID.
+ * Get the current hour bucket for cache invalidation.
  */
-function getCurrentPeriodId(): string {
-  const now = Math.floor(Date.now() / 1000);
-  return String(Math.floor(now / PERIOD_DURATION_SECONDS));
+function getCurrentHourBucket(): string {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}`;
 }
 
 /**
- * Get encrypted article for display.
+ * Render a DCA-encrypted article for display.
  *
- * Uses the high-level CmsServer API to encrypt content with:
- * - Current and next period keys for the content name (handles clock drift)
- * - Article-specific key if available (for per-article purchases)
+ * Uses the DCA publisher to:
+ * 1. Generate a random contentKey for this render
+ * 2. Encrypt content with AES-256-GCM + AAD
+ * 3. Derive periodKeys and wrap contentKey with them
+ * 4. Seal contentKey and periodKeys for the demo issuer
+ * 5. Sign resourceJWT and issuerJWT (ES256)
  *
- * Caches the encrypted content within a key rotation period so that:
- * - Page refreshes don't break client-side content key caching
- * - The same content key is used consistently within a time window
+ * Returns the full DcaRenderResult with HTML strings ready to embed.
  */
-export async function getEncryptedArticle(
-  resourceId: string
-): Promise<EncryptedArticle | null> {
-  const currentPeriod = getCurrentPeriodId();
+export async function renderDcaArticle(
+  resourceId: string,
+): Promise<{ result: DcaRenderResult; tier: string } | null> {
+  const hourBucket = getCurrentHourBucket();
 
-  // Check cache - reuse if same period
-  const cached = encryptionCache.get(resourceId);
-  if (cached && cached.periodId === currentPeriod) {
-    return cached.data;
+  // Check cache - reuse if same hour
+  const cached = renderCache.get(resourceId);
+  if (cached && cached.hourBucket === hourBucket) {
+    return { result: cached.data, tier: cached.tier };
   }
 
   // Import articles here to avoid circular dependency
@@ -60,23 +69,41 @@ export async function getEncryptedArticle(
     return null;
   }
 
-  // Build key IDs list
-  const keyIds = ["premium"];
-  if (hasArticleKey(resourceId)) {
-    keyIds.push(`article:${resourceId}`);
-  }
+  const publisher = await getPublisher();
+  const issuerPublicKeyPem = await getIssuerPublicKeyPem();
 
-  // Use CmsServer to encrypt with key IDs
-  const encrypted = await getCms().encrypt(resourceId, article.premiumContent, {
-    keyIds,
-    contentId: "premium",
+  const unlockUrl = "/api/unlock";
+
+  const result = await publisher.render({
+    resourceId,
+    contentItems: [
+      {
+        contentName: article.tier,
+        content: article.premiumContent,
+        contentType: "text/html",
+      },
+    ],
+    issuers: [
+      {
+        issuerName: DEMO_ISSUER_NAME,
+        publicKeyPem: issuerPublicKeyPem,
+        keyId: DEMO_KEY_ID,
+        unlockUrl,
+        contentNames: [article.tier],
+      },
+    ],
+    resourceData: {
+      title: article.title,
+      author: article.author,
+    },
   });
 
-  // Cache for this rotation period
-  encryptionCache.set(resourceId, {
-    data: encrypted,
-    periodId: currentPeriod,
+  // Cache for this hour
+  renderCache.set(resourceId, {
+    data: result,
+    tier: article.tier,
+    hourBucket,
   });
 
-  return encrypted;
+  return { result, tier: article.tier };
 }
