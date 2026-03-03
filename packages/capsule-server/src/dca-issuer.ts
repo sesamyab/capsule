@@ -386,16 +386,18 @@ async function verifyRequest(
     return { resource, issuerPayload };
 }
 
-async function processUnlock(
+/**
+ * Shared unseal-and-respond helper used by both the normal unlock path and the
+ * share-link unlock path.  Centralising this logic avoids drift when
+ * transport/security behaviour changes.
+ */
+async function unsealAndRespond(
     config: DcaIssuerServerConfig,
-    publisherMap: NormalisedPublisherMap,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
     request: DcaUnlockRequest,
-    accessDecision: DcaAccessDecision,
+    grantedContentNames: string[],
+    deliveryMode: "contentKey" | "periodKey",
 ): Promise<DcaUnlockResponse> {
-    // Verify everything first
-    await verifyRequest(config, publisherMap, request);
-
     // Verify keyId matches
     if (request.keyId !== config.keyId) {
         throw new Error(`keyId mismatch: expected "${config.keyId}", got "${request.keyId}"`);
@@ -414,25 +416,23 @@ async function processUnlock(
     // Unseal granted content items
     const keys: Record<string, DcaUnlockedKeys> = {};
 
-    for (const contentName of accessDecision.grantedContentNames) {
+    for (const contentName of grantedContentNames) {
         const sealedEntry = request.sealed[contentName];
         if (!sealedEntry) {
             throw new Error(`No sealed data for content item "${contentName}"`);
         }
 
-        if (accessDecision.deliveryMode === "contentKey") {
+        if (deliveryMode === "contentKey") {
             // Direct path: unseal and return contentKey
             if (!sealedEntry.contentKey) {
                 throw new Error(`Missing sealed contentKey for content item "${contentName}"`);
             }
             const contentKeyBytes = await unseal(sealedEntry.contentKey, privateKey, algorithm);
-            const result: DcaUnlockedKeys = {
+            keys[contentName] = {
                 contentKey: clientBound
                     ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, contentKeyBytes))
                     : toBase64Url(contentKeyBytes),
             };
-
-            keys[contentName] = result;
         } else {
             // Cacheable path: unseal and return periodKeys
             if (!sealedEntry.periodKeys || typeof sealedEntry.periodKeys !== "object") {
@@ -453,6 +453,25 @@ async function processUnlock(
         keys,
         ...(clientBound ? { transport: "client-bound" as const } : {}),
     };
+}
+
+async function processUnlock(
+    config: DcaIssuerServerConfig,
+    publisherMap: NormalisedPublisherMap,
+    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
+    request: DcaUnlockRequest,
+    accessDecision: DcaAccessDecision,
+): Promise<DcaUnlockResponse> {
+    // Verify everything first
+    await verifyRequest(config, publisherMap, request);
+
+    return unsealAndRespond(
+        config,
+        getPrivateKey,
+        request,
+        accessDecision.grantedContentNames,
+        accessDecision.deliveryMode,
+    );
 }
 
 // ============================================================================
@@ -564,52 +583,14 @@ async function processShareLinkUnlock(
         );
     }
 
-    // 7. Verify keyId matches
-    if (request.keyId !== config.keyId) {
-        throw new Error(`keyId mismatch: expected "${config.keyId}", got "${request.keyId}"`);
-    }
-
-    // 8. Delegate to the normal unlock machinery
-    const { key: privateKey, algorithm } = await getPrivateKey();
-    const clientBound = !!request.clientPublicKey;
-    let clientRsaPubKey: WebCryptoKey | null = null;
-    if (clientBound) {
-        clientRsaPubKey = await importRsaPublicKey(fromBase64Url(request.clientPublicKey!));
-    }
-
+    // 7. Delegate to the shared unseal-and-respond helper
     const deliveryMode = options?.deliveryMode ?? "contentKey";
-    const keys: Record<string, DcaUnlockedKeys> = {};
 
-    for (const contentName of grantedContentNames) {
-        const sealedEntry = request.sealed[contentName]!;
-
-        if (deliveryMode === "contentKey") {
-            if (!sealedEntry.contentKey) {
-                throw new Error(`Missing sealed contentKey for content item "${contentName}"`);
-            }
-            const contentKeyBytes = await unseal(sealedEntry.contentKey, privateKey, algorithm);
-            keys[contentName] = {
-                contentKey: clientBound
-                    ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, contentKeyBytes))
-                    : toBase64Url(contentKeyBytes),
-            };
-        } else {
-            if (!sealedEntry.periodKeys || typeof sealedEntry.periodKeys !== "object") {
-                throw new Error(`Missing or invalid sealed periodKeys for content item "${contentName}"`);
-            }
-            const periodKeys: Record<string, string> = {};
-            for (const [t, sealedPeriodKey] of Object.entries(sealedEntry.periodKeys)) {
-                const periodKeyBytes = await unseal(sealedPeriodKey, privateKey, algorithm);
-                periodKeys[t] = clientBound
-                    ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, periodKeyBytes))
-                    : toBase64Url(periodKeyBytes);
-            }
-            keys[contentName] = { periodKeys };
-        }
-    }
-
-    return {
-        keys,
-        ...(clientBound ? { transport: "client-bound" as const } : {}),
-    };
+    return unsealAndRespond(
+        config,
+        getPrivateKey,
+        request,
+        grantedContentNames,
+        deliveryMode,
+    );
 }
