@@ -1,5 +1,6 @@
 /**
  * Sample articles for the demo.
+ * In a real app, these would come from a database.
  */
 
 export interface Article {
@@ -9,6 +10,8 @@ export interface Article {
   publishedAt: string;
   previewContent: string;
   premiumContent: string;
+  /** Content tier — articles sharing a tier share period keys (e.g. "TierA", "TierB") */
+  tier: string;
 }
 
 export const articles: Record<string, Article> = {
@@ -17,13 +20,15 @@ export const articles: Record<string, Article> = {
     title: "The Complete Guide to Web Security",
     author: "Alex Security",
     publishedAt: "2026-01-15",
+    tier: "TierA",
     previewContent: `Web security is one of the most critical aspects of modern software development. 
 As our digital lives become increasingly interconnected, understanding how to protect 
 user data and maintain system integrity has never been more important.
 
 In this comprehensive guide, we'll explore the fundamental concepts of web security,
 from encryption basics to advanced threat mitigation strategies.`,
-    premiumContent: `## Chapter 1: The Foundation of Security
+    premiumContent: `
+## Chapter 1: The Foundation of Security
 
 Security begins with understanding the threat landscape. Modern web applications 
 face a variety of attack vectors, including:
@@ -67,20 +72,94 @@ This is exactly what Capsule implements! Envelope encryption combines the best o
 3. Encrypt the content key with the recipient's public key (secure key exchange)
 4. Send both the encrypted data and encrypted DEK
 
+The recipient can then:
+1. Decrypt the content key using their private key
+2. Decrypt the data using the content key
+
+This approach provides the efficiency of symmetric encryption with the key management 
+benefits of asymmetric encryption.
+
 ---
 
-**Congratulations!** You've just decrypted this content using envelope encryption.`,
+**Congratulations!** You've just decrypted this content using envelope encryption.
+Your private key never left your browser, and this specific content was encrypted
+just for you with a unique key.
+
+<div id="confetti-container"></div>
+<script>
+(function() {
+  const confetti = ['🎊', '✨', '🌟', '💫', '🎉', '🔐', '🔑'];
+  const container = document.getElementById('confetti-container');
+  
+  // Add keyframe animation if not exists
+  if (!document.getElementById('confetti-style')) {
+    const style = document.createElement('style');
+    style.id = 'confetti-style';
+    style.textContent = \`
+      @keyframes confetti-fall {
+        0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+        100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+      }
+      .confetti-piece {
+        position: fixed;
+        font-size: 24px;
+        z-index: 1000;
+        pointer-events: none;
+        animation: confetti-fall 3s ease-in forwards;
+      }
+      .unlock-celebration {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-top: 1rem;
+        text-align: center;
+      }
+      .unlock-celebration .time {
+        font-size: 0.9em;
+        opacity: 0.9;
+      }
+    \`;
+    document.head.appendChild(style);
+  }
+  
+  // Spawn confetti
+  for (let i = 0; i < 30; i++) {
+    setTimeout(() => {
+      const span = document.createElement('span');
+      span.className = 'confetti-piece';
+      span.textContent = confetti[Math.floor(Math.random() * confetti.length)];
+      span.style.left = Math.random() * 100 + 'vw';
+      span.style.top = '-30px';
+      document.body.appendChild(span);
+      setTimeout(() => span.remove(), 3000);
+    }, i * 50);
+  }
+  
+  // Add celebration message
+  const celebration = document.createElement('div');
+  celebration.className = 'unlock-celebration';
+  celebration.innerHTML = \`
+    <strong>🎉 Content Unlocked!</strong><br>
+    <span class="time">Decrypted at \${new Date().toLocaleTimeString()} using your browser's cryptographic keys</span>
+  \`;
+  container.appendChild(celebration);
+})();
+</script>
+    `.trim(),
   },
   "crypto-basics": {
     id: "crypto-basics",
     title: "Understanding Cryptography Basics",
     author: "Sarah Cipher",
     publishedAt: "2026-01-10",
+    tier: "TierA",
     previewContent: `Cryptography is the practice of securing communication and data through the use of codes.
 It's been used throughout history, from ancient Rome to modern digital communications.
 
 This article will introduce you to the fundamental concepts that make modern encryption work.`,
-    premiumContent: `## What is Cryptography?
+    premiumContent: `
+## What is Cryptography?
 
 At its core, cryptography is about transforming readable data (plaintext) into an 
 unreadable format (ciphertext) that can only be reversed by someone with the right key.
@@ -115,9 +194,106 @@ Now imagine everyone has two keys: a public one they share freely, and a private
 one they keep secret. Anyone can encrypt a message with your public key, but only 
 you can decrypt it with your private key.
 
+**Pros:**
+- Solves the key distribution problem
+- Enables digital signatures
+- Provides non-repudiation
+
+**Cons:**
+- Much slower than symmetric encryption
+- Computationally intensive
+
+## The Web Crypto API
+
+Modern browsers include a powerful cryptography API that you're using right now!
+The SubtleCrypto interface provides:
+
+- \`generateKey()\`: Create new cryptographic keys
+- \`encrypt()\` / \`decrypt()\`: Symmetric encryption operations
+- \`wrapKey()\` / \`unwrapKey()\`: Key wrapping (envelope encryption!)
+- \`sign()\` / \`verify()\`: Digital signatures
+
+Your private key is stored in IndexedDB with \`extractable: false\`, meaning 
+even JavaScript can't read the raw key bytes. The browser's crypto engine 
+handles all operations securely.
+
 ---
 
-**You did it!** This content was encrypted specifically for your browser session.`,
+**You did it!** This content was encrypted specifically for your browser session.
+The encryption happened on the server, but decryption happened entirely in your browser.
+    `.trim(),
+  },
+  "zero-trust": {
+    id: "zero-trust",
+    title: "Zero Trust Architecture for APIs",
+    author: "Kai Network",
+    publishedAt: "2026-02-01",
+    tier: "TierB",
+    previewContent: `Zero Trust is a security model that assumes no implicit trust — every request 
+must be verified, regardless of where it originates. This approach has become the 
+gold standard for modern API security.
+
+In this article, we explore how Zero Trust principles apply to API design and 
+how cryptographic access control enables fine-grained authorization.`,
+    premiumContent: `
+## What is Zero Trust?
+
+The traditional security model ("castle and moat") assumes that anything inside 
+the network perimeter is trustworthy. Zero Trust flips this assumption:
+
+> **"Never trust, always verify."**
+
+Every request — whether from inside or outside the network — must:
+
+1. **Authenticate** the caller's identity
+2. **Authorize** the specific action being requested
+3. **Encrypt** all data in transit and at rest
+
+### Zero Trust Principles
+
+- **Least Privilege**: Grant minimum access required for each task
+- **Micro-Segmentation**: Isolate resources into small, independently secured zones
+- **Continuous Verification**: Re-authenticate and re-authorize on every request
+- **Assume Breach**: Design systems to limit blast radius of compromise
+
+## Applying Zero Trust to APIs
+
+### Token-Based Access Control
+
+Modern APIs use short-lived tokens (JWTs, opaque tokens) instead of session cookies:
+
+\`\`\`
+Authorization: Bearer eyJhbGciOiJFUzI1NiJ9...
+\`\`\`
+
+Each token carries claims that specify exactly what the bearer can access.
+
+### Delegated Content Access (DCA)
+
+DCA takes Zero Trust further by separating **content encryption** from **access control**:
+
+- **Publisher** encrypts content with unique keys per time period
+- **Issuer** holds sealed key material but only releases it upon authorization
+- **Client** decrypts locally — the issuer never sees plaintext content
+
+This is exactly what you're experiencing right now! The article content was 
+encrypted server-side, and your browser is performing the decryption.
+
+## Rate Limiting & Anomaly Detection
+
+Zero Trust APIs should implement:
+
+- **Rate limiting**: Prevent brute-force and enumeration attacks
+- **Request signing**: HMAC or digital signatures on API calls
+- **Anomaly detection**: Flag unusual patterns (geographic, temporal, volumetric)
+- **Audit logging**: Immutable logs of all access decisions
+
+---
+
+**Welcome to TierB!** 🎉 This content is in a separate encryption tier.
+Unlocking TierA articles does NOT grant access to TierB content — each tier 
+has independent period keys derived via HKDF with a different content name.
+    `.trim(),
   },
 };
 

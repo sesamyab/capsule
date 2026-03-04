@@ -1,6 +1,6 @@
 # @sesamy/capsule-server
 
-Server-side encryption library for Capsule - provides envelope encryption for content and subscription server utilities.
+Server-side **DCA (Delegated Content Access)** library — encrypt content for publishers and handle unlock requests for issuers.
 
 ## Installation
 
@@ -12,730 +12,265 @@ pnpm add @sesamy/capsule-server
 
 ## Quick Start
 
-The CMS server just needs a way to get keys - it doesn't care about tiers or how keys are derived.
+### Publisher (CMS side)
 
 ```typescript
-import {
-  createCmsServer,
-  createPeriodKeyProvider,
-  createSubscriptionServer,
-} from "@sesamy/capsule-server";
+import { createDcaPublisher } from "@sesamy/capsule-server";
 
-// Create a period key provider (derives keys from period secret)
-const keyProvider = createPeriodKeyProvider({
-  periodSecret: process.env.PERIOD_SECRET, // Base64-encoded 256-bit secret
+const publisher = createDcaPublisher({
+  domain: "www.news-site.com",
+  signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
+  periodSecret: process.env.PERIOD_SECRET!,
 });
 
-// CMS side: encrypt content
-const cms = createCmsServer({
-  getKeys: (keyIds) => keyProvider.getKeys(keyIds),
-});
-
-const encrypted = await cms.encrypt("article-123", premiumContent, {
-  keyIds: ["premium", "enterprise"], // Just key IDs - CMS doesn't know what they mean
-});
-
-// Subscription side: handle unlock requests
-const server = createSubscriptionServer({
-  periodSecret: process.env.PERIOD_SECRET,
-});
-
-// In your unlock endpoint
-const result = await server.unlockForUser(wrappedKey, publicKey);
-```
-
-## CMS Server
-
-The CMS server encrypts content with envelope encryption. It doesn't know or care about subscription tiers - it just works with key IDs and calls your `getKeys` function to get the actual keys.
-
-### Creating the Server
-
-```typescript
-import { createCmsServer } from "@sesamy/capsule-server";
-
-// Option 1: Fetch keys from subscription server
-const cms = createCmsServer({
-  getKeys: async (keyIds) => {
-    const response = await fetch("/api/keys", {
-      method: "POST",
-      body: JSON.stringify({ keyIds }),
-    });
-    return response.json();
-    // Returns: [{ keyId: 'premium:123', key: 'base64...', expiresAt?: '...' }]
-  },
-});
-
-// Option 2: Use period key provider (derive keys locally)
-const keyProvider = createPeriodKeyProvider({ periodSecret: process.env.PERIOD_SECRET });
-const cms = createCmsServer({
-  getKeys: (keyIds) => keyProvider.getKeys(keyIds),
-});
-```
-
-### Encrypting Content
-
-```typescript
-const encrypted = await cms.encrypt("article-123", content, {
-  keyIds: ["premium", "enterprise"], // Key IDs to encrypt with
-});
-```
-
-**Returns (JSON format):**
-
-```json
-{
-  "resourceId": "article-123",
-  "encryptedContent": "base64...", // AES-256-GCM encrypted content
-  "iv": "base64...", // 12-byte initialization vector
-  "wrappedKeys": [
+const result = await publisher.render({
+  resourceId: "article-123",
+  contentItems: [
+    { contentName: "bodytext", content: "<p>Premium article body...</p>" },
+  ],
+  issuers: [
     {
-      "keyId": "premium:1737158400",
-      "wrappedDek": "base64...", // DEK wrapped with this key
-      "expiresAt": "2025-01-18T01:00:00.000Z"
+      issuerName: "sesamy",
+      publicKeyPem: process.env.SESAMY_ECDH_PUBLIC_KEY!,
+      keyId: "2025-10",
+      unlockUrl: "https://api.sesamy.com/unlock",
+      contentNames: ["bodytext"],
     },
+  ],
+});
+
+// Embed in HTML
+const html = `
+  ${result.html.dcaDataScript}
+  <article data-dca-content-name="bodytext">
+    ${result.html.sealedContentTemplate}
+  </article>
+`;
+```
+
+### Issuer (unlock side)
+
+```typescript
+import { createDcaIssuer } from "@sesamy/capsule-server";
+
+const issuer = createDcaIssuer({
+  issuerName: "sesamy",
+  privateKeyPem: process.env.ISSUER_ECDH_P256_PRIVATE_KEY!,
+  keyId: "2025-10",
+  trustedPublisherKeys: {
+    "www.news-site.com": process.env.PUBLISHER_ES256_PUBLIC_KEY!,
+  },
+});
+
+app.post("/api/unlock", async (req) => {
+  const result = await issuer.unlock(req.body, async (verified) => {
+    // Check if user has access — return granted content names
+    return {
+      granted: true,
+      grantedContentNames: ["bodytext"],
+      deliveryMode: "periodKey",
+    };
+  });
+  return result;
+});
+```
+
+## Publisher API
+
+### `createDcaPublisher(config)`
+
+Creates a publisher instance for encrypting content.
+
+| Param | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `domain` | `string` | yes | Publisher domain (e.g. `"www.news-site.com"`) |
+| `signingKeyPem` | `string` | yes | ES256 (ECDSA P-256) private key in PEM format |
+| `periodSecret` | `string \| Uint8Array` | yes | Base64-encoded 256-bit secret for period key derivation |
+| `periodDurationHours` | `number` | no | Time bucket granularity in hours (default: `1`) |
+
+Returns an object with `render()` and `createShareLinkToken()` methods.
+
+### `publisher.render(options)`
+
+Encrypts content items and produces DCA output.
+
+```typescript
+const result = await publisher.render({
+  resourceId: "article-123",
+  contentItems: [
+    { contentName: "bodytext", content: "<p>Premium content</p>" },
+    { contentName: "sidebar", keyName: "bodytext", content: "<aside>...</aside>" },
+  ],
+  issuers: [
     {
-      "keyId": "premium:1737158430",
-      "wrappedDek": "base64...",
-      "expiresAt": "2025-01-18T01:00:30.000Z"
-    }
-  ]
-}
+      issuerName: "sesamy",
+      publicKeyPem: issuerPublicKey,
+      keyId: "2025-10",
+      unlockUrl: "https://api.sesamy.com/unlock",
+      contentNames: ["bodytext", "sidebar"],
+    },
+  ],
+  resourceData: { title: "My Article", tier: "premium" },
+});
 ```
 
-### Output Formats
+**Content items:**
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `contentName` | `string` | yes | Item identifier (e.g. `"bodytext"`) |
+| `content` | `string` | yes | Plaintext content to encrypt |
+| `keyName` | `string` | no | Key domain for period key derivation. Defaults to `contentName`. Items sharing a `keyName` share the same period key. |
+| `contentType` | `string` | no | MIME type (default: `"text/html"`) |
+
+**Issuer config:**
+
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `issuerName` | `string` | yes | Issuer identifier |
+| `publicKeyPem` | `string` | yes | Issuer's ECDH P-256 or RSA-OAEP public key PEM |
+| `keyId` | `string` | yes | Identifies matching issuer private key |
+| `unlockUrl` | `string` | yes | Issuer's unlock endpoint URL |
+| `contentNames` | `string[]` | conditional | Content items to seal for this issuer (by `contentName`) |
+| `keyNames` | `string[]` | conditional | Key domains to seal for (takes precedence over `contentNames`) |
+| `algorithm` | `string` | no | `"ECDH-P256"` or `"RSA-OAEP"` (auto-detected from key) |
+
+**Result:**
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `dcaData` | `DcaData` | Complete DCA data object |
+| `sealedContent` | `Record<string, string>` | `contentName` → base64url ciphertext |
+| `html.dcaDataScript` | `string` | `<script>` tag for HTML embedding |
+| `html.sealedContentTemplate` | `string` | `<template>` tag for HTML embedding |
+| `json` | `DcaJsonApiResponse` | Combined data + sealed content for JSON APIs |
+
+### `publisher.createShareLinkToken(options)`
+
+Creates an ES256 JWT for share links.
 
 ```typescript
-// JSON (default) - for API responses
-const data = await cms.encrypt(id, content, { keyIds: ["premium"] });
-
-// HTML - ready to embed in your page
-const html = await cms.encrypt(id, content, {
-  keyIds: ["premium"],
-  format: "html",
-  htmlClass: "premium-content",
-  placeholder: "<p>Subscribe to unlock...</p>",
+const token = await publisher.createShareLinkToken({
+  resourceId: "article-123",
+  contentNames: ["bodytext"],
+  expiresIn: 604800, // 7 days (default)
+  maxUses: 10,
 });
-// Result: <div class="premium-content" data-capsule='{"resourceId":...}' data-capsule-id="article-123">
-//           <p>Subscribe to unlock...</p>
-//         </div>
+```
 
-// Template helper - get all formats at once
-const { data, json, attribute, html } = await cms.encryptForTemplate(
-  id,
-  content,
-  {
-    keyIds: ["premium"],
+| Field | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `resourceId` | `string` | yes | Resource this token grants access to |
+| `contentNames` | `string[]` | conditional | Content items to grant access to |
+| `keyNames` | `string[]` | conditional | Key domains to grant (alternative to `contentNames`) |
+| `expiresIn` | `number` | no | Token lifetime in seconds (default: 7 days) |
+| `maxUses` | `number` | no | Advisory max uses (enforced by issuer) |
+| `data` | `Record<string, unknown>` | no | Custom metadata |
+
+## Issuer API
+
+### `createDcaIssuer(config)`
+
+Creates an issuer instance for handling unlock requests.
+
+| Param | Type | Required | Description |
+| ----- | ---- | -------- | ----------- |
+| `issuerName` | `string` | yes | Issuer identifier |
+| `privateKeyPem` | `string` | yes | ECDH P-256 or RSA-OAEP private key PEM |
+| `keyId` | `string` | yes | Key ID matching publisher config |
+| `trustedPublisherKeys` | `Record<string, string \| DcaTrustedPublisher>` | yes | Domain → signing key PEM (or extended config) |
+
+**Extended trusted publisher config:**
+
+```typescript
+trustedPublisherKeys: {
+  "www.news-site.com": {
+    signingKeyPem: publicKeyPem,
+    allowedResourceIds: ["article-*", /^premium-/],
   },
-);
+}
 ```
 
-## Period Key Provider
+### `issuer.unlock(request, accessDecision)`
 
-For deriving time-bucket keys locally from a shared period secret:
+Verifies the request and returns unsealed keys.
 
 ```typescript
-import { createPeriodKeyProvider } from "@sesamy/capsule-server";
-
-const keyProvider = createPeriodKeyProvider({
-  periodSecret: process.env.PERIOD_SECRET,
-  periodDurationSeconds: 30, // Optional, default 30
+const result = await issuer.unlock(req.body, async (verified) => {
+  // verified.resource contains domain, resourceId, data, etc.
+  const hasAccess = await checkUserAccess(verified.resource.resourceId);
+  return {
+    granted: hasAccess,
+    grantedContentNames: ["bodytext"],
+    deliveryMode: "periodKey", // or "contentKey"
+  };
 });
-
-// Get keys for given IDs (returns current + next bucket for each)
-const keys = await keyProvider.getKeys(["premium", "enterprise"]);
-// Returns: [
-//   { keyId: 'premium:1737158400', key: Buffer, expiresAt: Date },
-//   { keyId: 'premium:1737158430', key: Buffer, expiresAt: Date },
-//   { keyId: 'enterprise:1737158400', key: Buffer, expiresAt: Date },
-//   { keyId: 'enterprise:1737158430', key: Buffer, expiresAt: Date },
-// ]
-
-// For per-article purchase keys (static, no expiration)
-const articleKey = await keyProvider.getArticleKey("article-123");
-// Returns: { keyId: 'article:article-123', key: Buffer }
 ```
 
-### Combining with Article Keys
+**Delivery modes:**
+- `"contentKey"` — returns one-time content keys (tied to this render)
+- `"periodKey"` — returns period keys (cacheable, client can derive content keys locally)
+
+### `issuer.unlockWithShareToken(request, options?)`
+
+Handles unlock requests containing a share token. Verifies both the request JWTs and the share token.
 
 ```typescript
-const cms = createCmsServer({
-  getKeys: async (keyIds) => {
-    const keys = await keyProvider.getKeys(
-      keyIds.filter((id) => !id.startsWith("article:")),
-    );
-
-    // Add article keys if requested
-    for (const id of keyIds.filter((id) => id.startsWith("article:"))) {
-      const resourceId = id.slice(8);
-      keys.push(await keyProvider.getArticleKey(resourceId));
-    }
-
-    return keys;
+const result = await issuer.unlockWithShareToken(req.body, {
+  deliveryMode: "contentKey",
+  onShareToken: async (payload, resource) => {
+    await incrementShareUseCount(payload.jti);
   },
 });
-
-// Now you can mix time-bucket and article keys
-await cms.encrypt("article-123", content, {
-  keyIds: ["premium", "article:article-123"],
-});
 ```
 
-## Subscription Server
+### `issuer.verify(request)`
 
-Handles unlock requests from users.
+Verifies request JWTs without unsealing. Useful for pre-flight checks.
 
-### Creating the Server
+### `issuer.verifyShareToken(token, domain)`
+
+Verifies a share token independently.
+
+## Key Generation
+
+Generate keys with the included script:
+
+```bash
+npx generate-keys
+```
+
+Or create keys programmatically:
 
 ```typescript
-import { createSubscriptionServer } from "@sesamy/capsule-server";
-
-const server = createSubscriptionServer({
-  periodSecret: process.env.PERIOD_SECRET,
-  periodDurationSeconds: 30,
-});
-```
-
-### Unlock Endpoint
-
-The subscription server supports two unlock modes:
-
-**Tier Key Mode (recommended for subscribers):** Returns the tier's key-wrapping key (KEK) so the client can unwrap any article's DEK locally — one server call for all articles in a tier.
-
-**Per-article DEK Mode:** Unwraps a single article's DEK and re-wraps it for the user. Used for share links or single purchases.
-
-```typescript
-app.post("/api/unlock", async (req) => {
-  // Validate user subscription here!
-  const { keyId, wrappedDek, publicKey, mode } = req.body;
-
-  // Parse keyId (e.g., "premium:123456")
-  const colonIndex = keyId.lastIndexOf(":");
-  const tier = keyId.substring(0, colonIndex);
-  const bucketId = keyId.substring(colonIndex + 1);
-
-  // TIER KEY MODE: Return the KEK ("unlock once, access all")
-  if (mode === "tier") {
-    const result = await server.getTierKeyForUser(tier, bucketId, publicKey);
-    return res.json({ ...result, keyType: "kek" });
-  }
-
-  // PER-ARTICLE DEK MODE: Return the unwrapped DEK
-  const result = await server.unlockForUser(
-    { keyId, wrappedDek },
-    publicKey,
-    // Optional: lookup for static keys (per-article purchase)
-    (keyId) => staticKeyStore.get(keyId),
-  );
-  return res.json({ ...result, keyType: "dek" });
-});
-```
-
-### Tier Key Endpoint
-
-`getTierKeyForUser()` enables "unlock once, access all" for tier subscribers:
-
-```typescript
-// The client fetches this ONCE per tier per bucket period.
-// After receiving the KEK, it can unwrap any article's wrappedDek locally.
-const result = await server.getTierKeyForUser(
-  "premium",    // tier name
-  "123456",     // bucket ID (from the article's keyId)
-  userPublicKey // Base64 SPKI
-);
-
-// result:
-// {
-//   encryptedDek: "...",  // Actually the KEK, RSA-OAEP encrypted for the user
-//   keyId: "premium:123456",
-//   bucketId: "123456",
-//   expiresAt: "2026-02-23T12:00:30.000Z"
-// }
-```
-
-**How the client uses it:**
-1. RSA-unwrap the KEK with its private key → AES tier key
-2. For each article: AES-GCM unwrap the `wrappedDek` locally → article DEK
-3. AES-GCM decrypt article content with the DEK
-4. Zero server calls for articles 2, 3, 4, ...
-
-### Response `keyType` Field
-
-The unlock endpoint should include `keyType` in its response so the client knows what it received:
-
-| `keyType` | What `encryptedDek` contains | Client behavior |
-|-----------|------------------------------|------------------|
-| `"kek"`   | Tier key-wrapping key (AES-256) | Cache tier key, unwrap DEKs locally |
-| `"dek"`   | Article's data encryption key | Decrypt content directly |
-| _(absent)_ | Article's DEK (backward compat) | Decrypt content directly |
-
-## Share Links & Pre-signed Tokens
-
-Capsule supports pre-signed tokens for sharing content without requiring user authentication. This is perfect for:
-
-- 📱 Sharing articles on social media (Facebook, Twitter, LinkedIn)
-- 📧 Email campaigns with direct unlock links
-- 🎁 "Gift this article" features
-- ⏰ Time-limited promotional access
-
-### How Share Links Work
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         SHARE LINK FLOW                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  PUBLISHER                         READER                    SERVER         │
-│  ─────────                         ──────                    ──────         │
-│      │                                │                          │          │
-│      │ 1. Generate token              │                          │          │
-│      │    (tier, expiry, maxUses)     │                          │          │
-│      │─────────────────────────────►  │                          │          │
-│      │                                │                          │          │
-│      │ 2. Create share URL            │                          │          │
-│      │    ?token=eyJhbGc...           │                          │          │
-│      │                                │                          │          │
-│  ════╪════════════════════════════════╪══════════════════════════╪════════  │
-│      │     (Share on social media)    │                          │          │
-│  ════╪════════════════════════════════╪══════════════════════════╪════════  │
-│                                       │                          │          │
-│                     3. Click link ───►│                          │          │
-│                                       │                          │          │
-│                                       │ 4. Extract token from URL│          │
-│                                       │    Generate RSA keypair  │          │
-│                                       │                          │          │
-│                                       │ 5. POST /api/unlock ────►│          │
-│                                       │    { token, wrappedDek,  │          │
-│                                       │      publicKey }         │          │
-│                                       │                          │          │
-│                                       │                 6. Validate token   │
-│                                       │                    Check expiry     │
-│                                       │                    Log analytics    │
-│                                       │                          │          │
-│                                       │◄─────────────── 7. Return DEK       │
-│                                       │                    (wrapped for     │
-│                                       │                     client key)     │
-│                                       │                          │          │
-│                                       │ 8. Decrypt content       │          │
-│                                       │    Display article ✨    │          │
-│                                       │                          │          │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Creating Tokens
-
-```typescript
-import { createTokenManager } from "@sesamy/capsule-server";
-
-const tokens = createTokenManager({
-  secret: process.env.TOKEN_SECRET, // Separate from period secret
-});
-
-// Generate a share token
-const token = tokens.generate({
-  tier: "premium", // Required: which tier to grant access to
-  expiresIn: "7d", // Required: "1h", "24h", "7d", "30d"
-  resourceId: "crypto-guide", // Optional: restrict to specific article
-  maxUses: 1000, // Optional: limit total uses
-  userId: "publisher-123", // Optional: for attribution
-  meta: { campaign: "twitter" }, // Optional: custom metadata
-});
-
-// Create share URL
-const shareUrl = `https://example.com/article/crypto-guide?token=${token}`;
-```
-
-### Validating Tokens
-
-```typescript
-app.post("/api/unlock", async (req) => {
-  const { token, wrappedDek, publicKey, resourceId } = req.body;
-
-  // Validate the token
-  const validation = tokens.validate(token);
-  if (!validation.valid) {
-    return res.status(401).json({ error: validation.message });
-  }
-
-  // Log for analytics
-  console.log("Unlock via share link", {
-    tokenId: validation.payload.tid,
-    tier: validation.payload.tier,
-    resourceId,
-  });
-
-  // Optional: check usage count from Redis/DB
-  // if (validation.payload.maxUses) {
-  //   const uses = await redis.incr(`token:${validation.payload.tid}:uses`);
-  //   if (uses > validation.payload.maxUses) {
-  //     return res.status(403).json({ error: "Token usage limit exceeded" });
-  //   }
-  // }
-
-  // Unlock using the token
-  const result = server.unlockWithToken(
-    validation.payload,
-    wrappedDek,
-    publicKey,
-    resourceId,
-  );
-
-  return res.json({ ...result, tokenId: validation.payload.tid });
-});
-```
-
-### Token Structure
-
-Tokens are URL-safe, signed payloads:
-
-```typescript
-interface UnlockTokenPayload {
-  v: 1; // Version
-  tid: string; // Unique token ID (for tracking/revocation)
-  tier: string; // Tier this grants access to
-  resourceId?: string; // Specific article (if restricted)
-  userId?: string; // Creator attribution
-  maxUses?: number; // Usage limit
-  iat: number; // Issued at (Unix timestamp)
-  exp: number; // Expires at (Unix timestamp)
-  meta?: Record<string, any>; // Custom metadata
-}
-```
-
-### Full Example: Share Link Flow
-
-```typescript
-// 1. Publisher generates share link
-app.post("/api/share", async (req, res) => {
-  const { tier, resourceId, expiresIn, maxUses } = req.body;
-
-  const token = tokens.generate({ tier, resourceId, expiresIn, maxUses });
-  const payload = tokens.peek(token);
-
-  res.json({
-    token,
-    tokenId: payload.tid,
-    shareUrl: `https://example.com/article/${resourceId}?token=${token}`,
-    expiresAt: new Date(payload.exp * 1000).toISOString(),
-  });
-});
-
-// 2. Reader clicks link, client unlocks
-// (Client extracts token from URL, sends with unlock request)
-
-// 3. Server validates and unlocks
-app.post("/api/unlock", async (req, res) => {
-  const { token, wrappedDek, publicKey, resourceId } = req.body;
-
-  if (token) {
-    const validation = tokens.validate(token);
-    if (!validation.valid) {
-      return res.status(401).json({ error: validation.message });
-    }
-
-    // Full audit trail
-    await analytics.log("share_link_unlock", {
-      tokenId: validation.payload.tid,
-      tier: validation.payload.tier,
-      resourceId,
-      ip: req.ip,
-    });
-
-    const result = server.unlockWithToken(
-      validation.payload,
-      wrappedDek,
-      publicKey,
-    );
-    return res.json(result);
-  }
-
-  // Regular unlock flow...
-});
-```
-
-## How It Works
-
-### Envelope Encryption
-
-Capsule uses envelope encryption for efficient multi-recipient encryption:
-
-```
-Content → [AES-256-GCM] → Encrypted Content
-              ↓
-           DEK (unique per article)
-              ↓
-    ┌─────────┼─────────┐
-    ↓         ↓         ↓
-  Key #1    Key #2    Key #3
-    ↓         ↓         ↓
- Wrapped   Wrapped   Wrapped
- DEK #1    DEK #2    DEK #3
-```
-
-- Content is encrypted ONCE with a unique DEK (Data Encryption Key)
-- The DEK is wrapped with MULTIPLE key-wrapping keys
-- Different users can unlock using different wrapped keys
-- No need to re-encrypt content when adding access paths
-
-### Two Unlock Modes
-
-**Tier Key Mode (recommended for subscribers):**
-
-```
-Subscriber opens first premium article:
-  Client  → Server: "Give me the premium tier key for bucket 123456"
-  Server  → Client: AES tier key, RSA-wrapped for this user (keyType: "kek")
-  Client: RSA-unwrap → AES tier key → cache in memory
-
-Subscriber opens second premium article (and third, fourth, ...):
-  Client: Use cached tier key → AES-unwrap wrappedDek → decrypt content
-  (ZERO server calls)
-```
-
-**Per-article DEK Mode (for share links / purchases):**
-
-```
-Each article requires a server call:
-  Client  → Server: wrappedDek + publicKey
-  Server  → Client: RSA-wrapped DEK (keyType: "dek")
-  Client: RSA-unwrap → decrypt content
-```
-
-### Time-Bucket Keys (TOTP)
-
-When using `TotpKeyProvider`, keys rotate automatically:
-
-- Keys are derived from `periodSecret + keyId + bucketId` using HKDF
-- Bucket ID changes every `bucketPeriodSeconds` (default: 30s)
-- Provider returns current AND next bucket (handles clock drift)
-- When bucket expires, old wrapped keys become invalid (forward secrecy)
-
-## Framework Examples
-
-### Next.js
-
-```typescript
-// lib/capsule.ts
-import { createCmsServer, createPeriodKeyProvider } from "@sesamy/capsule-server";
-
-const keyProvider = createPeriodKeyProvider({
-  periodSecret: process.env.PERIOD_SECRET!,
-});
-
-export const cms = createCmsServer({
-  getKeys: (keyIds) => keyProvider.getKeys(keyIds),
-});
-
-// app/article/[slug]/page.tsx
-export default async function ArticlePage({ params }) {
-  const article = await getArticle(params.slug);
-
-  const encryptedHtml = await cms.encrypt(article.id, article.premiumContent, {
-    keyIds: ["premium"],
-    format: "html",
-  });
-
-  return (
-    <article>
-      <h1>{article.title}</h1>
-      <div>{article.preview}</div>
-      <div dangerouslySetInnerHTML={{ __html: encryptedHtml }} />
-    </article>
-  );
-}
-```
-
-### Astro
-
-```astro
----
-// src/pages/article/[slug].astro
-import { createCmsServer, createTotpKeyProvider } from '@sesamy/capsule-server';
-
-const totp = createPeriodKeyProvider({
-  periodSecret: import.meta.env.PERIOD_SECRET,
-});
-
-const cms = createCmsServer({
-  getKeys: (keyIds) => totp.getKeys(keyIds),
-});
-
-const article = await getArticle(Astro.params.slug);
-const { attribute } = await cms.encryptForTemplate(
-  article.id,
-  article.premiumContent,
-  { keyIds: ['premium'] }
-);
----
-<article>
-  <h1>{article.title}</h1>
-  <div set:html={article.preview} />
-  <div
-    data-capsule={attribute}
-    data-capsule-id={article.id}
-  >
-    <p>Subscribe to unlock...</p>
-  </div>
-</article>
-```
-
-### Express
-
-```typescript
-import express from "express";
 import {
-  createCmsServer,
-  createPeriodKeyProvider,
-  createSubscriptionServer,
+  generateEcdsaP256KeyPair,
+  generateEcdhP256KeyPair,
+  exportP256KeyPairPem,
+  generateAesKeyBytes,
+  toBase64,
 } from "@sesamy/capsule-server";
 
-const app = express();
+// Publisher signing key (ES256 / ECDSA P-256)
+const signingKey = await generateEcdsaP256KeyPair();
+const signingPem = await exportP256KeyPairPem(signingKey);
 
-const keyProvider = createPeriodKeyProvider({
-  periodSecret: process.env.PERIOD_SECRET!,
-});
-const cms = createCmsServer({ getKeys: (keyIds) => keyProvider.getKeys(keyIds) });
-const server = createSubscriptionServer({
-  periodSecret: process.env.PERIOD_SECRET!,
-});
+// Issuer sealing key (ECDH P-256)
+const sealingKey = await generateEcdhP256KeyPair();
+const sealingPem = await exportP256KeyPairPem(sealingKey);
 
-// Encrypt content
-app.get("/api/article/:id", async (req, res) => {
-  const article = await db.getArticle(req.params.id);
-  const encrypted = await cms.encrypt(article.id, article.content, {
-    keyIds: ["premium"],
-  });
-  res.json({ ...article, encrypted });
-});
-
-// Unlock endpoint
-app.post("/api/unlock", async (req, res) => {
-  // Validate user subscription first!
-  const { keyId, wrappedDek, publicKey } = req.body;
-  const result = await server.unlockForUser({ keyId, wrappedDek }, publicKey);
-  res.json(result);
-});
+// Period secret
+const periodSecret = toBase64(await generateAesKeyBytes());
 ```
 
-## Security Notes
+## Low-Level Exports
 
-- **Period secret**: Store in KMS (AWS Secrets Manager, HashiCorp Vault, etc.)
-- **Bucket period**: Determines maximum revocation delay (shorter = faster revocation, more wrapped keys)
-- **Per-article keys**: Are static (no automatic revocation) - use for permanent purchases
-- **Key isolation**: CMS only needs key IDs, not the period secret (if using external key provider)
-- **User validation**: Always validate subscription before calling `unlockForUser()`
+The package also exports lower-level primitives for advanced usage:
 
-## API Reference
+- **Encryption**: `encryptContent`, `decryptContent`, `generateContentKey`, `generateIv`
+- **JWT**: `createJwt`, `verifyJwt`, `decodeJwtPayload`, `createResourceJwt`, `createIssuerJwt`
+- **Seal**: `sealEcdhP256`, `unsealEcdhP256`, `sealRsaOaep`, `unsealRsaOaep`, `seal`, `unseal`
+- **Time buckets**: `formatTimeBucket`, `getCurrentTimeBuckets`, `deriveDcaPeriodKey`
+- **Crypto**: `sha256`, `hkdf`, `toBase64Url`, `fromBase64Url`, ECDH/ECDSA/RSA utilities
 
-### CmsServer
-
-```typescript
-import { createCmsServer, CmsServer } from '@sesamy/capsule-server';
-
-const cms = createCmsServer(options: CmsServerOptions);
-
-interface CmsServerOptions {
-  getKeys: (keyIds: string[]) => Promise<KeyEntry[]>;  // Required
-  logger?: (msg: string, level: 'info' | 'warn' | 'error') => void;
-}
-
-interface KeyEntry {
-  keyId: string;              // Key identifier
-  key: Buffer | string;       // 256-bit AES key
-  expiresAt?: Date | string;  // Optional expiration
-}
-
-// Encrypt content
-cms.encrypt(resourceId, content, { keyIds, format?, ... }): Promise<EncryptedArticle | string>;
-
-// Get all formats for templates
-cms.encryptForTemplate(resourceId, content, { keyIds }): Promise<{ data, json, attribute, html }>;
-```
-
-### PeriodKeyProvider
-
-```typescript
-import { createPeriodKeyProvider, PeriodKeyProvider } from '@sesamy/capsule-server';
-
-const keyProvider = createPeriodKeyProvider(options: PeriodKeyProviderOptions);
-
-interface PeriodKeyProviderOptions {
-  periodSecret: Buffer | string;      // Required
-  periodDurationSeconds?: number;     // Default: 30
-}
-
-// Get time-bucket keys (current + next for each keyId)
-keyProvider.getKeys(keyIds: string[]): Promise<KeyEntry[]>;
-
-// Get static article key
-keyProvider.getArticleKey(contentId: string): Promise<KeyEntry>;
-```
-
-### SubscriptionServer
-
-```typescript
-import { createSubscriptionServer, SubscriptionServer } from '@sesamy/capsule-server';
-
-const server = createSubscriptionServer(options: SubscriptionServerOptions);
-
-interface SubscriptionServerOptions {
-  periodSecret: string | Buffer;      // Required
-  periodDurationSeconds?: number;     // Default: 30
-}
-
-// For CMS key fetching (if not using TOTP locally)
-server.getBucketKeysResponse(keyId: string): BucketKeysResponse;
-
-// For user unlock (per-article DEK mode)
-server.unlockForUser(
-  wrappedKey: { keyId, wrappedDek },
-  userPublicKey: string,
-  staticKeyLookup?: (keyId: string) => Buffer | null
-): Promise<UnlockResponse>;
-
-// For tier key mode ("unlock once, access all")
-server.getTierKeyForUser(
-  tier: string,        // Tier name (e.g., "premium")
-  bucketId: string,    // Bucket ID (from the article's keyId)
-  userPublicKey: string // Base64 SPKI
-): Promise<UnlockResponse>;
-
-// For token-based unlock (share links)
-server.unlockWithToken(
-  tokenPayload: UnlockTokenPayload,
-  wrappedDekB64: string,
-  userPublicKey: string,
-  resourceId?: string
-): UnlockResponse;
-```
-
-### TokenManager
-
-```typescript
-import { createTokenManager, TokenManager } from '@sesamy/capsule-server';
-
-const tokens = createTokenManager(options: TokenManagerOptions);
-
-interface TokenManagerOptions {
-  secret: string | Buffer;  // Required, min 32 bytes recommended
-}
-
-// Generate a signed token
-tokens.generate(options: GenerateTokenOptions): string;
-
-interface GenerateTokenOptions {
-  tier: string;              // Required: tier to grant access to
-  expiresIn: string | number; // Required: "1h", "24h", "7d", or seconds
-  resourceId?: string;         // Optional: restrict to article
-  maxUses?: number;           // Optional: usage limit
-  userId?: string;            // Optional: creator attribution
-  meta?: Record<string, any>; // Optional: custom metadata
-}
-
-// Validate a token
-tokens.validate(token: string): TokenValidationResult | TokenValidationError;
-
-// Peek at payload without validating (for logging)
-tokens.peek(token: string): UnlockTokenPayload | null;
-```
-
-See [TypeScript definitions](./src/types.ts) for full type documentation.
+See [src/index.ts](src/index.ts) for the full list of exports.

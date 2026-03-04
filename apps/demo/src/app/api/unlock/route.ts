@@ -5,19 +5,18 @@ import type { DcaUnlockRequest } from "@sesamy/capsule-server";
 /**
  * POST /api/unlock
  *
- * DCA unlock endpoint. The client sends a DCA unlock request containing:
- * - resource: unsigned resource metadata (for key lookup)
- * - resourceJWT: ES256-signed resource JWT
- * - issuerJWT: ES256-signed integrity proof for this issuer's sealed blobs
- * - sealed: sealed contentKeys and periodKeys for this issuer
- * - keyId: identifies which issuer private key to use
- * - issuerName: this issuer's canonical name
- * - clientPublicKey (optional): RSA-OAEP public key for client-bound transport
- * - shareToken (optional): Publisher-signed share link token for pre-authenticated access
+ * DCA unlock endpoint. Supports both v1 and v2 request formats:
+ *
+ * **v1 (current):** All fields present — resource, resourceJWT, issuerJWT,
+ * sealed, keyId, issuerName, plus optional clientPublicKey and shareToken.
+ *
+ * **v2 (beta):** Only resourceJWT, sealed, and keyId are required.
+ * The issuerJWT is dropped — AES-GCM provides sealed-blob integrity.
+ * The service auto-detects the format.
  *
  * The issuer:
- * 1. Verifies the publisher's JWT signatures against the trusted-publisher allowlist
- * 2. Verifies issuerJWT integrity proofs (SHA-256 of sealed blobs)
+ * 1. Verifies the publisher's JWT signature against the trusted-publisher allowlist
+ * 2. v1 only: Verifies issuerJWT integrity proofs (SHA-256 of sealed blobs)
  * 3. Makes an access decision:
  *    - If shareToken is present: validates the publisher-signed token and grants
  *      access to the content names specified in the token
@@ -28,10 +27,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as DcaUnlockRequest;
 
-    // Basic validation
-    if (!body.resource || !body.resourceJWT || !body.issuerJWT || !body.sealed) {
+    // Basic validation — v2 only requires resourceJWT, sealed, keyId
+    if (!body.resourceJWT || !body.sealed) {
       return NextResponse.json(
-        { error: "Invalid DCA unlock request — missing required fields" },
+        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, sealed)" },
         { status: 400 },
       );
     }
@@ -44,9 +43,12 @@ export async function POST(request: NextRequest) {
         deliveryMode: "contentKey",
         onShareToken: (payload) => {
           // In production, you would check use counts, audit log, etc.
+          const scope = payload.keyNames
+            ? `keyNames=[${payload.keyNames.join(",")}]`
+            : `content=[${(payload.contentNames ?? []).join(",")}]`;
           console.log(
             `[share-link] Granting access via share token: resource=${payload.resourceId}, ` +
-            `content=[${payload.contentNames.join(",")}], jti=${payload.jti ?? "none"}`,
+            `${scope}, jti=${payload.jti ?? "none"}`,
           );
         },
       });
@@ -55,20 +57,28 @@ export async function POST(request: NextRequest) {
     }
 
     // Normal unlock flow: choose delivery mode based on accessType
-    const grantedContentNames = Object.keys(body.sealed);
-
     // accessType: "article" → contentKey (one-time, non-cacheable)
     //             "tier" or "subscription" → periodKey (cacheable for 1 hour)
     const accessType = (body as unknown as unknown as Record<string, unknown>).accessType as string | undefined;
     const deliveryMode = accessType === "article" ? "contentKey" : "periodKey";
 
+    // Resolve access grant: if contentKeyMap is present (v2 keyName mode),
+    // grant by keyName so the issuer resolves which content items to unseal.
+    // Otherwise fall back to granting all sealed content names directly.
+    const hasKeyNames = body.contentKeyMap && Object.keys(body.contentKeyMap).length > 0;
+    const grantedKeyNames = hasKeyNames
+      ? Array.from(new Set(Object.values(body.contentKeyMap!)))
+      : undefined;
+    const grantedContentNames = hasKeyNames ? undefined : Object.keys(body.sealed);
+
     console.log(
       `[unlock] accessType=${accessType ?? "default"}, deliveryMode=${deliveryMode}, ` +
-      `content=[${grantedContentNames.join(",")}]`,
+      `${grantedKeyNames ? `keyNames=[${grantedKeyNames.join(",")}]` : `content=[${grantedContentNames!.join(",")}]`}`,
     );
 
     const result = await issuer.unlock(body, {
       grantedContentNames,
+      grantedKeyNames,
       deliveryMode,
     });
 

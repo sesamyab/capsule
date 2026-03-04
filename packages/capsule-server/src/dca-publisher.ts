@@ -121,16 +121,23 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
         createShareLinkToken: async (options: DcaShareLinkOptions): Promise<string> => {
             const now = Math.floor(Date.now() / 1000);
 
+            // Require at least one of contentNames or keyNames
+            const contentNames = options.contentNames ?? options.keyNames ?? [];
+            if (contentNames.length === 0 && !options.keyNames?.length) {
+                throw new Error("createShareLinkToken requires contentNames or keyNames");
+            }
+
             const payload: DcaShareLinkTokenPayload = {
                 type: "dca-share",
                 domain: config.domain,
                 resourceId: options.resourceId,
-                contentNames: options.contentNames,
+                contentNames,
                 iat: now,
                 exp: now + (options.expiresIn ?? 7 * 24 * 3600), // default: 7 days
                 ...(options.maxUses !== undefined ? { maxUses: options.maxUses } : {}),
                 jti: options.jti ?? toHex(getRandomBytes(16)),
                 ...(options.data !== undefined ? { data: options.data } : {}),
+                ...(options.keyNames !== undefined ? { keyNames: options.keyNames } : {}),
             };
 
             const signingKey = await getSigningKey();
@@ -158,6 +165,17 @@ async function render(
     // 2. Get time buckets (current + next)
     const buckets = getCurrentTimeBuckets(periodDurationHours);
 
+    // 2b. Resolve keyName for each content item (defaults to contentName)
+    const resolvedKeyNames: Record<string, string> = {};
+    let hasExplicitKeyNames = false;
+    for (const item of contentItems) {
+        const keyName = item.keyName ?? item.contentName;
+        resolvedKeyNames[item.contentName] = keyName;
+        if (item.keyName !== undefined && item.keyName !== item.contentName) {
+            hasExplicitKeyNames = true;
+        }
+    }
+
     // 3. Per content item: generate contentKey, IV, encrypt
     const contentKeys: Record<string, Uint8Array> = {};
     const contentSealData: Record<string, DcaContentSealData> = {};
@@ -172,7 +190,11 @@ async function render(
         const iv = generateIv();
 
         // Build AAD string: domain|resourceId|contentName|version
-        const aadString = `${domain}|${resourceId}|${contentName}|1`;
+        // v2: when keyName differs from contentName, include it for cryptographic binding
+        const keyName = resolvedKeyNames[contentName];
+        const aadString = keyName !== contentName
+            ? `${domain}|${resourceId}|${contentName}|${keyName}|2`
+            : `${domain}|${resourceId}|${contentName}|1`;
         const aadBytes = encodeUtf8(aadString);
 
         // Encrypt content with AAD
@@ -188,14 +210,17 @@ async function render(
     }
 
     // 4. Derive periodKeys and wrap contentKeys
+    //    periodKey derivation uses keyName (not contentName) as HKDF salt.
+    //    Content items sharing a keyName get the same periodKey.
     const sealedContentKeys: Record<string, DcaSealedContentKey[]> = {};
 
     for (const item of contentItems) {
         const contentName = item.contentName;
+        const keyName = resolvedKeyNames[contentName];
         const entries: DcaSealedContentKey[] = [];
 
         for (const bucket of [buckets.current, buckets.next]) {
-            const periodKey = await deriveDcaPeriodKey(periodSecret, contentName, bucket.t);
+            const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
 
             // Wrap contentKey with periodKey using AES-256-GCM (no AAD for key wrapping)
             const wrapIv = generateIv();
@@ -226,19 +251,36 @@ async function render(
 
         const sealed: Record<string, DcaIssuerSealed> = {};
 
-        for (const contentName of issuerConfig.contentNames) {
+        // Resolve which content items to seal for this issuer.
+        // keyNames takes precedence: seal all items whose keyName is in the list.
+        // contentNames: seal those specific items by name.
+        let contentNamesToSeal: string[];
+        if (issuerConfig.keyNames && issuerConfig.keyNames.length > 0) {
+            const keyNameSet = new Set(issuerConfig.keyNames);
+            contentNamesToSeal = contentItems
+                .filter(item => keyNameSet.has(resolvedKeyNames[item.contentName]))
+                .map(item => item.contentName);
+        } else if (issuerConfig.contentNames && issuerConfig.contentNames.length > 0) {
+            contentNamesToSeal = issuerConfig.contentNames;
+        } else {
+            throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or keyNames`);
+        }
+
+        for (const contentName of contentNamesToSeal) {
             const contentKey = contentKeys[contentName];
             if (!contentKey) {
                 throw new Error(`Content item "${contentName}" not found for issuer "${issuerConfig.issuerName}"`);
             }
 
+            const keyName = resolvedKeyNames[contentName];
+
             // Seal contentKey
             const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm);
 
-            // Seal periodKeys
+            // Seal periodKeys (using keyName, not contentName, for derivation)
             const sealedPeriodKeys: Record<string, string> = {};
             for (const bucket of [buckets.current, buckets.next]) {
-                const periodKey = await deriveDcaPeriodKey(periodSecret, contentName, bucket.t);
+                const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
                 sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm);
             }
 
@@ -268,7 +310,7 @@ async function render(
     const signingKey = await getSigningKey();
     const resourceJWT = await createResourceJwt(resource, signingKey);
 
-    // 8. Sign issuerJWTs
+    // 8. Sign issuerJWTs (include keyId for v2 unlock format)
     const issuerJWT: Record<string, string> = {};
     for (const issuerConfig of issuers) {
         issuerJWT[issuerConfig.issuerName] = await createIssuerJwt(
@@ -276,6 +318,7 @@ async function render(
             issuerConfig.issuerName,
             issuerData[issuerConfig.issuerName].sealed,
             signingKey,
+            issuerConfig.keyId,
         );
     }
 
@@ -288,6 +331,8 @@ async function render(
         contentSealData,
         sealedContentKeys,
         issuerData,
+        // Include contentKeyMap only when keyNames differ from contentNames
+        ...(hasExplicitKeyNames ? { contentKeyMap: resolvedKeyNames } : {}),
     };
 
     // 10. Build HTML strings

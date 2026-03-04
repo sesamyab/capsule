@@ -1,8 +1,11 @@
 /**
  * DCA JWT — ES256 signing, verification, and SHA-256 integrity proofs.
  *
- * DCA uses JWT solely as a signed JSON envelope. Standard claims (iss, sub, iat, exp)
- * are not used. The header is always `{ "alg": "ES256", "typ": "JWT" }`.
+ * The header is always `{ "alg": "ES256", "typ": "JWT" }`.
+ *
+ * resourceJWT uses standard JWT claims (RFC 7519):
+ *   - `iss` = publisher domain, `sub` = resourceId, `iat` = render time, `jti` = renderId
+ *   - `data` = custom publisher metadata
  *
  * Two JWTs per page:
  *   - resourceJWT: signs resource metadata (shared across issuers)
@@ -24,6 +27,7 @@ import {
 
 import type {
   DcaResource,
+  DcaResourceJwtPayload,
   DcaIssuerJwtPayload,
   DcaIssuerSealed,
   DcaIssuerProof,
@@ -157,23 +161,56 @@ export async function buildIssuerProof(
 }
 
 /**
- * Create a resourceJWT: ES256 JWT signing the resource object.
+ * Create a resourceJWT: ES256 JWT signing the resource using standard claims.
+ *
+ * Maps DcaResource fields to standard JWT claims:
+ *   - domain → iss, resourceId → sub, issuedAt → iat (Unix seconds), renderId → jti
  */
 export async function createResourceJwt(
   resource: DcaResource,
   signingKey: WebCryptoKey | string,
 ): Promise<string> {
-  return createJwt(resource, signingKey);
+  const payload: DcaResourceJwtPayload = {
+    iss: resource.domain,
+    sub: resource.resourceId,
+    iat: Math.floor(new Date(resource.issuedAt).getTime() / 1000),
+    jti: resource.renderId,
+    data: resource.data,
+  };
+  return createJwt(payload, signingKey);
+}
+
+/**
+ * Convert a verified DcaResourceJwtPayload back to a DcaResource.
+ *
+ * Used by the issuer after JWT verification to produce the human-readable
+ * DcaResource that the rest of the codebase works with.
+ */
+export function resourceJwtPayloadToResource(payload: DcaResourceJwtPayload): DcaResource {
+  return {
+    domain: payload.iss,
+    resourceId: payload.sub,
+    issuedAt: new Date(payload.iat * 1000).toISOString(),
+    renderId: payload.jti,
+    data: payload.data,
+  };
 }
 
 /**
  * Create an issuerJWT: ES256 JWT signing the integrity proofs for one issuer.
+ *
+ * @param renderId - Render ID binding this JWT to the resource
+ * @param issuerName - Canonical issuer name
+ * @param sealed - Sealed blobs to create integrity proofs for
+ * @param signingKey - ES256 signing key
+ * @param keyId - Optional issuer key ID (included in v2 format)
  */
 export async function createIssuerJwt(
   renderId: string,
   issuerName: string,
   sealed: Record<string, DcaIssuerSealed>,
   signingKey: WebCryptoKey | string,
+  keyId?: string,
 ): Promise<string> {
   const proof = await buildIssuerProof(sealed);
 
@@ -181,6 +218,7 @@ export async function createIssuerJwt(
     renderId,
     issuerName,
     proof,
+    ...(keyId !== undefined ? { keyId } : {}),
   };
 
   return createJwt(payload, signingKey);

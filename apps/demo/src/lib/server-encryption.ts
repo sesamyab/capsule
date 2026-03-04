@@ -78,7 +78,8 @@ export async function renderDcaArticle(
     resourceId,
     contentItems: [
       {
-        contentName: article.tier,
+        contentName: "bodytext",
+        keyName: article.tier,
         content: article.premiumContent,
         contentType: "text/html",
       },
@@ -89,7 +90,7 @@ export async function renderDcaArticle(
         publicKeyPem: issuerPublicKeyPem,
         keyId: DEMO_KEY_ID,
         unlockUrl,
-        contentNames: [article.tier],
+        keyNames: [article.tier],
       },
     ],
     resourceData: {

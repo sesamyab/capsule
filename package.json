@@ -8,6 +8,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
+    "generate-keys": "node scripts/generate-keys.mjs",
     "clean": "pnpm -r exec rm -rf node_modules dist .next && rm -rf node_modules",
     "demo": "pnpm --filter capsule-demo",
     "client": "pnpm --filter @sesamy/capsule",

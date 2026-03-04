@@ -12,7 +12,7 @@
  *   8. Unseals and returns contentKeys or periodKeys to the client
  */
 
-import { verifyJwt, verifyIssuerProof } from "./dca-jwt";
+import { verifyJwt, decodeJwtPayload, verifyIssuerProof, resourceJwtPayloadToResource } from "./dca-jwt";
 import { unseal, importIssuerPrivateKey, type DcaSealAlgorithm } from "./dca-seal";
 import {
     toBase64Url,
@@ -24,6 +24,7 @@ import {
 
 import type {
     DcaResource,
+    DcaResourceJwtPayload,
     DcaIssuerJwtPayload,
     DcaIssuerServerConfig,
     DcaTrustedPublisher,
@@ -258,8 +259,20 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
  * Access decision — determines what the issuer returns.
  */
 export interface DcaAccessDecision {
-    /** Which content items to grant access to */
-    grantedContentNames: string[];
+    /**
+     * Which content items to grant access to (by contentName).
+     * Mutually exclusive with `grantedKeyNames`.
+     */
+    grantedContentNames?: string[];
+    /**
+     * Which key domains to grant access to (v2 keyName-based).
+     * The issuer resolves keyNames → contentNames using the request's
+     * `contentKeyMap`. If no contentKeyMap is present, keyNames are
+     * treated as contentNames (backward compatible).
+     *
+     * Mutually exclusive with `grantedContentNames`.
+     */
+    grantedKeyNames?: string[];
     /**
      * Key delivery mode:
      *   - "contentKey": return raw contentKeys (client decrypts directly)
@@ -302,8 +315,8 @@ export interface DcaShareLinkUnlockOptions {
 export interface DcaVerifiedRequest {
     /** Verified resource payload from resourceJWT */
     resource: DcaResource;
-    /** Verified issuer JWT payload */
-    issuerPayload: DcaIssuerJwtPayload;
+    /** Verified issuer JWT payload (v1 only; absent in v2) */
+    issuerPayload?: DcaIssuerJwtPayload;
 }
 
 // ============================================================================
@@ -315,44 +328,62 @@ async function verifyRequest(
     publisherMap: NormalisedPublisherMap,
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
-    // 1. Normalise and look up publisher from the trusted-publisher allowlist.
-    //    The unsigned request.resource.domain is used ONLY for key selection;
-    //    the signed domain is verified independently in step 2b/2c below.
-    const rawDomain = request.resource.domain;
+    // Auto-detect v1 vs v2 request format.
+    // v1 sends `resource` (unsigned copy) for domain lookup + issuerJWT for proofs.
+    // v2 omits both — domain from resourceJWT, integrity from AES-GCM.
+    const isV2 = !request.resource;
+
+    // 1. Determine domain for publisher key lookup.
+    let rawDomain: string;
+    if (isV2) {
+        // v2: decode (unverified) resourceJWT to get domain for key selection.
+        // The JWT payload uses standard claims: iss = domain.
+        const decoded = decodeJwtPayload<DcaResourceJwtPayload>(request.resourceJWT);
+        rawDomain = decoded.iss;
+    } else {
+        rawDomain = request.resource!.domain;
+    }
+
     const publisher = publisherMap.lookup(rawDomain);
     if (!publisher) {
         throw new Error(`Untrusted publisher domain: "${rawDomain}"`);
     }
 
-    // 2. Verify resourceJWT with the publisher's signing key
-    const resource = await verifyJwt<DcaResource>(request.resourceJWT, publisher.signingKeyPem);
+    // 2. Verify resourceJWT with the publisher's signing key.
+    // The JWT payload uses standard claims (iss, sub, iat, jti) — map back to DcaResource.
+    const jwtPayload = await verifyJwt<DcaResourceJwtPayload>(request.resourceJWT, publisher.signingKeyPem);
+    const resource = resourceJwtPayloadToResource(jwtPayload);
 
-    // 2b. Bind unsigned request.resource to the signed resourceJWT payload.
-    //     Upstream access logic may read unsigned metadata, so reject mismatches.
-    if (request.resource.domain !== resource.domain) {
-        throw new Error(
-            `resource.domain mismatch: unsigned "${request.resource.domain}" vs signed "${resource.domain}"`,
-        );
-    }
-    if (request.resource.resourceId !== resource.resourceId) {
-        throw new Error(
-            `resource.resourceId mismatch: unsigned "${request.resource.resourceId}" vs signed "${resource.resourceId}"`,
-        );
-    }
-    if (request.resource.renderId !== resource.renderId) {
-        throw new Error(
-            `resource.renderId mismatch: unsigned "${request.resource.renderId}" vs signed "${resource.renderId}"`,
-        );
-    }
-    if (request.resource.issuedAt !== resource.issuedAt) {
-        throw new Error(
-            `resource.issuedAt mismatch: unsigned "${request.resource.issuedAt}" vs signed "${resource.issuedAt}"`,
-        );
+    // 2b. v1 only: bind unsigned request.resource to the signed resourceJWT payload.
+    if (!isV2) {
+        if (request.resource!.domain !== resource.domain) {
+            throw new Error(
+                `resource.domain mismatch: unsigned "${request.resource!.domain}" vs signed "${resource.domain}"`,
+            );
+        }
+        if (request.resource!.resourceId !== resource.resourceId) {
+            throw new Error(
+                `resource.resourceId mismatch: unsigned "${request.resource!.resourceId}" vs signed "${resource.resourceId}"`,
+            );
+        }
+        if (request.resource!.renderId !== resource.renderId) {
+            throw new Error(
+                `resource.renderId mismatch: unsigned "${request.resource!.renderId}" vs signed "${resource.renderId}"`,
+            );
+        }
+        // Note: issuedAt comparison uses ISO 8601 strings. The JWT stores iat as Unix seconds
+        // and the round-trip through Date loses sub-second precision, so we compare the
+        // truncated-to-seconds form.
+        const signedSeconds = Math.floor(new Date(resource.issuedAt).getTime() / 1000);
+        const unsignedSeconds = Math.floor(new Date(request.resource!.issuedAt).getTime() / 1000);
+        if (signedSeconds !== unsignedSeconds) {
+            throw new Error(
+                `resource.issuedAt mismatch: unsigned "${request.resource!.issuedAt}" vs signed "${resource.issuedAt}"`,
+            );
+        }
     }
 
     // 2c. Defence-in-depth: re-verify the *signed* domain against the allowlist.
-    //     This prevents an attacker from using one trusted publisher's key to
-    //     forge a JWT claiming a different (also trusted) publisher's domain.
     const signedPublisher = publisherMap.lookup(resource.domain);
     if (!signedPublisher || signedPublisher.signingKeyPem !== publisher.signingKeyPem) {
         throw new Error(
@@ -363,6 +394,16 @@ async function verifyRequest(
     // 2d. Per-publisher resource constraints (optional allowedResourceIds).
     checkResourceConstraints(publisher, rawDomain, resource.resourceId);
 
+    // --- v2 path: no issuerJWT required ---
+    if (isV2) {
+        return { resource };
+    }
+
+    // --- v1 path: verify issuerJWT + integrity proofs ---
+    if (!request.issuerJWT) {
+        throw new Error("v1 request requires issuerJWT");
+    }
+
     // 3. Verify issuerJWT
     const issuerPayload = await verifyJwt<DcaIssuerJwtPayload>(request.issuerJWT, publisher.signingKeyPem);
 
@@ -371,12 +412,12 @@ async function verifyRequest(
         throw new Error("renderId mismatch between resourceJWT and issuerJWT");
     }
 
-    // 5. Check issuerName binding
+    // 5. Check issuerName binding.
     if (issuerPayload.issuerName !== config.issuerName) {
         throw new Error(`issuerName mismatch: expected "${config.issuerName}", got "${issuerPayload.issuerName}"`);
     }
 
-    if (request.issuerName !== config.issuerName) {
+    if (request.issuerName !== undefined && request.issuerName !== config.issuerName) {
         throw new Error(`Request issuerName mismatch: expected "${config.issuerName}", got "${request.issuerName}"`);
     }
 
@@ -395,12 +436,15 @@ async function unsealAndRespond(
     config: DcaIssuerServerConfig,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
     request: DcaUnlockRequest,
+    issuerPayload: DcaIssuerJwtPayload | undefined,
     grantedContentNames: string[],
     deliveryMode: "contentKey" | "periodKey",
 ): Promise<DcaUnlockResponse> {
-    // Verify keyId matches
-    if (request.keyId !== config.keyId) {
-        throw new Error(`keyId mismatch: expected "${config.keyId}", got "${request.keyId}"`);
+    // Resolve keyId: v2 sends it in the request body (from page's issuerData),
+    // v1 may send it in the request or the issuerJWT payload.
+    const effectiveKeyId = request.keyId ?? issuerPayload?.keyId;
+    if (effectiveKeyId !== config.keyId) {
+        throw new Error(`keyId mismatch: expected "${config.keyId}", got "${effectiveKeyId}"`);
     }
 
     // Get private key
@@ -463,15 +507,53 @@ async function processUnlock(
     accessDecision: DcaAccessDecision,
 ): Promise<DcaUnlockResponse> {
     // Verify everything first
-    await verifyRequest(config, publisherMap, request);
+    const { issuerPayload } = await verifyRequest(config, publisherMap, request);
+
+    // Resolve grantedContentNames from the access decision
+    const grantedContentNames = resolveGrantedContentNames(accessDecision, request);
 
     return unsealAndRespond(
         config,
         getPrivateKey,
         request,
-        accessDecision.grantedContentNames,
+        issuerPayload,
+        grantedContentNames,
         accessDecision.deliveryMode,
     );
+}
+
+/**
+ * Resolve the final list of contentNames to grant from an access decision.
+ *
+ * - If `grantedContentNames` is provided, use those directly.
+ * - If `grantedKeyNames` is provided, resolve via contentKeyMap → contentNames.
+ * - If neither is provided, throws.
+ */
+function resolveGrantedContentNames(
+    accessDecision: DcaAccessDecision,
+    request: DcaUnlockRequest,
+): string[] {
+    if (accessDecision.grantedContentNames && accessDecision.grantedContentNames.length > 0) {
+        return accessDecision.grantedContentNames;
+    }
+
+    if (accessDecision.grantedKeyNames && accessDecision.grantedKeyNames.length > 0) {
+        const keyNameSet = new Set(accessDecision.grantedKeyNames);
+        const contentKeyMap = request.contentKeyMap;
+
+        if (contentKeyMap && Object.keys(contentKeyMap).length > 0) {
+            // Resolve keyNames → contentNames via the contentKeyMap
+            return Object.entries(contentKeyMap)
+                .filter(([, keyName]) => keyNameSet.has(keyName))
+                .map(([contentName]) => contentName)
+                .filter(contentName => contentName in request.sealed);
+        }
+
+        // No contentKeyMap: treat keyNames as contentNames (backward compat)
+        return accessDecision.grantedKeyNames.filter(name => name in request.sealed);
+    }
+
+    throw new Error("Access decision must specify grantedContentNames or grantedKeyNames");
 }
 
 // ============================================================================
@@ -536,7 +618,10 @@ async function verifyShareLinkToken(
 
     // Validate contentNames is a non-empty array
     if (!Array.isArray(payload.contentNames) || payload.contentNames.length === 0) {
-        throw new Error("Share token: contentNames must be a non-empty array");
+        // keyNames can substitute for contentNames in v2
+        if (!payload.keyNames || !Array.isArray(payload.keyNames) || payload.keyNames.length === 0) {
+            throw new Error("Share token: contentNames (or keyNames) must be a non-empty array");
+        }
     }
 
     return payload;
@@ -558,7 +643,7 @@ async function processShareLinkUnlock(
     }
 
     // 2. Verify the request JWTs (same as normal unlock)
-    const { resource } = await verifyRequest(config, publisherMap, request);
+    const { resource, issuerPayload } = await verifyRequest(config, publisherMap, request);
 
     // 3. Verify the share link token
     const sharePayload = await verifyShareLinkToken(
@@ -580,11 +665,32 @@ async function processShareLinkUnlock(
     }
 
     // 6. Build access decision from the share token's claims.
-    //    Only grant content names that exist in both the token AND the sealed data.
+    //    Resolve keyNames → contentNames if the token uses keyNames (v2).
+    //    Only grant content names that exist in both the token/keyNames AND the sealed data.
     const availableContentNames = new Set(Object.keys(request.sealed));
-    const grantedContentNames = sharePayload.contentNames.filter(
-        (name) => availableContentNames.has(name),
-    );
+    let grantedContentNames: string[];
+
+    if (sharePayload.keyNames && sharePayload.keyNames.length > 0) {
+        // v2 keyName-based share token: resolve keyNames → contentNames
+        const keyNameSet = new Set(sharePayload.keyNames);
+        const contentKeyMap = request.contentKeyMap;
+
+        if (contentKeyMap && Object.keys(contentKeyMap).length > 0) {
+            grantedContentNames = Object.entries(contentKeyMap)
+                .filter(([, keyName]) => keyNameSet.has(keyName))
+                .map(([contentName]) => contentName)
+                .filter(name => availableContentNames.has(name));
+        } else {
+            // No contentKeyMap: treat keyNames as contentNames
+            grantedContentNames = sharePayload.keyNames.filter(
+                name => availableContentNames.has(name),
+            );
+        }
+    } else {
+        grantedContentNames = sharePayload.contentNames.filter(
+            (name) => availableContentNames.has(name),
+        );
+    }
 
     if (grantedContentNames.length === 0) {
         throw new Error(
@@ -600,6 +706,7 @@ async function processShareLinkUnlock(
         config,
         getPrivateKey,
         request,
+        issuerPayload,
         grantedContentNames,
         deliveryMode,
     );

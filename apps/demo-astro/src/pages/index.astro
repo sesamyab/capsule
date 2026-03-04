@@ -21,7 +21,10 @@ import { articles } from "../lib/articles";
         <a href={`/article/${article.id}`} class="article-card">
           <h3>{article.title}</h3>
           <p>{article.previewContent.slice(0, 150)}...</p>
-          <span class="badge">🔒 Premium Content</span>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <span class="badge">🔒 Premium Content</span>
+            <span class="badge">{article.tier}</span>
+          </div>
         </a>
       ))}
     </div>

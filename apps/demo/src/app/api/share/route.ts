@@ -84,20 +84,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // --- Validate contentNames -----------------------------------------------
-    const contentNames: unknown = body.contentNames ?? ["TierA"];
-    if (
-      !Array.isArray(contentNames) ||
-      contentNames.length === 0 ||
-      contentNames.length > 20 ||
-      !contentNames.every(
+    // --- Validate contentNames / keyNames ------------------------------------
+    // Prefer keyNames if provided; fall back to contentNames for backwards compat
+    const rawKeyNames: unknown = body.keyNames;
+    const rawContentNames: unknown = body.contentNames;
+
+    const isValidStringArray = (arr: unknown): arr is string[] =>
+      Array.isArray(arr) &&
+      arr.length > 0 &&
+      arr.length <= 20 &&
+      arr.every(
         (n: unknown) => typeof n === "string" && n.length > 0 && n.length <= 128,
-      )
-    ) {
+      );
+
+    const keyNames: string[] | undefined = rawKeyNames && isValidStringArray(rawKeyNames)
+      ? rawKeyNames
+      : undefined;
+    const contentNames: string[] | undefined = rawContentNames && isValidStringArray(rawContentNames)
+      ? rawContentNames
+      : undefined;
+
+    if (!keyNames && !contentNames) {
       return NextResponse.json(
         {
           error:
-            "contentNames must be an array of 1–20 non-empty strings (max 128 chars each)",
+            "keyNames or contentNames must be an array of 1–20 non-empty strings (max 128 chars each)",
         },
         { status: 400 },
       );
@@ -126,7 +137,7 @@ export async function POST(request: NextRequest) {
 
     const token = await publisher.createShareLinkToken({
       resourceId,
-      contentNames,
+      ...(keyNames ? { keyNames } : { contentNames: contentNames! }),
       expiresIn,
       data: body.data,
     });
@@ -140,7 +151,7 @@ export async function POST(request: NextRequest) {
       shareUrl,
       expiresIn,
       resourceId,
-      contentNames,
+      ...(keyNames ? { keyNames } : { contentNames }),
     });
   } catch (error) {
     console.error("Share link creation error:", error);

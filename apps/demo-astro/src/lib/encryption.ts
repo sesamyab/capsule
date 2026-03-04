@@ -8,6 +8,9 @@
 import {
   createDcaPublisher,
   createDcaIssuer,
+  generateEcdsaP256KeyPair,
+  generateEcdhP256KeyPair,
+  exportP256KeyPairPem,
 } from "@sesamy/capsule-server";
 import type { DcaRenderResult } from "@sesamy/capsule-server";
 
@@ -22,59 +25,101 @@ const DEMO_ISSUER_NAME = "sesamy-astro-demo";
 const DEMO_KEY_ID = "astro-demo-2026";
 const PERIOD_DURATION_HOURS = 1;
 
+const DEV_FALLBACK_SECRET = Buffer.from(
+  "demo-secret-do-not-use-in-production!!",
+  "utf-8",
+).toString("base64");
+
 // ── Lazy singletons ────────────────────────────────────────────────────
 let _publisher: DcaPublisher | null = null;
 let _issuer: DcaIssuerServer | null = null;
 let _issuerPublicKeyPem: string | null = null;
 
-/**
- * Auto-generate P-256 key pairs when env vars aren't set (dev mode only).
- */
-async function ensureKeys() {
-  if (
-    !process.env.PUBLISHER_ES256_PRIVATE_KEY &&
-    import.meta.env.DEV
-  ) {
-    console.warn("[dca] Auto-generating P-256 keys for dev mode");
+// ---------------------------------------------------------------------------
+// Secret helpers
+// ---------------------------------------------------------------------------
 
-    const { webcrypto } = await import("node:crypto");
-    const subtle = webcrypto.subtle;
+let _periodSecret: string | undefined;
 
-    // Signing key (ECDSA P-256 / ES256)
-    const signingPair = await subtle.generateKey(
-      { name: "ECDSA", namedCurve: "P-256" },
-      true,
-      ["sign", "verify"],
-    );
-    const sigPriv = await subtle.exportKey("pkcs8", signingPair.privateKey);
-    const sigPub = await subtle.exportKey("spki", signingPair.publicKey);
-    process.env.PUBLISHER_ES256_PRIVATE_KEY = toPem(sigPriv, "PRIVATE KEY");
-    process.env.PUBLISHER_ES256_PUBLIC_KEY = toPem(sigPub, "PUBLIC KEY");
-
-    // Sealing key (ECDH P-256)
-    const sealPair = await subtle.generateKey(
-      { name: "ECDH", namedCurve: "P-256" },
-      true,
-      ["deriveBits"],
-    );
-    const sealPriv = await subtle.exportKey("pkcs8", sealPair.privateKey);
-    const sealPub = await subtle.exportKey("spki", sealPair.publicKey);
-    process.env.ISSUER_ECDH_PRIVATE_KEY = toPem(sealPriv, "PRIVATE KEY");
-    process.env.ISSUER_ECDH_PUBLIC_KEY = toPem(sealPub, "PUBLIC KEY");
-
-    // Period secret
-    if (!process.env.PERIOD_SECRET) {
-      const bytes = new Uint8Array(32);
-      webcrypto.getRandomValues(bytes);
-      process.env.PERIOD_SECRET = Buffer.from(bytes).toString("base64");
-    }
+function getPeriodSecret(): string {
+  if (_periodSecret) return _periodSecret;
+  const secret = process.env.PERIOD_SECRET;
+  if (secret) {
+    _periodSecret = secret;
+    return secret;
   }
+  if (import.meta.env.DEV) {
+    console.warn(
+      "[capsule] PERIOD_SECRET not set — using insecure demo fallback (dev only)",
+    );
+    _periodSecret = DEV_FALLBACK_SECRET;
+    return _periodSecret;
+  }
+  throw new Error(
+    "PERIOD_SECRET environment variable is required in production",
+  );
 }
 
-function toPem(buf: ArrayBuffer, label: string): string {
-  const b64 = Buffer.from(buf).toString("base64");
-  const lines = b64.match(/.{1,64}/g)!.join("\n");
-  return `-----BEGIN ${label}-----\n${lines}\n-----END ${label}-----`;
+// ---------------------------------------------------------------------------
+// DCA Key management — uses library helpers instead of raw node:crypto
+// ---------------------------------------------------------------------------
+
+interface DcaKeys {
+  signingPrivateKeyPem: string;
+  signingPublicKeyPem: string;
+  issuerPrivateKeyPem: string;
+  issuerPublicKeyPem: string;
+}
+
+let _keysPromise: Promise<DcaKeys> | null = null;
+
+async function getDcaKeys(): Promise<DcaKeys> {
+  if (!_keysPromise) {
+    _keysPromise = (async () => {
+      if (
+        process.env.PUBLISHER_ES256_PRIVATE_KEY &&
+        process.env.PUBLISHER_ES256_PUBLIC_KEY &&
+        process.env.ISSUER_ECDH_PRIVATE_KEY &&
+        process.env.ISSUER_ECDH_PUBLIC_KEY
+      ) {
+        return {
+          signingPrivateKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY,
+          signingPublicKeyPem: process.env.PUBLISHER_ES256_PUBLIC_KEY,
+          issuerPrivateKeyPem: process.env.ISSUER_ECDH_PRIVATE_KEY,
+          issuerPublicKeyPem: process.env.ISSUER_ECDH_PUBLIC_KEY,
+        };
+      }
+
+      if (!import.meta.env.DEV) {
+        throw new Error(
+          "DCA key pair environment variables are required in production: " +
+            "PUBLISHER_ES256_PRIVATE_KEY, PUBLISHER_ES256_PUBLIC_KEY, " +
+            "ISSUER_ECDH_PRIVATE_KEY, ISSUER_ECDH_PUBLIC_KEY",
+        );
+      }
+
+      console.warn(
+        "[capsule] DCA keys not set — generating ephemeral keys (dev only)",
+      );
+
+      const [signingPair, issuerPair] = await Promise.all([
+        generateEcdsaP256KeyPair().then((kp) =>
+          exportP256KeyPairPem(kp.privateKey, kp.publicKey),
+        ),
+        generateEcdhP256KeyPair().then((kp) =>
+          exportP256KeyPairPem(kp.privateKey, kp.publicKey),
+        ),
+      ]);
+
+      return {
+        signingPrivateKeyPem: signingPair.privateKeyPem,
+        signingPublicKeyPem: signingPair.publicKeyPem,
+        issuerPrivateKeyPem: issuerPair.privateKeyPem,
+        issuerPublicKeyPem: issuerPair.publicKeyPem,
+      };
+    })();
+  }
+  return _keysPromise;
 }
 
 function env(name: string): string {
@@ -85,11 +130,11 @@ function env(name: string): string {
 
 export async function getPublisher(): Promise<DcaPublisher> {
   if (!_publisher) {
-    await ensureKeys();
+    const keys = await getDcaKeys();
     _publisher = createDcaPublisher({
       domain: DEMO_DOMAIN,
-      signingKeyPem: env("PUBLISHER_ES256_PRIVATE_KEY"),
-      periodSecret: env("PERIOD_SECRET"),
+      signingKeyPem: keys.signingPrivateKeyPem,
+      periodSecret: getPeriodSecret(),
       periodDurationHours: PERIOD_DURATION_HOURS,
     });
   }
@@ -98,15 +143,13 @@ export async function getPublisher(): Promise<DcaPublisher> {
 
 export async function getIssuer(): Promise<DcaIssuerServer> {
   if (!_issuer) {
-    await ensureKeys();
+    const keys = await getDcaKeys();
     _issuer = createDcaIssuer({
       issuerName: DEMO_ISSUER_NAME,
-      privateKeyPem: env("ISSUER_ECDH_PRIVATE_KEY"),
+      privateKeyPem: keys.issuerPrivateKeyPem,
       keyId: DEMO_KEY_ID,
       trustedPublisherKeys: {
-        [DEMO_DOMAIN]: {
-          signingKeyPem: env("PUBLISHER_ES256_PUBLIC_KEY"),
-        },
+        [DEMO_DOMAIN]: keys.signingPublicKeyPem,
       },
     });
   }
@@ -114,16 +157,14 @@ export async function getIssuer(): Promise<DcaIssuerServer> {
 }
 
 export async function getIssuerPublicKeyPem(): Promise<string> {
-  if (!_issuerPublicKeyPem) {
-    await ensureKeys();
-    _issuerPublicKeyPem = env("ISSUER_ECDH_PUBLIC_KEY");
-  }
-  return _issuerPublicKeyPem;
+  const keys = await getDcaKeys();
+  return keys.issuerPublicKeyPem;
 }
 
 // ── Render cache ────────────────────────────────────────────────────────
 interface CachedRender {
   data: DcaRenderResult;
+  tier: string;
   hourBucket: string;
 }
 const renderCache = new Map<string, CachedRender>();
@@ -135,15 +176,23 @@ function getCurrentHourBucket(): string {
 
 /**
  * Render a DCA-encrypted article.
+ *
+ * Looks up the article by resourceId and uses:
+ * - contentName: "bodytext" (stable content identity)
+ * - keyName: article tier (access/key domain)
  */
 export async function renderDcaArticle(
   resourceId: string,
-  content: string,
-  contentName = "bodytext",
-): Promise<DcaRenderResult> {
+): Promise<{ result: DcaRenderResult; tier: string } | null> {
   const hourBucket = getCurrentHourBucket();
   const cached = renderCache.get(resourceId);
-  if (cached && cached.hourBucket === hourBucket) return cached.data;
+  if (cached && cached.hourBucket === hourBucket) {
+    return { result: cached.data, tier: cached.tier };
+  }
+
+  const { articles } = await import("./articles");
+  const article = articles[resourceId];
+  if (!article) return null;
 
   const publisher = await getPublisher();
   const issuerPub = await getIssuerPublicKeyPem();
@@ -151,7 +200,12 @@ export async function renderDcaArticle(
   const result = await publisher.render({
     resourceId,
     contentItems: [
-      { contentName, content, contentType: "text/html" },
+      {
+        contentName: "bodytext",
+        keyName: article.tier,
+        content: article.premiumContent,
+        contentType: "text/html",
+      },
     ],
     issuers: [
       {
@@ -159,14 +213,17 @@ export async function renderDcaArticle(
         publicKeyPem: issuerPub,
         keyId: DEMO_KEY_ID,
         unlockUrl: "/api/unlock",
-        contentNames: [contentName],
+        keyNames: [article.tier],
       },
     ],
-    resourceData: { title: resourceId },
+    resourceData: {
+      title: article.title,
+      author: article.author,
+    },
   });
 
-  renderCache.set(resourceId, { data: result, hourBucket });
-  return result;
+  renderCache.set(resourceId, { data: result, tier: article.tier, hourBucket });
+  return { result, tier: article.tier };
 }
 
 export { DEMO_ISSUER_NAME };
