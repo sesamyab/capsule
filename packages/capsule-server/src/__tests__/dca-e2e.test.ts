@@ -2088,7 +2088,7 @@ describe("Share Link Tokens", () => {
 // ============================================================================
 
 describe("v2 unlock request format", () => {
-    it("unlocks with v2 minimal request (no resource, issuerJWT, issuerName)", async () => {
+    it("unlocks with v2 request (no resource, no issuerName)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2122,10 +2122,11 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 request: only resourceJWT, sealed, keyId (no issuerJWT)
+        // v2 request: resourceJWT, issuerJWT, sealed, keyId (no resource, no issuerName)
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["v2-issuer"],
                 sealed: result.dcaData.issuerData["v2-issuer"].sealed,
                 keyId: "v2-key-1",
             },
@@ -2177,10 +2178,11 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 request with periodKey delivery (no issuerJWT)
+        // v2 request with periodKey delivery
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["v2pk-issuer"],
                 sealed: result.dcaData.issuerData["v2pk-issuer"].sealed,
                 keyId: "v2pk-1",
             },
@@ -2306,6 +2308,7 @@ describe("v2 unlock request format", () => {
             issuer.unlock(
                 {
                     resourceJWT: result.dcaData.resourceJWT,
+                    issuerJWT: result.dcaData.issuerJWT["reject-issuer"],
                     sealed: result.dcaData.issuerData["reject-issuer"].sealed,
                     keyId: "r-1",
                 },
@@ -2350,10 +2353,11 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 share link unlock — no issuerJWT, no resource, no issuerName
+        // v2 share link unlock — no resource, no issuerName; issuerJWT still required
         const response = await issuer.unlockWithShareToken(
             {
                 resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["v2share-issuer"],
                 sealed: result.dcaData.issuerData["v2share-issuer"].sealed,
                 keyId: "vs-1",
                 shareToken,
@@ -2408,6 +2412,7 @@ describe("v2 unlock request format", () => {
             issuer.unlock(
                 {
                     resourceJWT: result.dcaData.resourceJWT,
+                    issuerJWT: result.dcaData.issuerJWT["v2kid-issuer"],
                     sealed: result.dcaData.issuerData["v2kid-issuer"].sealed,
                     keyId: "wrong-key",
                 },
@@ -2633,7 +2638,7 @@ describe("keyName (v2 role-based access)", () => {
         }
     });
 
-    it("v2 request with grantedKeyNames (no resource, no issuerJWT)", async () => {
+    it("v2 request with grantedKeyNames (no resource, no issuerName)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2666,10 +2671,11 @@ describe("keyName (v2 role-based access)", () => {
             },
         });
 
-        // v2: no resource, no issuerJWT; with contentKeyMap for keyName resolution
+        // v2: no resource, no issuerName; with contentKeyMap for keyName resolution
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["v2kn-issuer"],
                 sealed: result.dcaData.issuerData["v2kn-issuer"].sealed,
                 keyId: "v2kn-1",
                 contentKeyMap: result.dcaData.contentKeyMap,
