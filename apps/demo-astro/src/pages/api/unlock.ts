@@ -26,6 +26,7 @@
 import type { APIRoute } from "astro";
 import type { DcaUnlockRequest } from "@sesamy/capsule-server";
 import { getIssuer } from "../../lib/encryption";
+import { articles } from "../../lib/articles";
 
 export const POST: APIRoute = async ({ request }) => {
   try {
@@ -70,28 +71,39 @@ export const POST: APIRoute = async ({ request }) => {
       });
     }
 
-    // Normal unlock flow: choose delivery mode based on accessType
+    // ── Access decision ────────────────────────────────────────────────
+    // IMPORTANT: Derive scope from the *verified* resource (server-side),
+    // NOT from untrusted client fields (body.sealed / body.contentKeyMap).
+    // In v2 there is no issuerJWT integrity proof, so the client could
+    // inflate contentKeyMap/sealed to widen the scope the issuer unseals.
+    //
+    // 1. Verify the request JWTs to get the trusted resource.
+    // 2. Look up the article server-side to determine the entitled tier.
+    // 3. Pass only the server-authorised scope to issuer.unlock().
+    const { resource } = await issuer.verify(body);
+    const article = articles[resource.resourceId];
+    if (!article) {
+      return new Response(
+        JSON.stringify({ error: `Unknown resource: "${resource.resourceId}"` }),
+        { status: 404, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    // The article's tier is the server-side source of truth for key scope.
+    // In production this would come from a subscription/entitlement check.
+    const grantedKeyNames = [article.tier];
+
     // accessType: "article" → contentKey (one-time, non-cacheable)
     //             "tier" or "subscription" → periodKey (cacheable for 1 hour)
     const accessType = (body as unknown as Record<string, unknown>).accessType as string | undefined;
     const deliveryMode = accessType === "article" ? "contentKey" : "periodKey";
 
-    // Resolve access grant: if contentKeyMap is present (v2 keyName mode),
-    // grant by keyName so the issuer resolves which content items to unseal.
-    // Otherwise fall back to granting all sealed content names directly.
-    const hasKeyNames = body.contentKeyMap && Object.keys(body.contentKeyMap).length > 0;
-    const grantedKeyNames = hasKeyNames
-      ? Array.from(new Set(Object.values(body.contentKeyMap!)))
-      : undefined;
-    const grantedContentNames = hasKeyNames ? undefined : Object.keys(body.sealed);
-
     console.log(
-      `[unlock] accessType=${accessType ?? "default"}, deliveryMode=${deliveryMode}, ` +
-      `${grantedKeyNames ? `keyNames=[${grantedKeyNames.join(",")}]` : `content=[${grantedContentNames!.join(",")}]`}`,
+      `[unlock] resource=${resource.resourceId}, tier=${article.tier}, ` +
+      `deliveryMode=${deliveryMode}, grantedKeyNames=[${grantedKeyNames.join(",")}]`,
     );
 
     const result = await issuer.unlock(body, {
-      grantedContentNames,
       grantedKeyNames,
       deliveryMode,
     });
