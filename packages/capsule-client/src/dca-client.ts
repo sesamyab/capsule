@@ -63,6 +63,12 @@ export interface DcaData {
         unlockUrl: string;
         keyId: string;
     }>;
+    /**
+     * Maps contentName → keyName. Present when any content item's keyName
+     * differs from its contentName (v2 keyName-based access).
+     * When absent, each contentName IS its own keyName.
+     */
+    contentKeyMap?: Record<string, string>;
 }
 
 /** Parsed page data */
@@ -124,6 +130,18 @@ export interface DcaClientOptions {
      * Defaults to "dca-keys".
      */
     keyDbName?: string;
+    /**
+     * Unlock request format version.
+     *
+     * - `"v1"` (default): sends `resource`, `keyId`, `issuerName`, and `issuerJWT`.
+     * - `"v2"` (beta): sends only `resourceJWT`, `sealed`, and `keyId`.
+     *   The issuerJWT is dropped — AES-GCM provides sealed-blob integrity,
+     *   and the resourceJWT already authenticates the publisher.
+     *
+     * **v2 is not backwards compatible with v1-only services.**
+     * v1 requests work with both v1 and v2 services.
+     */
+    requestFormat?: "v1" | "v2";
 }
 
 /** Simple key-value cache interface for period keys */
@@ -178,6 +196,7 @@ export class DcaClient {
     private clientBound: boolean;
     private rsaKeySize: 2048 | 4096;
     private keyDbName: string;
+    private requestFormat: "v1" | "v2";
     private keyPairPromise: Promise<CryptoKeyPair> | null = null;
 
     constructor(options: DcaClientOptions = {}) {
@@ -187,6 +206,7 @@ export class DcaClient {
         this.clientBound = options.clientBound ?? false;
         this.rsaKeySize = options.rsaKeySize ?? 2048;
         this.keyDbName = options.keyDbName ?? DEFAULT_KEY_DB_NAME;
+        this.requestFormat = options.requestFormat ?? "v1";
     }
 
     // --------------------------------------------------------------------------
@@ -258,15 +278,32 @@ export class DcaClient {
             throw new Error(`DCA: issuer "${issuerName}" not found in issuerData`);
         }
 
-        const body: Record<string, unknown> = {
-            resource: page.dcaData.resource,
-            resourceJWT: page.dcaData.resourceJWT,
-            issuerJWT: page.dcaData.issuerJWT[issuerName],
-            sealed: issuerEntry.sealed,
-            keyId: issuerEntry.keyId,
-            issuerName,
-            ...additionalBody,
-        };
+        // Build request body based on format version
+        let body: Record<string, unknown>;
+
+        if (this.requestFormat === "v2") {
+            // v2 (beta): minimal request — no issuerJWT needed.
+            // AES-GCM provides integrity; resourceJWT authenticates the publisher.
+            body = {
+                resourceJWT: page.dcaData.resourceJWT,
+                sealed: issuerEntry.sealed,
+                keyId: issuerEntry.keyId,
+                // Include contentKeyMap for keyName-based access decisions
+                ...(page.dcaData.contentKeyMap ? { contentKeyMap: page.dcaData.contentKeyMap } : {}),
+                ...additionalBody,
+            };
+        } else {
+            // v1 (default): full request with redundant fields for compatibility
+            body = {
+                resource: page.dcaData.resource,
+                resourceJWT: page.dcaData.resourceJWT,
+                issuerJWT: page.dcaData.issuerJWT[issuerName],
+                sealed: issuerEntry.sealed,
+                keyId: issuerEntry.keyId,
+                issuerName,
+                ...additionalBody,
+            };
+        }
 
         // Client-bound transport: include RSA public key
         if (this.clientBound) {
@@ -385,7 +422,9 @@ export class DcaClient {
                 const rawPeriodKeys = isClientBound
                     ? await this.unwrapPeriodKeyMap(keyEntry.periodKeys)
                     : keyEntry.periodKeys;
-                await this.cachePeriodKeys(contentName, rawPeriodKeys);
+                // Cache by keyName (not contentName) for cross-content sharing
+                const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+                await this.cachePeriodKeys(keyName, rawPeriodKeys);
             }
         } else if (keyEntry.periodKeys) {
             // Cacheable path: unwrap contentKey from sealedContentKeys using a periodKey
@@ -398,13 +437,15 @@ export class DcaClient {
                 rawPeriodKeys,
             );
 
-            // Cache for future use
+            // Cache by keyName for cross-content sharing
             if (this.periodKeyCache) {
-                await this.cachePeriodKeys(contentName, rawPeriodKeys);
+                const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+                await this.cachePeriodKeys(keyName, rawPeriodKeys);
             }
         } else {
-            // Try cached periodKeys
-            const cached = await this.getCachedPeriodKeys(contentName, page.dcaData.sealedContentKeys[contentName] ?? []);
+            // Try cached periodKeys (by keyName)
+            const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+            const cached = await this.getCachedPeriodKeys(keyName, page.dcaData.sealedContentKeys[contentName] ?? []);
             if (cached) {
                 contentKeyBytes = await this.unwrapWithPeriodKeys(
                     page.dcaData.sealedContentKeys[contentName] ?? [],
@@ -497,17 +538,17 @@ export class DcaClient {
     }
 
     private async cachePeriodKeys(
-        contentName: string,
+        keyName: string,
         periodKeys: Record<string, string>,
     ): Promise<void> {
         if (!this.periodKeyCache) return;
         for (const [t, keyB64] of Object.entries(periodKeys)) {
-            await this.periodKeyCache.set(`dca:pk:${contentName}:${t}`, keyB64);
+            await this.periodKeyCache.set(`dca:pk:${keyName}:${t}`, keyB64);
         }
     }
 
     private async getCachedPeriodKeys(
-        contentName: string,
+        keyName: string,
         sealedEntries: Array<{ t: string }>,
     ): Promise<Record<string, string> | null> {
         if (!this.periodKeyCache) return null;
@@ -515,7 +556,7 @@ export class DcaClient {
         const keys: Record<string, string> = {};
         let found = false;
         for (const entry of sealedEntries) {
-            const cached = await this.periodKeyCache.get(`dca:pk:${contentName}:${entry.t}`);
+            const cached = await this.periodKeyCache.get(`dca:pk:${keyName}:${entry.t}`);
             if (cached) {
                 keys[entry.t] = cached;
                 found = true;

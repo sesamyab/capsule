@@ -23,11 +23,8 @@ if (!article) {
 }
 
 // Pre-encrypt the content server-side using DCA publisher
-const dcaResult = await renderDcaArticle(
-  article.id,
-  article.premiumContent,
-  "bodytext"
-);
+const dcaResult = await renderDcaArticle(article.id);
+const contentName = "bodytext";
 ---
 
 <Layout title={`${article.title} - DCA Demo`}>
@@ -47,7 +44,9 @@ const dcaResult = await renderDcaArticle(
   -->
 
   <!-- DCA data and sealed content embedded by publisher -->
-  <Fragment set:html={dcaResult.html.dcaDataScript + dcaResult.html.sealedContentTemplate} />
+  {dcaResult && (
+    <Fragment set:html={dcaResult.result.html.dcaDataScript + dcaResult.result.html.sealedContentTemplate} />
+  )}
 
   <main class="article-page">
     <article>
@@ -91,9 +90,10 @@ const dcaResult = await renderDcaArticle(
   </main>
 
   <!-- DCA Client Initialization -->
-  <script define:vars={{ issuerName: DEMO_ISSUER_NAME }}>
-    // Inline the issuerName from server
+  <script define:vars={{ issuerName: DEMO_ISSUER_NAME, contentName }}>
+    // Inline the issuerName and contentName from server
     window.__DCA_ISSUER_NAME__ = issuerName;
+    window.__DCA_CONTENT_NAME__ = contentName;
   </script>
   <script>
     import { DcaClient } from '@sesamy/capsule';
@@ -111,6 +111,7 @@ const dcaResult = await renderDcaArticle(
     }
 
     const issuerName = (window as any).__DCA_ISSUER_NAME__ || 'sesamy-astro-demo';
+    const dcaContentName = (window as any).__DCA_CONTENT_NAME__ || 'bodytext';
     const client = new DcaClient();
 
     log('DCA client initialized', 'info');
@@ -139,7 +140,7 @@ const dcaResult = await renderDcaArticle(
         const keys = await client.unlock(page, issuerName);
         log('Keys received, decrypting...', 'success');
 
-        const html = await client.decrypt(page, 'bodytext', keys);
+        const html = await client.decrypt(page, dcaContentName, keys);
         log(`Content decrypted (${html.length} chars)`, 'success');
 
         // Replace locked state with decrypted content

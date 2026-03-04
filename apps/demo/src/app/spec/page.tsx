@@ -92,9 +92,9 @@ const result = await publisher.render({
         <CodeBlock>{`// Sealing internals (automatic during render)
 // 1. Ephemeral ECDH P-256 key pair generated per seal operation
 // 2. ECDH shared secret derived: ephemeralPrivate × issuerPublic
-// 3. HKDF extract-and-expand → 256-bit wrapping key
+// 3. HKDF-SHA256(secret, salt="dca-seal", info="dca-seal-aes256gcm") → 256-bit wrapping key
 // 4. AES-256-GCM wrap each key with a unique 12-byte nonce
-// 5. Sealed blob = ephemeralPublicKey ‖ nonce ‖ ciphertext ‖ tag`}</CodeBlock>
+// 5. Sealed blob = ephemeralPublicKey(65B) ‖ nonce(12B) ‖ ciphertext+tag`}</CodeBlock>
 
         <h3>Integrity Proofs</h3>
         <p>

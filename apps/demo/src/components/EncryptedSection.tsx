@@ -13,7 +13,7 @@ import { KeyManager } from "./KeyManager";
 
 interface EncryptedSectionProps {
   resourceId: string;
-  /** The DCA content name / tier (e.g. "TierA", "TierB") */
+  /** The DCA content name (e.g. "bodytext") */
   contentName: string;
   /** Whether the page has DCA-encrypted content embedded */
   hasEncryptedContent: boolean;
@@ -39,6 +39,7 @@ export function EncryptedSection({
   const contentRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<InstanceType<typeof import("@sesamy/capsule").DcaClient> | null>(null);
   const pageRef = useRef<import("@sesamy/capsule").DcaParsedPage | null>(null);
+  const keyNameRef = useRef<string>(contentName);
   const initRanRef = useRef(false);
   const { log } = useConsole();
 
@@ -99,6 +100,10 @@ export function EncryptedSection({
           const page = client.parsePage();
           pageRef.current = page;
 
+          // Resolve keyName from DCA contentKeyMap (falls back to contentName)
+          const resolvedKeyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+          keyNameRef.current = resolvedKeyName;
+
           const contentNames = Object.keys(page.dcaData.contentSealData);
           const issuerNames = Object.keys(page.dcaData.issuerData);
           log(`DCA data parsed: ${contentNames.length} content item(s), ${issuerNames.length} issuer(s)`, "info");
@@ -129,7 +134,7 @@ export function EncryptedSection({
 
             // Store content key metadata so KeyManager can display it
             await storeContentKeyRecord(resourceId);
-            await storeSubscriptionRecord(contentName);
+            await storeSubscriptionRecord(resolvedKeyName);
 
             setDecryptedContent(html);
             setState("unlocked");
@@ -148,9 +153,9 @@ export function EncryptedSection({
           }
 
           // Try auto-unlock from cached period keys.
-          // Period keys are shared across all articles (keyed by contentName + timeBucket),
-          // so any previously cached subscription key can unlock any article.
-          const hasSubscription = await hasActiveSubscription(contentName);
+          // Period keys are shared across all articles (keyed by keyName + timeBucket),
+          // so any previously cached subscription key can unlock any article in the same tier.
+          const hasSubscription = await hasActiveSubscription(resolvedKeyName);
 
           if (!hasSubscription) {
             log("No active subscription — skipping cached key auto-unlock", "info");
@@ -165,12 +170,12 @@ export function EncryptedSection({
               throw new Error(`No sealedContentKeys for ${contentName}`);
             }
 
-            // Verify cache has at least one matching key
+            // Verify cache has at least one matching key (keyed by keyName)
             let cacheHit = false;
             for (const entry of sealedEntries) {
-              const cached = await periodKeyCache.get(`dca:pk:${contentName}:${entry.t}`);
+              const cached = await periodKeyCache.get(`dca:pk:${resolvedKeyName}:${entry.t}`);
               if (cached) {
-                log(`Cache hit for period bucket "${entry.t}"`, "crypto");
+                log(`Cache hit for period bucket "${entry.t}" (keyName: ${resolvedKeyName})`, "crypto");
                 cacheHit = true;
                 break;
               }
@@ -192,8 +197,8 @@ export function EncryptedSection({
 
             log("Cached period key found — decrypting automatically!", "success");
 
-            // Refresh subscription TTL
-            await storeSubscriptionRecord(contentName);
+            // Refresh subscription TTL (keyed by keyName/tier)
+            await storeSubscriptionRecord(resolvedKeyName);
 
             setDecryptedContent(html);
             setState("unlocked");
@@ -220,7 +225,7 @@ export function EncryptedSection({
               log("Decrypting content with AES-256-GCM + AAD...", "crypto");
 
               const html = await client.decrypt(page, contentName, keys);
-              await storeSubscriptionRecord(contentName);
+              await storeSubscriptionRecord(resolvedKeyName);
 
               setDecryptedContent(html);
               setState("unlocked");
@@ -286,6 +291,7 @@ export function EncryptedSection({
   const handleUnlock = async (accessType: AccessType) => {
     const client = clientRef.current;
     const page = pageRef.current;
+    const keyName = keyNameRef.current;
 
     if (!client || !page) {
       setError("Not ready");
@@ -297,7 +303,7 @@ export function EncryptedSection({
 
     const accessLabels: Record<AccessType, string> = {
       article: "Single Article (contentKey — one-time, non-cacheable)",
-      tier: `Tier Subscription: ${contentName} (periodKey — cacheable for 1 hour across tier)`,
+      tier: `Tier Subscription: ${keyName} (periodKey — cacheable for 1 hour across tier)`,
     };
 
     try {
@@ -348,7 +354,7 @@ export function EncryptedSection({
       if (accessType === "article") {
         await storeContentKeyRecord(resourceId);
       } else {
-        await storeSubscriptionRecord(contentName);
+        await storeSubscriptionRecord(keyName);
       }
 
       setDecryptedContent(html);
@@ -365,6 +371,7 @@ export function EncryptedSection({
 
   // Handle share link generation
   const handleShare = async () => {
+    const keyName = keyNameRef.current;
     setIsSharing(true);
     try {
       log("Generating share link token...", "network");
@@ -373,7 +380,7 @@ export function EncryptedSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           resourceId,
-          contentNames: [contentName],
+          keyNames: [keyName],
           expiresIn: 7 * 24 * 3600, // 7 days
         }),
       });
@@ -506,14 +513,14 @@ export function EncryptedSection({
               <button onClick={() => handleUnlock("tier")} className="secondary">
                 <span className="button-icon">🔑</span>
                 <span className="button-text">
-                  <strong>Unlock {contentName}</strong>
-                  <small>periodKey — cacheable across {contentName} articles</small>
+                  <strong>Unlock {keyNameRef.current}</strong>
+                  <small>periodKey — cacheable across {keyNameRef.current} articles</small>
                 </span>
               </button>
             </div>
             <p className="hint">
               <strong>Article:</strong> returns a direct contentKey (non-cacheable).<br />
-              <strong>{contentName}:</strong> returns periodKeys (cacheable for 1 hour, reusable across {contentName} articles).
+              <strong>{keyNameRef.current}:</strong> returns periodKeys (cacheable for 1 hour, reusable across {keyNameRef.current} articles).
             </p>
           </>
         )}

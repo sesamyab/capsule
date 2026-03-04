@@ -70,7 +70,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
             {/* DCA client-side decryption component */}
             <EncryptedSection
               resourceId={article.id}
-              contentName={dcaResult?.tier ?? "TierA"}
+              contentName="bodytext"
               hasEncryptedContent={!!dcaResult}
             />
           </section>

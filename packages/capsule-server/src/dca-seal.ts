@@ -32,6 +32,7 @@ import {
     toBase64Url,
     fromBase64Url,
     concatBytes,
+    hkdf,
     type WebCryptoKey,
 } from "./web-crypto";
 
@@ -48,11 +49,17 @@ const MIN_ECDH_BLOB_LEN = ECDH_PUB_LEN + IV_LEN + GCM_TAG_LEN;
 // ECDH P-256 sealing
 // ============================================================================
 
+/** HKDF salt for ECDH seal key derivation (domain separation) */
+const SEAL_HKDF_SALT = "dca-seal";
+/** HKDF info for ECDH seal key derivation */
+const SEAL_HKDF_INFO = "dca-seal-aes256gcm";
+
 /**
  * Seal (encrypt) key material with an issuer's ECDH P-256 public key.
  *
  * For each seal, a fresh ephemeral keypair is generated. The raw ECDH
- * shared secret (x-coordinate, 32 bytes) is used directly as the AES-256-GCM key.
+ * shared secret is run through HKDF-SHA256 to derive the AES-256-GCM key
+ * (NIST SP 800-56C compliant).
  *
  * @param plaintext - Key material to seal (e.g., a 32-byte AES key)
  * @param issuerPublicKey - Issuer's ECDH P-256 public key (CryptoKey)
@@ -65,9 +72,10 @@ export async function sealEcdhP256(
     // Generate fresh ephemeral keypair
     const ephemeral = await generateEcdhP256KeyPair();
 
-    // ECDH shared secret → use directly as AES-256-GCM key (no KDF per DCA spec)
+    // ECDH shared secret → HKDF → AES-256-GCM key
     const sharedSecret = await ecdhDeriveBits(ephemeral.privateKey, issuerPublicKey);
-    const aesKey = await importAesKey(sharedSecret, ["encrypt"]);
+    const derivedKey = await hkdf(sharedSecret, SEAL_HKDF_SALT, SEAL_HKDF_INFO, 32);
+    const aesKey = await importAesKey(derivedKey, ["encrypt"]);
 
     // Encrypt key material
     const iv = generateIv();
@@ -109,9 +117,10 @@ export async function unsealEcdhP256(
     // Import ephemeral public key
     const ephemeralPubKey = await importEcdhP256PublicKeyRaw(ephemeralPubRaw);
 
-    // ECDH shared secret → AES-256-GCM key
+    // ECDH shared secret → HKDF → AES-256-GCM key
     const sharedSecret = await ecdhDeriveBits(issuerPrivateKey, ephemeralPubKey);
-    const aesKey = await importAesKey(sharedSecret, ["decrypt"]);
+    const derivedKey = await hkdf(sharedSecret, SEAL_HKDF_SALT, SEAL_HKDF_INFO, 32);
+    const aesKey = await importAesKey(derivedKey, ["decrypt"]);
 
     // Decrypt
     return aesGcmDecrypt(ciphertext, aesKey, iv);

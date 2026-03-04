@@ -28,11 +28,24 @@ export interface DcaData {
     sealedContentKeys: Record<string, DcaSealedContentKey[]>;
     /** Per issuer: sealed keys, unlock URL, and key ID */
     issuerData: Record<string, DcaIssuerEntry>;
+    /**
+     * Maps contentName → keyName when any content item's keyName differs
+     * from its contentName. Omitted when every keyName equals its contentName
+     * (backward compatibility — v1 behaviour).
+     *
+     * The keyName determines which periodKey domain a content item belongs to.
+     * Content items sharing a keyName share the same periodKey, enabling
+     * role-based access: e.g. keyName "premium" covers both "bodytext" and
+     * "sidebar", and a single subscription grants access to all of them.
+     */
+    contentKeyMap?: Record<string, string>;
 }
 
 /**
- * Publisher resource metadata.
- * This is the JWT payload for `resourceJWT`.
+ * Publisher resource metadata (human-readable form).
+ * Used in DcaData.resource (the page's unsigned copy) and internally
+ * after JWT verification. The JWT payload uses standard claim names
+ * — see {@link DcaResourceJwtPayload}.
  */
 export interface DcaResource {
     /** Random base64url string (min 8 bytes), binds resourceJWT and issuerJWT */
@@ -43,6 +56,29 @@ export interface DcaResource {
     issuedAt: string;
     /** Publisher's article/resource identifier */
     resourceId: string;
+    /** Publisher-defined metadata for access decisions */
+    data: Record<string, unknown>;
+}
+
+/**
+ * JWT payload for `resourceJWT` — uses standard JWT claim names (RFC 7519).
+ *
+ * Mapping from DcaResource:
+ *   - `domain`     → `iss` (JWT Issuer — the publisher that signed the token)
+ *   - `resourceId` → `sub` (JWT Subject — the resource being accessed)
+ *   - `issuedAt`   → `iat` (JWT Issued At — Unix timestamp in seconds)
+ *   - `renderId`   → `jti` (JWT ID — unique per-render token identifier)
+ *   - `data`       → `data` (custom claim — publisher-defined metadata)
+ */
+export interface DcaResourceJwtPayload {
+    /** Publisher domain (maps to DcaResource.domain) */
+    iss: string;
+    /** Resource identifier (maps to DcaResource.resourceId) */
+    sub: string;
+    /** Render timestamp as Unix seconds (maps to DcaResource.issuedAt) */
+    iat: number;
+    /** Render ID (maps to DcaResource.renderId) */
+    jti: string;
     /** Publisher-defined metadata for access decisions */
     data: Record<string, unknown>;
 }
@@ -108,6 +144,12 @@ export interface DcaIssuerJwtPayload {
     issuerName: string;
     /** SHA-256 hashes of sealed blobs, mirroring the structure of issuerData.*.sealed */
     proof: Record<string, DcaIssuerProof>;
+    /**
+     * Key ID for the issuer's private key (v2).
+     * When present in the issuerJWT, the client does not need to send `keyId`
+     * as a separate request field.
+     */
+    keyId?: string;
 }
 
 /**
@@ -169,6 +211,16 @@ export interface DcaPublisherConfig {
 export interface DcaContentItem {
     /** Publisher-defined name, e.g., "bodytext". ASCII: [a-zA-Z][a-zA-Z0-9-]* */
     contentName: string;
+    /**
+     * Key domain for periodKey derivation (HKDF salt).
+     * Defaults to `contentName` when omitted.
+     *
+     * Content items sharing a keyName share the same periodKey, enabling:
+     *   - Role-based access: keyName "premium" covers multiple content items
+     *   - Efficient caching: one cached periodKey unlocks all items in the domain
+     *   - Clean separation: contentName identifies the item, keyName controls access
+     */
+    keyName?: string;
     /** Plaintext content to encrypt */
     content: string;
     /** MIME type (default: "text/html") */
@@ -189,8 +241,17 @@ export interface DcaIssuerConfig {
     keyId: string;
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
-    /** Which content items this issuer gets sealed keys for */
-    contentNames: string[];
+    /** Which content items this issuer gets sealed keys for (by contentName) */
+    contentNames?: string[];
+    /**
+     * Which key domains this issuer gets sealed keys for.
+     * All content items whose effective keyName is in this list are sealed
+     * for this issuer. Alternative to `contentNames` for role-based access.
+     *
+     * When both `contentNames` and `keyNames` are provided, `keyNames` takes
+     * precedence.
+     */
+    keyNames?: string[];
 }
 
 /**
@@ -291,21 +352,44 @@ export interface DcaIssuerServerConfig {
 }
 
 /**
- * Unlock request — what the client sends to the issuer.
+ * Unlock request — what the client sends to the subscription service.
+ *
+ * **v1 (current):** All fields present — resource, resourceJWT, issuerJWT,
+ * sealed, keyId, issuerName.
+ *
+ * **v2 (beta):** Only `resourceJWT`, `sealed`, and `keyId` are required.
+ * The issuerJWT is dropped entirely — AES-GCM authenticated encryption
+ * provides sealed-blob integrity, and the resourceJWT already authenticates
+ * the publisher. The `keyId` comes from the page's `issuerData`.
+ *
+ * The service auto-detects which format is used and handles both.
+ * v2 is **not** backwards compatible with v1-only services.
  */
 export interface DcaUnlockRequest {
-    /** Unsigned resource (for domain-based key lookup before JWT verification) */
-    resource: DcaResource;
-    /** Signed resource JWT */
+    /**
+     * Unsigned resource (for domain-based key lookup before JWT verification).
+     * **v1:** Required. **v2:** Omitted (decoded from resourceJWT).
+     */
+    resource?: DcaResource;
+    /** Signed resource JWT (publisher-signed, ES256) */
     resourceJWT: string;
-    /** This issuer's JWT (integrity proofs) */
-    issuerJWT: string;
+    /**
+     * Integrity-proof JWT for sealed blobs.
+     * **v1:** Required. **v2:** Omitted — AES-GCM provides integrity.
+     */
+    issuerJWT?: string;
     /** This issuer's sealed keys */
     sealed: Record<string, DcaIssuerSealed>;
-    /** Key ID for the issuer key to use */
-    keyId: string;
-    /** Issuer name (for context binding) */
-    issuerName: string;
+    /**
+     * Key ID for the issuer key to use.
+     * **v1:** Required. **v2:** Required (from page's issuerData).
+     */
+    keyId?: string;
+    /**
+     * Issuer name (for context binding).
+     * **v1:** Required. **v2:** Omitted (service knows its own name).
+     */
+    issuerName?: string;
     /**
      * Client's RSA-OAEP public key (base64url-encoded SPKI).
      * When present, the issuer wraps returned keys with this key
@@ -319,6 +403,12 @@ export interface DcaUnlockRequest {
      * instead of requiring a subscription check.
      */
     shareToken?: string;
+    /**
+     * Maps contentName → keyName (v2, for keyName-based access decisions).
+     * Included by the client when the page's DcaData contains a contentKeyMap.
+     * The issuer uses this to resolve `grantedKeyNames` → contentNames.
+     */
+    contentKeyMap?: Record<string, string>;
 }
 
 /**
@@ -378,16 +468,23 @@ export interface DcaShareLinkTokenPayload {
     domain: string;
     /** Resource ID this token grants access to */
     resourceId: string;
-    /** Content items this token grants access to */
+    /** Content items this token grants access to (by contentName) */
     contentNames: string[];
+    /**
+     * Key domains this token grants access to (v2 keyName-based).
+     * When present, the issuer resolves keyNames → contentNames
+     * via the request's contentKeyMap and grants all matching items.
+     * Takes precedence over `contentNames` when present.
+     */
+    keyNames?: string[];
     /** Token issued-at (Unix timestamp, seconds) */
     iat: number;
     /** Token expiry (Unix timestamp, seconds) */
     exp: number;
     /** Optional: maximum number of uses (advisory — enforced by issuer) */
     maxUses?: number;
-    /** Optional: unique token ID (for revocation or use-count tracking by issuer) */
-    jti?: string;
+    /** Unique token ID for revocation or use-count tracking by issuer (auto-generated by publisher if not explicitly set) */
+    jti: string;
     /** Optional: publisher-defined metadata (e.g., sharer identity, campaign) */
     data?: Record<string, unknown>;
 }
@@ -398,8 +495,14 @@ export interface DcaShareLinkTokenPayload {
 export interface DcaShareLinkOptions {
     /** Resource ID this token grants access to */
     resourceId: string;
-    /** Content items to grant access to */
-    contentNames: string[];
+    /** Content items to grant access to (by contentName) */
+    contentNames?: string[];
+    /**
+     * Key domains to grant access to (v2 keyName-based).
+     * When present, the token grants access to all content items
+     * whose keyName is in this list.
+     */
+    keyNames?: string[];
     /** Token lifetime in seconds (default: 7 days = 604800) */
     expiresIn?: number;
     /** Maximum number of uses (optional, advisory) */
