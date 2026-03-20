@@ -133,10 +133,12 @@ export interface DcaClientOptions {
     /**
      * Unlock request format version.
      *
-     * - `"v1"` (default): sends `resource`, `keyId`, `issuerName`, and `issuerJWT`.
-     * - `"v2"` (beta): sends only `resourceJWT`, `sealed`, and `keyId`.
-     *   The issuerJWT is dropped — AES-GCM provides sealed-blob integrity,
-     *   and the resourceJWT already authenticates the publisher.
+     * - `"v1"` (default): sends `resource`, `resourceJWT`, `issuerJWT`,
+     *   `sealed`, `keyId`, and `issuerName`.
+     * - `"v2"` (beta): sends `resourceJWT`, `issuerJWT`, `sealed`, and `keyId`.
+     *   Omits the redundant unsigned `resource` and `issuerName` fields.
+     *   The `issuerJWT` is retained — it provides publisher-signed integrity
+     *   proofs that bind sealed blobs to the render context.
      *
      * **v2 is not backwards compatible with v1-only services.**
      * v1 requests work with both v1 and v2 services.
@@ -282,10 +284,13 @@ export class DcaClient {
         let body: Record<string, unknown>;
 
         if (this.requestFormat === "v2") {
-            // v2 (beta): minimal request — no issuerJWT needed.
-            // AES-GCM provides integrity; resourceJWT authenticates the publisher.
+            // v2 (beta): leaner request — no unsigned resource or issuerName.
+            // issuerJWT is still required: it provides publisher-signed integrity
+            // proofs (SHA-256 hashes) that bind sealed blobs to the render context,
+            // preventing sealed-payload substitution attacks.
             body = {
                 resourceJWT: page.dcaData.resourceJWT,
+                issuerJWT: page.dcaData.issuerJWT[issuerName],
                 sealed: issuerEntry.sealed,
                 keyId: issuerEntry.keyId,
                 // Include contentKeyMap for keyName-based access decisions

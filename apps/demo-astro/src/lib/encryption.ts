@@ -93,8 +93,8 @@ async function getDcaKeys(): Promise<DcaKeys> {
       if (!import.meta.env.DEV) {
         throw new Error(
           "DCA key pair environment variables are required in production: " +
-            "PUBLISHER_ES256_PRIVATE_KEY, PUBLISHER_ES256_PUBLIC_KEY, " +
-            "ISSUER_ECDH_PRIVATE_KEY, ISSUER_ECDH_PUBLIC_KEY",
+          "PUBLISHER_ES256_PRIVATE_KEY, PUBLISHER_ES256_PUBLIC_KEY, " +
+          "ISSUER_ECDH_PRIVATE_KEY, ISSUER_ECDH_PUBLIC_KEY",
         );
       }
 

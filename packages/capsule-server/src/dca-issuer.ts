@@ -315,7 +315,7 @@ export interface DcaShareLinkUnlockOptions {
 export interface DcaVerifiedRequest {
     /** Verified resource payload from resourceJWT */
     resource: DcaResource;
-    /** Verified issuer JWT payload (v1 only; absent in v2) */
+    /** Verified issuer JWT payload (present in both v1 and v2) */
     issuerPayload?: DcaIssuerJwtPayload;
 }
 
@@ -329,8 +329,9 @@ async function verifyRequest(
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
     // Auto-detect v1 vs v2 request format.
-    // v1 sends `resource` (unsigned copy) for domain lookup + issuerJWT for proofs.
-    // v2 omits both — domain from resourceJWT, integrity from AES-GCM.
+    // v1 sends `resource` (unsigned copy) for domain lookup + issuerName for context.
+    // v2 omits both — domain from resourceJWT, issuer knows its own name.
+    // Both formats require issuerJWT for sealed-blob integrity proofs.
     const isV2 = !request.resource;
 
     // 1. Determine domain for publisher key lookup.
@@ -394,17 +395,14 @@ async function verifyRequest(
     // 2d. Per-publisher resource constraints (optional allowedResourceIds).
     checkResourceConstraints(publisher, rawDomain, resource.resourceId);
 
-    // --- v2 path: no issuerJWT required ---
-    if (isV2) {
-        return { resource };
-    }
-
-    // --- v1 path: verify issuerJWT + integrity proofs ---
+    // 3. Verify issuerJWT — required for both v1 and v2.
+    // The issuerJWT provides publisher-signed integrity proofs (SHA-256 hashes)
+    // that bind sealed blobs to the render context, preventing sealed-payload
+    // substitution attacks.
     if (!request.issuerJWT) {
-        throw new Error("v1 request requires issuerJWT");
+        throw new Error("issuerJWT is required");
     }
 
-    // 3. Verify issuerJWT
     const issuerPayload = await verifyJwt<DcaIssuerJwtPayload>(request.issuerJWT, publisher.signingKeyPem);
 
     // 4. Check renderId binding
@@ -424,6 +422,7 @@ async function verifyRequest(
     // 6. Verify integrity proofs
     await verifyIssuerProof(issuerPayload, request.sealed);
 
+    // v1 only: validate unsigned resource fields against signed JWT (done above in step 2b)
     return { resource, issuerPayload };
 }
 

@@ -357,12 +357,14 @@ export interface DcaIssuerServerConfig {
  * **v1 (current):** All fields present — resource, resourceJWT, issuerJWT,
  * sealed, keyId, issuerName.
  *
- * **v2 (beta):** Only `resourceJWT`, `sealed`, and `keyId` are required.
- * The issuerJWT is dropped entirely — AES-GCM authenticated encryption
- * provides sealed-blob integrity, and the resourceJWT already authenticates
- * the publisher. The `keyId` comes from the page's `issuerData`.
+ * **v2 (beta):** `resourceJWT`, `issuerJWT`, `sealed`, and `keyId` are required.
+ * Omits the redundant unsigned `resource` and `issuerName` fields.
+ * The `issuerJWT` is retained — it provides publisher-signed integrity proofs
+ * (SHA-256 hashes) that bind sealed blobs to the render context, preventing
+ * sealed-payload substitution attacks.
  *
- * The service auto-detects which format is used and handles both.
+ * The service auto-detects which format is used (v1 sends `resource`, v2 does not)
+ * and handles both.
  * v2 is **not** backwards compatible with v1-only services.
  */
 export interface DcaUnlockRequest {
@@ -374,8 +376,9 @@ export interface DcaUnlockRequest {
     /** Signed resource JWT (publisher-signed, ES256) */
     resourceJWT: string;
     /**
-     * Integrity-proof JWT for sealed blobs.
-     * **v1:** Required. **v2:** Omitted — AES-GCM provides integrity.
+     * Integrity-proof JWT for sealed blobs (publisher-signed, ES256).
+     * Required for both v1 and v2 — provides publisher-signed SHA-256 proofs
+     * that bind sealed blobs to the render context.
      */
     issuerJWT?: string;
     /** This issuer's sealed keys */
