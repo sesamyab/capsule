@@ -1,5 +1,15 @@
 # @sesamy/capsule-server
 
+## 0.6.0
+
+### Minor Changes
+
+- [#15](https://github.com/sesamyab/capsule/pull/15) [`bad8a50`](https://github.com/sesamyab/capsule/commit/bad8a500043507bcae13a0bceb6c3c72528fbcdc) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Use content names for tiers
+
+- [#10](https://github.com/sesamyab/capsule/pull/10) [`dcb405c`](https://github.com/sesamyab/capsule/commit/dcb405c42dd5c6543e3a6e11e1dbf0774886b21c) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Update the unlocking
+
+- [#16](https://github.com/sesamyab/capsule/pull/16) [`e676237`](https://github.com/sesamyab/capsule/commit/e676237cb17c83938ebd3652f54782fd992902b8) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Add v2 version
+
 ## 0.5.0
 
 ### Minor Changes
