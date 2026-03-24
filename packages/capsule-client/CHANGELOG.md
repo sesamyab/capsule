@@ -1,5 +1,11 @@
 # @sesamy/capsule
 
+## 0.6.0
+
+### Minor Changes
+
+- [#18](https://github.com/sesamyab/capsule/pull/18) [`a20563f`](https://github.com/sesamyab/capsule/commit/a20563fb103220c7203961e1c0ae39fa3ba5033c) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Expose functions
+
 ## 0.5.0
 
 ### Minor Changes
