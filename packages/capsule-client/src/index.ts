@@ -28,6 +28,8 @@
  * ```
  */
 
+import { DcaClient } from "./dca-client";
+
 export {
   DcaClient,
   type DcaClientOptions,
@@ -35,4 +37,15 @@ export {
   type DcaPeriodKeyCache,
   type DcaData,
   type DcaUnlockResponse,
+  type DcaProcessPageOptions,
 } from "./dca-client";
+
+/** Standalone re-export of {@link DcaClient.getShareTokenFromUrl}. */
+export function parseShareToken(paramName?: string): string | null {
+  return DcaClient.getShareTokenFromUrl(paramName);
+}
+
+/** Standalone re-export of {@link DcaClient.hasDcaContent}. */
+export function hasDcaContent(root?: Document | Element): boolean {
+  return DcaClient.hasDcaContent(root);
+}

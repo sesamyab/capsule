@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/markus/Projects/sesamy/capsule/packages/capsule-client -name README* -o -name CHANGELOG*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm test:*)",
+      "Bash(find /Users/markus/Projects/sesamy/capsule/apps/demo/src/components -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
+      "Bash(grep -l \"EncryptedSection\\\\|DcaClient\" /Users/markus/Projects/sesamy/capsule/apps/demo/src/components/*.tsx)"
+    ]
+  }
+}

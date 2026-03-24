@@ -152,6 +152,25 @@ export interface DcaPeriodKeyCache {
     set(key: string, value: string): Promise<void>;
 }
 
+/** Options for the {@link DcaClient.processPage} convenience method */
+export interface DcaProcessPageOptions {
+    /** Override issuer name (default: first issuer found in issuerData) */
+    issuerName?: string;
+    /**
+     * Override share token.
+     * - `undefined` (default): auto-detect from URL query param
+     * - `string`: use this token
+     * - `null`: skip share token detection
+     */
+    shareToken?: string | null;
+    /** Query parameter name for share token auto-detection (default: "share") */
+    shareTokenParam?: string;
+    /** Additional fields to include in the unlock request body */
+    additionalBody?: Record<string, unknown>;
+    /** DOM root to parse (default: document) */
+    root?: Document | Element;
+}
+
 // ============================================================================
 // Base64url utilities (browser-friendly, no dependencies)
 // ============================================================================
@@ -256,6 +275,17 @@ export class DcaClient {
     parseJsonResponse(json: DcaData & { sealedContent: Record<string, string> }): DcaParsedPage {
         const { sealedContent, ...dcaData } = json;
         return { dcaData, sealedContent };
+    }
+
+    /**
+     * Check whether the given root (or current page) contains DCA content.
+     *
+     * @param root - DOM root to search (default: document)
+     * @returns `true` if a `<script class="dca-data">` element exists
+     */
+    static hasDcaContent(root?: Document | Element): boolean {
+        const container = root ?? document;
+        return container.querySelector("script.dca-data") !== null;
     }
 
     // --------------------------------------------------------------------------
@@ -495,6 +525,69 @@ export class DcaClient {
             results[contentName] = await this.decrypt(page, contentName, unlockResponse);
         }
         return results;
+    }
+
+    // --------------------------------------------------------------------------
+    // Convenience
+    // --------------------------------------------------------------------------
+
+    /**
+     * Parse, unlock, and decrypt all content in a single call.
+     *
+     * Auto-detects the issuer (first key in `issuerData`) and share token
+     * (from URL query parameters) unless explicitly overridden via `options`.
+     *
+     * @param options - Optional overrides for issuer, share token, root, etc.
+     * @returns Decrypted content map (`contentName` → decrypted HTML string)
+     */
+    async processPage(options: DcaProcessPageOptions = {}): Promise<Record<string, string>> {
+        const page = this.parsePage(options.root);
+
+        const issuerName = options.issuerName
+            ?? Object.keys(page.dcaData.issuerData)[0];
+        if (!issuerName) {
+            throw new Error("DCA: no issuers found in issuerData");
+        }
+
+        const shareToken = options.shareToken !== undefined
+            ? options.shareToken
+            : DcaClient.getShareTokenFromUrl(options.shareTokenParam);
+
+        const unlockResponse = shareToken
+            ? await this.unlockWithShareToken(page, issuerName, shareToken, options.additionalBody)
+            : await this.unlock(page, issuerName, options.additionalBody);
+
+        return this.decryptAll(page, unlockResponse);
+    }
+
+    /**
+     * Inject decrypted content into the DOM.
+     *
+     * Finds elements with matching `data-dca-content-name` attributes and
+     * sets their `innerHTML` to the corresponding decrypted content.
+     *
+     * @param content - Decrypted content map (from {@link processPage} or {@link decryptAll})
+     * @param root - DOM root to search for target elements (default: document)
+     * @returns The set of content names that were successfully rendered
+     */
+    renderToPage(
+        content: Record<string, string>,
+        root?: Document | Element,
+    ): Set<string> {
+        const container = root ?? document;
+        const rendered = new Set<string>();
+
+        for (const [contentName, html] of Object.entries(content)) {
+            const el = container.querySelector(
+                `[data-dca-content-name="${CSS.escape(contentName)}"]`,
+            );
+            if (el) {
+                el.innerHTML = html;
+                rendered.add(contentName);
+            }
+        }
+
+        return rendered;
     }
 
     // --------------------------------------------------------------------------

@@ -441,9 +441,12 @@ function Article({ encryptedData }) {
           Use the static <code>getShareTokenFromUrl()</code> helper to check if
           the current URL contains a share token:
         </p>
-        <CodeBlock>{`import { DcaClient } from '@sesamy/capsule';
+        <CodeBlock>{`import { DcaClient, parseShareToken } from '@sesamy/capsule';
 
-// Reads ?share= from the current URL (default param name)
+// Standalone function (no client instance needed)
+const shareToken = parseShareToken();
+
+// Or via the static method
 const shareToken = DcaClient.getShareTokenFromUrl();
 
 // Or use a custom parameter name
@@ -798,7 +801,23 @@ await fetch('https://attacker.com', {
           issuer endpoints.
         </p>
 
-        <h3>Quick Start</h3>
+        <h3>Quick Start (One-Liner)</h3>
+        <p>
+          The simplest integration — auto-detects the issuer and share token,
+          then decrypts and renders everything:
+        </p>
+        <CodeBlock>{`import { DcaClient, hasDcaContent } from '@sesamy/capsule';
+
+if (hasDcaContent()) {
+  const client = new DcaClient();
+  const content = await client.processPage();
+  client.renderToPage(content);
+}`}</CodeBlock>
+
+        <h3>Step-by-Step</h3>
+        <p>
+          For more control, use the individual methods:
+        </p>
         <CodeBlock>{`import { DcaClient } from '@sesamy/capsule';
 
 const client = new DcaClient();
@@ -898,6 +917,48 @@ const page = client.parseJsonResponse(await res.json());`}</CodeBlock>
         <p>Decrypt all content items and return a name → content map.</p>
         <CodeBlock>{`const results = await client.decryptAll(page, keys);
 // { bodytext: '<p>...</p>', sidebar: '<div>...</div>' }`}</CodeBlock>
+
+        <h4>processPage(options?)</h4>
+        <p>
+          Convenience method that combines parse → unlock → decryptAll in a
+          single call. Auto-detects the issuer (first key in{" "}
+          <code>issuerData</code>) and share token (from URL{" "}
+          <code>?share=</code> parameter) unless overridden:
+        </p>
+        <CodeBlock>{`// Simplest usage — auto-detect everything
+const content = await client.processPage();
+
+// With explicit options
+const content = await client.processPage({
+  issuerName: 'sesamy',         // override auto-detected issuer
+  shareToken: null,             // skip share token detection
+  root: someElement,            // scope DOM parsing
+  additionalBody: { auth: '…' } // extra fields for unlock request
+});`}</CodeBlock>
+
+        <h4>renderToPage(content, root?)</h4>
+        <p>
+          Inject decrypted content into the DOM. Finds elements with matching{" "}
+          <code>data-dca-content-name</code> attributes and sets their{" "}
+          <code>innerHTML</code>. Returns a <code>Set</code> of content names
+          that were rendered:
+        </p>
+        <CodeBlock>{`const content = await client.processPage();
+const rendered = client.renderToPage(content);
+console.log('Rendered:', [...rendered]); // ['bodytext', 'sidebar']`}</CodeBlock>
+
+        <h4>DcaClient.hasDcaContent(root?)</h4>
+        <p>
+          Static method. Checks whether the page (or a given root element)
+          contains DCA content by looking for a{" "}
+          <code>&lt;script class=&quot;dca-data&quot;&gt;</code> element.
+          Also available as a standalone import:
+        </p>
+        <CodeBlock>{`import { hasDcaContent } from '@sesamy/capsule';
+
+if (hasDcaContent()) {
+  // Page has DCA content — initialize client
+}`}</CodeBlock>
 
         <h3>Period Key Caching</h3>
         <p>
