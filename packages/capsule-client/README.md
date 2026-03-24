@@ -12,6 +12,22 @@ pnpm add @sesamy/capsule
 
 ## Quick Start
 
+The simplest integration — auto-detects the issuer and share token, then decrypts and renders:
+
+```typescript
+import { DcaClient, hasDcaContent } from "@sesamy/capsule";
+
+if (hasDcaContent()) {
+  const client = new DcaClient();
+  const content = await client.processPage();
+  client.renderToPage(content);
+}
+```
+
+### Step-by-Step
+
+For more control, use the individual methods:
+
 ```typescript
 import { DcaClient } from "@sesamy/capsule";
 
@@ -45,7 +61,12 @@ for (const [contentName, html] of Object.entries(decrypted)) {
 ### Share Links
 
 ```typescript
-// Check URL for a share token (e.g. ?share=eyJ...)
+import { parseShareToken } from "@sesamy/capsule";
+
+// Standalone function — reads ?share= from current URL
+const shareToken = parseShareToken();
+
+// Or via the static method
 const shareToken = DcaClient.getShareTokenFromUrl();
 
 if (shareToken) {
@@ -137,6 +158,42 @@ const all = await client.decryptAll(page, keys);
 // { bodytext: "<p>...</p>", sidebar: "<aside>...</aside>" }
 ```
 
+### `client.processPage(options?)`
+
+Convenience method: parse → unlock → decryptAll in one call. Auto-detects the issuer (first key in `issuerData`) and share token (from `?share=` URL parameter).
+
+```typescript
+const content = await client.processPage();
+
+// With explicit options
+const content = await client.processPage({
+  issuerName: "sesamy",          // override auto-detected issuer
+  shareToken: null,              // skip share token detection
+  root: someElement,             // scope DOM parsing
+  additionalBody: { auth: "…" }, // extra fields for unlock request
+});
+```
+
+### `client.renderToPage(content, root?)`
+
+Injects decrypted content into the DOM. Finds elements with matching `data-dca-content-name` attributes and sets their `innerHTML`. Returns the set of content names that were rendered.
+
+```typescript
+const content = await client.processPage();
+const rendered = client.renderToPage(content);
+// rendered: Set { "bodytext", "sidebar" }
+```
+
+### `DcaClient.hasDcaContent(root?)`
+
+Static method. Returns `true` if the page contains a `<script class="dca-data">` element. Also available as a standalone import:
+
+```typescript
+import { hasDcaContent } from "@sesamy/capsule";
+
+if (hasDcaContent()) { /* page has DCA content */ }
+```
+
 ### `DcaClient.getShareTokenFromUrl(paramName?)`
 
 Static method. Extracts a share token from the current URL query params.
@@ -198,5 +255,6 @@ import type {
   DcaPeriodKeyCache,
   DcaData,
   DcaUnlockResponse,
+  DcaProcessPageOptions,
 } from "@sesamy/capsule";
 ```
