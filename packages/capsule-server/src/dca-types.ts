@@ -111,8 +111,8 @@ export interface DcaSealedContentKey {
  * Per-issuer entry in `issuerData`.
  */
 export interface DcaIssuerEntry {
-    /** Map of contentName → sealed keys for this issuer */
-    sealed: Record<string, DcaIssuerSealed>;
+    /** Map of contentName → encrypted content keys for this issuer */
+    contentKeys: Record<string, DcaContentKeys>;
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
     /** Identifies which issuer private key to use */
@@ -120,13 +120,13 @@ export interface DcaIssuerEntry {
 }
 
 /**
- * Sealed keys for one content item, for one issuer.
- * Both contentKey and periodKeys are sealed with the issuer's public key.
+ * Encrypted keys for one content item, for one issuer.
+ * Both contentKey and periodKeys are encrypted with the issuer's public key.
  */
-export interface DcaIssuerSealed {
-    /** contentKey sealed with issuer public key (base64url opaque blob) */
+export interface DcaContentKeys {
+    /** contentKey encrypted with issuer public key (base64url opaque blob) */
     contentKey: string;
-    /** Map of period bucket "t" → periodKey sealed with issuer public key */
+    /** Map of period bucket "t" → periodKey encrypted with issuer public key */
     periodKeys: Record<string, string>;
 }
 
@@ -142,7 +142,7 @@ export interface DcaIssuerJwtPayload {
     renderId: string;
     /** The issuer this JWT is for */
     issuerName: string;
-    /** SHA-256 hashes of sealed blobs, mirroring the structure of issuerData.*.sealed */
+    /** SHA-256 hashes of encrypted blobs, mirroring the structure of issuerData.*.contentKeys */
     proof: Record<string, DcaIssuerProof>;
     /**
      * Key ID for the issuer's private key (v2).
@@ -376,16 +376,20 @@ export interface DcaUnlockRequest {
     /** Signed resource JWT (publisher-signed, ES256) */
     resourceJWT: string;
     /**
-     * Integrity-proof JWT for sealed blobs (publisher-signed, ES256).
-     * Required for both v1 and v2 — provides publisher-signed SHA-256 proofs
-     * that bind sealed blobs to the render context.
+     * Integrity-proof JWT for encrypted blobs (publisher-signed, ES256).
+     * **v1:** Required — provides publisher-signed SHA-256 proofs.
+     * **v2:** Omitted — AES-GCM authenticated encryption provides integrity.
      */
     issuerJWT?: string;
-    /** This issuer's sealed keys */
-    sealed: Record<string, DcaIssuerSealed>;
+    /** This issuer's encrypted content keys (v2 field name) */
+    contentKeys?: Record<string, DcaContentKeys>;
+    /**
+     * @deprecated Use `contentKeys`. Alias accepted for v1 backwards compatibility.
+     */
+    sealed?: Record<string, DcaContentKeys>;
     /**
      * Key ID for the issuer key to use.
-     * **v1:** Required. **v2:** Required (from page's issuerData).
+     * **v1:** Required. **v2:** Omitted (server uses its own config.keyId).
      */
     keyId?: string;
     /**

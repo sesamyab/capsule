@@ -56,7 +56,7 @@ export interface DcaData {
         key: string;
     }>>;
     issuerData: Record<string, {
-        sealed: Record<string, {
+        contentKeys: Record<string, {
             contentKey: string;
             periodKeys: Record<string, string>;
         }>;
@@ -135,10 +135,9 @@ export interface DcaClientOptions {
      *
      * - `"v1"` (default): sends `resource`, `resourceJWT`, `issuerJWT`,
      *   `sealed`, `keyId`, and `issuerName`.
-     * - `"v2"` (beta): sends `resourceJWT`, `issuerJWT`, `sealed`, and `keyId`.
-     *   Omits the redundant unsigned `resource` and `issuerName` fields.
-     *   The `issuerJWT` is retained — it provides publisher-signed integrity
-     *   proofs that bind sealed blobs to the render context.
+     * - `"v2"` (beta): sends `resourceJWT` and `contentKeys`.
+     *   Omits `resource`, `issuerName`, `issuerJWT`, `keyId`, and
+     *   renames `sealed` to `contentKeys`.
      *
      * **v2 is not backwards compatible with v1-only services.**
      * v1 requests work with both v1 and v2 services.
@@ -314,15 +313,12 @@ export class DcaClient {
         let body: Record<string, unknown>;
 
         if (this.requestFormat === "v2") {
-            // v2 (beta): leaner request — no unsigned resource or issuerName.
-            // issuerJWT is still required: it provides publisher-signed integrity
-            // proofs (SHA-256 hashes) that bind sealed blobs to the render context,
-            // preventing sealed-payload substitution attacks.
+            // v2 (beta): minimal request — just resourceJWT + contentKeys.
+            // No issuerJWT (AES-GCM provides integrity), no keyId (server knows its key),
+            // no unsigned resource or issuerName.
             body = {
                 resourceJWT: page.dcaData.resourceJWT,
-                issuerJWT: page.dcaData.issuerJWT[issuerName],
-                sealed: issuerEntry.sealed,
-                keyId: issuerEntry.keyId,
+                contentKeys: issuerEntry.contentKeys,
                 // Include contentKeyMap for keyName-based access decisions
                 ...(page.dcaData.contentKeyMap ? { contentKeyMap: page.dcaData.contentKeyMap } : {}),
                 ...additionalBody,
@@ -333,9 +329,11 @@ export class DcaClient {
                 resource: page.dcaData.resource,
                 resourceJWT: page.dcaData.resourceJWT,
                 issuerJWT: page.dcaData.issuerJWT[issuerName],
-                sealed: issuerEntry.sealed,
+                sealed: issuerEntry.contentKeys,
                 keyId: issuerEntry.keyId,
                 issuerName,
+                // Include contentKeyMap for keyName-based access decisions
+                ...(page.dcaData.contentKeyMap ? { contentKeyMap: page.dcaData.contentKeyMap } : {}),
                 ...additionalBody,
             };
         }

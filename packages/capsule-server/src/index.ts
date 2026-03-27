@@ -130,7 +130,7 @@ export type {
   DcaContentSealData,
   DcaSealedContentKey,
   DcaIssuerEntry,
-  DcaIssuerSealed,
+  DcaContentKeys,
   DcaIssuerJwtPayload,
   DcaIssuerProof,
   DcaJsonApiResponse,
