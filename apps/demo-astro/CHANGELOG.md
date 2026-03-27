@@ -1,5 +1,17 @@
 # @sesamy/demo-astro
 
+## 0.3.0
+
+### Minor Changes
+
+- [#20](https://github.com/sesamyab/capsule/pull/20) [`a4c19b0`](https://github.com/sesamyab/capsule/commit/a4c19b03956ecdb87fbd0eb061714fc334c0a59a) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Add breaking changes for v0.7
+
+### Patch Changes
+
+- Updated dependencies [[`a4c19b0`](https://github.com/sesamyab/capsule/commit/a4c19b03956ecdb87fbd0eb061714fc334c0a59a)]:
+  - @sesamy/capsule@0.7.0
+  - @sesamy/capsule-server@0.7.0
+
 ## 0.2.1
 
 ### Patch Changes
