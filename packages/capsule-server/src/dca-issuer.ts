@@ -7,7 +7,7 @@
  *   3. Verifies resourceJWT (ES256) — binds request to the publisher
  *   4. Re-verifies the signed domain against the allowlist (defence-in-depth)
  *   5. Checks optional per-publisher resource constraints (allowedResourceIds)
- *   6. Verifies issuerJWT integrity proofs — confirms sealed blobs weren't tampered with
+ *   6. (v1 only) Verifies issuerJWT integrity proofs — v2 relies on AES-GCM integrity
  *   7. Makes an access decision (application-specific)
  *   8. Unseals and returns contentKeys or periodKeys to the client
  */
@@ -328,10 +328,18 @@ async function verifyRequest(
     publisherMap: NormalisedPublisherMap,
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
+    // Normalize: v2 sends "contentKeys", v1 may send "sealed" (deprecated alias)
+    if (!request.contentKeys && request.sealed) {
+        request.contentKeys = request.sealed;
+    }
+    if (!request.contentKeys) {
+        throw new Error("Missing contentKeys (or sealed) in unlock request");
+    }
+
     // Auto-detect v1 vs v2 request format.
     // v1 sends `resource` (unsigned copy) for domain lookup + issuerName for context.
     // v2 omits both — domain from resourceJWT, issuer knows its own name.
-    // Both formats require issuerJWT for sealed-blob integrity proofs.
+    // v1 requires issuerJWT for integrity proofs; v2 relies on AES-GCM integrity.
     const isV2 = !request.resource;
 
     // 1. Determine domain for publisher key lookup.
@@ -395,10 +403,14 @@ async function verifyRequest(
     // 2d. Per-publisher resource constraints (optional allowedResourceIds).
     checkResourceConstraints(publisher, rawDomain, resource.resourceId);
 
-    // 3. Verify issuerJWT — required for both v1 and v2.
-    // The issuerJWT provides publisher-signed integrity proofs (SHA-256 hashes)
-    // that bind sealed blobs to the render context, preventing sealed-payload
-    // substitution attacks.
+    if (isV2) {
+        // v2: no issuerJWT needed — AES-GCM authenticated encryption provides
+        // integrity. Any tampered blob fails at unseal time.
+        return { resource, issuerPayload: undefined };
+    }
+
+    // 3. v1: Verify issuerJWT — provides publisher-signed integrity proofs (SHA-256
+    // hashes) that bind encrypted blobs to the render context.
     if (!request.issuerJWT) {
         throw new Error("issuerJWT is required");
     }
@@ -420,9 +432,8 @@ async function verifyRequest(
     }
 
     // 6. Verify integrity proofs
-    await verifyIssuerProof(issuerPayload, request.sealed);
+    await verifyIssuerProof(issuerPayload, request.contentKeys);
 
-    // v1 only: validate unsigned resource fields against signed JWT (done above in step 2b)
     return { resource, issuerPayload };
 }
 
@@ -439,11 +450,15 @@ async function unsealAndRespond(
     grantedContentNames: string[],
     deliveryMode: "contentKey" | "periodKey",
 ): Promise<DcaUnlockResponse> {
-    // Resolve keyId: v2 sends it in the request body (from page's issuerData),
-    // v1 may send it in the request or the issuerJWT payload.
-    const effectiveKeyId = request.keyId ?? issuerPayload?.keyId;
-    if (effectiveKeyId !== config.keyId) {
-        throw new Error(`keyId mismatch: expected "${config.keyId}", got "${effectiveKeyId}"`);
+    const isV2 = !request.resource;
+
+    // v1: validate keyId from the request or issuerJWT payload.
+    // v2: skip — server uses its own config.keyId; wrong key fails at AES-GCM unseal.
+    if (!isV2) {
+        const effectiveKeyId = request.keyId ?? issuerPayload?.keyId;
+        if (effectiveKeyId !== config.keyId) {
+            throw new Error(`keyId mismatch: expected "${config.keyId}", got "${effectiveKeyId}"`);
+        }
     }
 
     // Get private key
@@ -456,21 +471,24 @@ async function unsealAndRespond(
         clientRsaPubKey = await importRsaPublicKey(fromBase64Url(request.clientPublicKey!));
     }
 
+    // contentKeys is guaranteed non-null here (normalized in verifyRequest)
+    const contentKeys = request.contentKeys!;
+
     // Unseal granted content items
     const keys: Record<string, DcaUnlockedKeys> = {};
 
     for (const contentName of grantedContentNames) {
-        const sealedEntry = request.sealed[contentName];
-        if (!sealedEntry) {
-            throw new Error(`No sealed data for content item "${contentName}"`);
+        const keysEntry = contentKeys[contentName];
+        if (!keysEntry) {
+            throw new Error(`No contentKeys data for content item "${contentName}"`);
         }
 
         if (deliveryMode === "contentKey") {
             // Direct path: unseal and return contentKey
-            if (!sealedEntry.contentKey) {
-                throw new Error(`Missing sealed contentKey for content item "${contentName}"`);
+            if (!keysEntry.contentKey) {
+                throw new Error(`Missing contentKey for content item "${contentName}"`);
             }
-            const contentKeyBytes = await unseal(sealedEntry.contentKey, privateKey, algorithm);
+            const contentKeyBytes = await unseal(keysEntry.contentKey, privateKey, algorithm);
             keys[contentName] = {
                 contentKey: clientBound
                     ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, contentKeyBytes))
@@ -478,12 +496,12 @@ async function unsealAndRespond(
             };
         } else {
             // Cacheable path: unseal and return periodKeys
-            if (!sealedEntry.periodKeys || typeof sealedEntry.periodKeys !== "object") {
-                throw new Error(`Missing or invalid sealed periodKeys for content item "${contentName}"`);
+            if (!keysEntry.periodKeys || typeof keysEntry.periodKeys !== "object") {
+                throw new Error(`Missing or invalid periodKeys for content item "${contentName}"`);
             }
             const periodKeys: Record<string, string> = {};
-            for (const [t, sealedPeriodKey] of Object.entries(sealedEntry.periodKeys)) {
-                const periodKeyBytes = await unseal(sealedPeriodKey, privateKey, algorithm);
+            for (const [t, encryptedPeriodKey] of Object.entries(keysEntry.periodKeys)) {
+                const periodKeyBytes = await unseal(encryptedPeriodKey, privateKey, algorithm);
                 periodKeys[t] = clientBound
                     ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, periodKeyBytes))
                     : toBase64Url(periodKeyBytes);
@@ -545,11 +563,11 @@ function resolveGrantedContentNames(
             return Object.entries(contentKeyMap)
                 .filter(([, keyName]) => keyNameSet.has(keyName))
                 .map(([contentName]) => contentName)
-                .filter(contentName => contentName in request.sealed);
+                .filter(contentName => contentName in request.contentKeys!);
         }
 
         // No contentKeyMap: treat keyNames as contentNames (backward compat)
-        return accessDecision.grantedKeyNames.filter(name => name in request.sealed);
+        return accessDecision.grantedKeyNames.filter(name => name in request.contentKeys!);
     }
 
     throw new Error("Access decision must specify grantedContentNames or grantedKeyNames");
@@ -665,8 +683,8 @@ async function processShareLinkUnlock(
 
     // 6. Build access decision from the share token's claims.
     //    Resolve keyNames → contentNames if the token uses keyNames (v2).
-    //    Only grant content names that exist in both the token/keyNames AND the sealed data.
-    const availableContentNames = new Set(Object.keys(request.sealed));
+    //    Only grant content names that exist in both the token/keyNames AND the contentKeys.
+    const availableContentNames = new Set(Object.keys(request.contentKeys!));
     let grantedContentNames: string[];
 
     if (sharePayload.keyNames && sharePayload.keyNames.length > 0) {
@@ -694,7 +712,7 @@ async function processShareLinkUnlock(
     if (grantedContentNames.length === 0) {
         throw new Error(
             "Share token: no matching content items — token grants " +
-            `[${sharePayload.contentNames.join(", ")}] but sealed data contains [${[...availableContentNames].join(", ")}]`,
+            `[${sharePayload.contentNames.join(", ")}] but contentKeys contains [${[...availableContentNames].join(", ")}]`,
         );
     }
 

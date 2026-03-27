@@ -43,67 +43,86 @@ function CompatBadge({ compatible }: { compatible: boolean }) {
   );
 }
 
-export default function BetaPage() {
+function VersionBadge({ version }: { version: string }) {
+  return (
+    <span style={{
+      display: "inline-block",
+      background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+      color: "#fff",
+      padding: "0.15rem 0.6rem",
+      borderRadius: "6px",
+      fontSize: "0.85em",
+      fontWeight: 700,
+      verticalAlign: "middle",
+      marginLeft: "0.5rem",
+    }}>
+      {version}
+    </span>
+  );
+}
+
+export default function ChangelogPage() {
   return (
     <PageWithToc>
       <main className="content-page">
-        <h1>v2 Changes <span style={{
-          background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
-          color: '#78350f',
-          padding: '0.15rem 0.6rem',
-          borderRadius: '6px',
-          fontSize: '0.6em',
-          fontWeight: 700,
-          verticalAlign: 'middle',
-          marginLeft: '0.5rem',
-        }}>Beta</span></h1>
-
+        <h1>Changelog</h1>
         <p>
-          v2 introduces three changes to the unlock protocol. Each is described below
-          with its motivation, what changed, and whether it&apos;s backwards compatible.
+          Protocol and library changes by version. Each entry describes what changed,
+          why, and whether it&apos;s backwards compatible.
         </p>
 
         {/* ================================================================
-            Change 1 — Simplified Unlock Request
+            v0.7
             ================================================================ */}
 
-        <h2>1. Simplified Unlock Request</h2>
+        <h2>v0.7 <VersionBadge version="Latest" /></h2>
+        <p>
+          v0.7 introduces three changes to the unlock protocol.
+        </p>
+
+        {/* ---- Change 1 ---- */}
+
+        <h3>Simplified Unlock Request</h3>
         <SectionCard color="amber">
           <CompatBadge compatible={false} />
 
-          <h3>Motivation</h3>
+          <h4>Motivation</h4>
           <p>
-            The v1 unlock request sends six fields and two JWTs. After analysis, four fields
+            The previous unlock request sends six fields and two JWTs. After analysis, five fields
             and one entire JWT turn out to be redundant:
           </p>
           <ul>
             <li><code>resource</code> — unsigned copy of what&apos;s already in <code>resourceJWT</code></li>
             <li><code>issuerName</code> — the subscription service already knows its own name</li>
-            <li><code>issuerJWT</code> — contains SHA-256 integrity proofs of the sealed blobs,
+            <li><code>keyId</code> — the service knows its own key; a wrong key fails at AES-GCM unseal anyway</li>
+            <li><code>issuerJWT</code> — contains SHA-256 integrity proofs of the encrypted blobs,
               but AES-GCM is already <strong>authenticated encryption</strong> — any tampered
               blob fails at unseal time. The proofs are redundant.</li>
           </ul>
-
-          <h3>Description</h3>
           <p>
-            v2 strips the request down to the cryptographic essentials:
+            The <code>sealed</code> field is also renamed to <code>contentKeys</code> to better
+            describe what it contains (encrypted content keys, not a generic &ldquo;sealed&rdquo; blob).
+          </p>
+
+          <h4>What Changed</h4>
+          <p>
+            The request is stripped down to the cryptographic essentials:
           </p>
           <ul>
             <li><code>resourceJWT</code> — publisher-signed resource metadata (authentication)</li>
-            <li><code>sealed</code> — the sealed keys (AES-GCM provides integrity)</li>
-            <li><code>keyId</code> — which private key to use (from page&apos;s <code>issuerData</code>)</li>
+            <li><code>contentKeys</code> — the encrypted content keys (AES-GCM provides integrity)</li>
           </ul>
 
           <p><strong>Why the issuerJWT is unnecessary:</strong></p>
           <ol>
             <li>
-              <strong>Integrity proofs:</strong> SHA-256 hashes of sealed blobs, to detect tampering.
-              But sealed blobs use <strong>AES-GCM</strong> (authenticated encryption) — any modification
+              <strong>Integrity proofs:</strong> SHA-256 hashes of encrypted blobs, to detect tampering.
+              But encrypted blobs use <strong>AES-GCM</strong> (authenticated encryption) — any modification
               causes the unseal to fail with a GCM authentication error. The hashes add nothing.
             </li>
             <li>
               <strong>Metadata:</strong> <code>issuerName</code>, <code>keyId</code>, and <code>renderId</code>.
-              The service knows its own name. The <code>keyId</code> comes from the page&apos;s <code>issuerData</code>.
+              The service knows its own name. The <code>keyId</code> is redundant (wrong key fails at unseal).
               The <code>renderId</code> is in the <code>resourceJWT</code>.
             </li>
           </ol>
@@ -112,7 +131,7 @@ export default function BetaPage() {
             and the SHA-256 proof computation on both publisher and service sides.
           </p>
 
-          <CodeBlock>{`// v1 unlock request (current) — 6 fields + 2 JWTs
+          <CodeBlock>{`// Before — 6 fields + 2 JWTs
 POST /api/unlock
 {
   "resource": { "domain": "news.example.com", "resourceId": "…", … },
@@ -124,12 +143,11 @@ POST /api/unlock
   "clientPublicKey": "…"   // optional
 }
 
-// v2 unlock request (beta) — 3 fields + 1 JWT
+// After — 1 field + 1 JWT
 POST /api/unlock
 {
   "resourceJWT": "eyJ…",
-  "sealed": { "bodytext": { "contentKey": "…", "periodKeys": { … } } },
-  "keyId": "2025-10",
+  "contentKeys": { "bodytext": { "contentKey": "…", "periodKeys": { … } } },
   "clientPublicKey": "…"   // optional
 }`}</CodeBlock>
 
@@ -144,17 +162,13 @@ POST /api/unlock
               This is standard JWT practice (same as OIDC).
             </li>
             <li>
-              <strong>Check keyId:</strong> The <code>keyId</code> in the request must match the
-              service&apos;s configured key. This is the same check as v1, just sourced from the
-              request body (which the client reads from <code>issuerData</code> on the page).
-            </li>
-            <li>
-              <strong>Unseal:</strong> The service unseals the requested content keys. AES-GCM
-              authentication ensures any tampered blob is rejected — no proof hashes needed.
+              <strong>Unseal:</strong> The service unseals the requested content keys using its
+              configured private key. AES-GCM authentication ensures any tampered blob is
+              rejected — no proof hashes or keyId checks needed.
             </li>
           </ol>
 
-          <h3>Backwards Compatibility</h3>
+          <h4>Backwards Compatibility</h4>
           <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem", marginBottom: "0.5rem" }}>
             <thead>
               <tr>
@@ -165,52 +179,50 @@ POST /api/unlock
             </thead>
             <tbody>
               <tr>
-                <td style={td}>v1 client → v1 service</td>
-                <td style={td}>✅</td>
+                <td style={td}>Old client → old service</td>
+                <td style={td}>Yes</td>
                 <td style={td}>No change</td>
               </tr>
               <tr>
-                <td style={td}>v1 client → v2 service</td>
-                <td style={td}>✅</td>
-                <td style={td}>Service auto-detects v1 format, processes normally</td>
+                <td style={td}>Old client → v0.7 service</td>
+                <td style={td}>Yes</td>
+                <td style={td}>Service auto-detects old format, processes normally</td>
               </tr>
               <tr>
-                <td style={td}>v2 client → v2 service</td>
-                <td style={td}>✅</td>
+                <td style={td}>v0.7 client → v0.7 service</td>
+                <td style={td}>Yes</td>
                 <td style={td}>Minimal request, full security</td>
               </tr>
               <tr>
-                <td style={td}>v2 client → v1 service</td>
-                <td style={td}>❌</td>
-                <td style={td}>v1 service requires <code>issuerJWT</code>, <code>resource</code>, <code>issuerName</code></td>
+                <td style={td}>v0.7 client → old service</td>
+                <td style={td}>No</td>
+                <td style={td}>Old service requires <code>issuerJWT</code>, <code>resource</code>, <code>issuerName</code>, <code>sealed</code></td>
               </tr>
             </tbody>
           </table>
           <p>
             <strong>Recommended migration:</strong> Upgrade the service first (accepts both formats),
-            then switch clients to v2 at your own pace.
+            then switch clients at your own pace.
           </p>
         </SectionCard>
 
-        {/* ================================================================
-            Change 2 — Standard JWT Claims in resourceJWT
-            ================================================================ */}
+        {/* ---- Change 2 ---- */}
 
-        <h2>2. Standard JWT Claims in resourceJWT</h2>
+        <h3>Standard JWT Claims in resourceJWT</h3>
         <SectionCard color="emerald">
           <CompatBadge compatible={true} />
 
-          <h3>Motivation</h3>
+          <h4>Motivation</h4>
           <p>
-            The v1 <code>resourceJWT</code> uses custom field names (<code>domain</code>,{' '}
+            The previous <code>resourceJWT</code> uses custom field names (<code>domain</code>,{' '}
             <code>resourceId</code>, <code>issuedAt</code>, <code>renderId</code>) instead
             of the well-known JWT claim names defined in RFC 7519. Using standard claims
             improves interoperability and makes the JWT self-describing.
           </p>
 
-          <h3>Description</h3>
+          <h4>What Changed</h4>
           <p>
-            v2 maps the <code>resourceJWT</code> payload to standard JWT claim names:
+            The <code>resourceJWT</code> payload now uses standard JWT claim names:
           </p>
           <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem", marginBottom: "0.75rem" }}>
             <thead>
@@ -272,25 +284,23 @@ POST /api/unlock
             the service verifies it.
           </p>
 
-          <h3>Backwards Compatibility</h3>
+          <h4>Backwards Compatibility</h4>
           <p>
             Fully backwards compatible. The service detects the claim format automatically
-            (checking for <code>iss</code> vs <code>domain</code>). Both v1 and v2 resource
+            (checking for <code>iss</code> vs <code>domain</code>). Both old and new resource
             JWTs are accepted. No publisher or client changes are required.
           </p>
         </SectionCard>
 
-        {/* ================================================================
-            Change 3 — keyName
-            ================================================================ */}
+        {/* ---- Change 3 ---- */}
 
-        <h2>3. keyName: Decoupling Content Identity from Key Domain</h2>
+        <h3>keyName: Decoupling Content Identity from Key Domain</h3>
         <SectionCard color="indigo">
           <CompatBadge compatible={true} />
 
-          <h3>Motivation</h3>
+          <h4>Motivation</h4>
           <p>
-            In v1, <code>contentName</code> serves three roles simultaneously:
+            Previously, <code>contentName</code> serves three roles simultaneously:
           </p>
           <ol>
             <li><strong>Content identity</strong> — uniquely identifies a content item within a resource (e.g. &quot;bodytext&quot;, &quot;sidebar&quot;)</li>
@@ -301,10 +311,10 @@ POST /api/unlock
             This conflation forces publishers to use artificial names like &quot;TierA&quot; or
             &quot;premium&quot; as their contentName, losing the ability to describe <em>what</em> the
             content actually is. If a page has both a premium body and a premium sidebar, they
-            need different contentNames but the same access scope — impossible in v1.
+            need different contentNames but the same access scope — impossible before this change.
           </p>
 
-          <h3>Description</h3>
+          <h4>What Changed</h4>
           <p>
             <code>keyName</code> is an optional field on each content item that controls which key
             domain that item belongs to. When set, HKDF uses <code>keyName</code> instead
@@ -315,8 +325,8 @@ POST /api/unlock
             <thead>
               <tr>
                 <th style={th}>Role</th>
-                <th style={th}>v1 (contentName only)</th>
-                <th style={th}>v2 (with keyName)</th>
+                <th style={th}>Before</th>
+                <th style={th}>After (with keyName)</th>
               </tr>
             </thead>
             <tbody>
@@ -339,7 +349,7 @@ POST /api/unlock
           </table>
 
           <p><strong>Publisher — before &amp; after:</strong></p>
-          <CodeBlock>{`// v1: contentName = "TierA" (conflates identity with access scope)
+          <CodeBlock>{`// Before: contentName = "TierA" (conflates identity with access scope)
 const result = await publisher.render({
   resourceId: "article-123",
   contentItems: [
@@ -352,7 +362,7 @@ const result = await publisher.render({
   }],
 });
 
-// v2: contentName describes WHAT, keyName describes WHO can access
+// After: contentName describes WHAT, keyName describes WHO can access
 const result = await publisher.render({
   resourceId: "article-123",
   contentItems: [
@@ -385,7 +395,7 @@ const result = await publisher.render({
 }`}</CodeBlock>
           <p>
             The <code>contentKeyMap</code> is omitted when all keyNames equal their contentNames
-            (the v1-compatible case), keeping zero overhead for publishers that don&apos;t use this feature.
+            (the backwards-compatible case), keeping zero overhead for publishers that don&apos;t use this feature.
           </p>
 
           <p><strong>Issuer — grantedKeyNames:</strong></p>
@@ -393,13 +403,13 @@ const result = await publisher.render({
             The issuer&apos;s access decision can now use <code>grantedKeyNames</code> instead of
             (or alongside) <code>grantedContentNames</code>:
           </p>
-          <CodeBlock>{`// v1: grant by content name
+          <CodeBlock>{`// Before: grant by content name
 const result = await issuer.unlock(request, {
   grantedContentNames: ["bodytext", "sidebar"],
   deliveryMode: "periodKey",
 });
 
-// v2: grant by key name — resolves to all matching content items
+// After: grant by key name — resolves to all matching content items
 const result = await issuer.unlock(request, {
   grantedKeyNames: ["premium"],    // grants both "bodytext" and "sidebar"
   deliveryMode: "periodKey",
@@ -424,7 +434,7 @@ const side = await client.decrypt(page, "sidebar", keys);
 // Period key cache is keyed by "premium" (the keyName),
 // so navigating to another "premium" article skips the unlock call`}</CodeBlock>
 
-          <h3>Backwards Compatibility</h3>
+          <h4>Backwards Compatibility</h4>
           <p>
             Fully backwards compatible. When <code>keyName</code> is omitted it defaults
             to <code>contentName</code>, so existing pages and unlock requests work
@@ -432,17 +442,15 @@ const side = await client.decrypt(page, "sidebar", keys);
           </p>
         </SectionCard>
 
-        {/* ================================================================
-            Client & Service Usage
-            ================================================================ */}
+        {/* ---- Usage examples ---- */}
 
-        <h2>Client Usage</h2>
+        <h3>Client Usage</h3>
         <CodeBlock>{`import { DcaClient } from '@sesamy/capsule-client';
 
-// v1 (default) — compatible with all services
+// Old format (default) — compatible with all services
 const clientV1 = new DcaClient();
 
-// v2 (beta) — requires v2-capable service
+// New format — requires v0.7+ service
 const clientV2 = new DcaClient({ requestFormat: "v2" });
 
 // Usage is identical — only the wire format changes
@@ -450,11 +458,10 @@ const page = clientV2.parsePage();
 const response = await clientV2.unlock(page, "sesamy");
 const html = await clientV2.decrypt(page, "bodytext", response);`}</CodeBlock>
 
-        <h2>Service-Side Setup</h2>
+        <h3>Service-Side Setup</h3>
         <p>
-          The service automatically handles both v1 and v2 requests with no configuration
-          needed. The detection is based on whether the <code>resource</code> field is
-          present:
+          The service automatically handles both old and new request formats with no configuration
+          needed. Detection is based on whether the <code>resource</code> field is present:
         </p>
         <CodeBlock>{`// No code changes needed — auto-detection is built in
 const issuer = createDcaIssuer({
@@ -466,17 +473,15 @@ const issuer = createDcaIssuer({
   },
 });
 
-// Handles both v1 and v2 requests transparently
+// Handles both formats transparently
 const result = await issuer.unlock(request, {
   grantedContentNames: ["bodytext"],
   deliveryMode: "contentKey",
 });`}</CodeBlock>
 
-        {/* ================================================================
-            Summary & Security
-            ================================================================ */}
+        {/* ---- Summary & Security ---- */}
 
-        <h2>Summary</h2>
+        <h3>Summary</h3>
         <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem", marginBottom: "0.75rem" }}>
           <thead>
             <tr>
@@ -488,45 +493,45 @@ const result = await issuer.unlock(request, {
           <tbody>
             <tr>
               <td style={td}><strong>Publisher</strong></td>
-              <td style={td}>No change (still generates issuerJWT for v1 clients)</td>
+              <td style={td}>No change (still generates issuerJWT for old clients)</td>
               <td style={td}>No</td>
             </tr>
             <tr>
               <td style={td}><strong>Service</strong></td>
-              <td style={td}>Auto-detects v1/v2; v2 skips proof verification</td>
-              <td style={td}>No — v1 requests still work unchanged</td>
+              <td style={td}>Auto-detects old/new format; new format skips proof verification</td>
+              <td style={td}>No — old requests still work unchanged</td>
             </tr>
             <tr>
               <td style={td}><strong>Client</strong></td>
-              <td style={td}>New <code>requestFormat: &quot;v2&quot;</code> option; drops issuerJWT from request</td>
-              <td style={td}>No — defaults to v1</td>
+              <td style={td}>New <code>requestFormat: &quot;v2&quot;</code> option; drops issuerJWT, keyId, resource, issuerName; renames sealed → contentKeys</td>
+              <td style={td}>No — defaults to old format</td>
             </tr>
             <tr>
               <td style={td}><strong>Wire format</strong></td>
-              <td style={td}>4 fields + 1 JWT removed from unlock request</td>
-              <td style={td}>Yes — v2 requests fail against v1-only services</td>
+              <td style={td}>5 fields + 1 JWT removed; <code>sealed</code> renamed to <code>contentKeys</code></td>
+              <td style={td}>Yes — new format fails against pre-v0.7 services</td>
             </tr>
           </tbody>
         </table>
 
-        <h2>Security</h2>
+        <h3>Security</h3>
         <p>
-          v2 provides <strong>identical security</strong> to v1:
+          The simplified format provides <strong>identical security</strong>:
         </p>
         <ul>
           <li>
             <strong>Publisher authentication:</strong> The <code>resourceJWT</code> is ES256-signed
             by the publisher. The service verifies the signature against the trusted-publisher
-            allowlist. This is unchanged from v1.
+            allowlist. Unchanged.
           </li>
           <li>
-            <strong>Sealed blob integrity:</strong> AES-GCM is authenticated encryption — modifying
-            any sealed blob causes the unseal to fail with a GCM authentication error. The
+            <strong>Content key integrity:</strong> AES-GCM is authenticated encryption — modifying
+            any encrypted blob causes the unseal to fail with a GCM authentication error. The
             SHA-256 proof hashes in the issuerJWT were a redundant second integrity check.
           </li>
           <li>
             <strong>Blob substitution:</strong> Content keys are random per render. Substituting
-            sealed blobs from a different article gives you that article&apos;s keys, which cannot
+            encrypted blobs from a different article gives you that article&apos;s keys, which cannot
             decrypt this article&apos;s content.
           </li>
           <li>
@@ -536,153 +541,54 @@ const result = await issuer.unlock(request, {
           </li>
         </ul>
 
-        {/* ================================================================
-            Suggested Updates — under consideration
-            ================================================================ */}
-
-        <h2>Suggested Updates</h2>
+        <h3>Breaking Changes</h3>
         <p>
-          The following changes are under consideration for future versions. They are not
-          yet implemented but documented here for discussion.
+          The following wire format changes are <strong>not backwards compatible</strong> with
+          pre-v0.7 services. Upgrade the service first, then switch clients.
         </p>
-
-        <h3>A. JWE for Sealed Key Blobs</h3>
-        <SectionCard color="slate">
-          <p>
-            The current seal format is a custom binary blob: ephemeral public key ‖ nonce ‖ ciphertext.
-            This works but is non-standard. Replacing it with{' '}
-            <strong>JWE Compact Serialization</strong> (<a href="https://datatracker.ietf.org/doc/html/rfc7516">RFC 7516</a>)
-            would give us:
-          </p>
-          <ul>
-            <li>A well-known, auditable format instead of a custom byte layout</li>
-            <li>Standard algorithm identifiers (<code>alg: ECDH-ES</code>, <code>enc: A256GCM</code>)</li>
-            <li>Built-in algorithm agility through the <code>alg</code>/<code>enc</code> headers</li>
-            <li>Interoperability with any JWE library (jose, node-jose, etc.)</li>
-          </ul>
-          <CodeBlock>{`// Current custom format
-"sealed": "Base64url(ephemeralPub ‖ nonce ‖ AES-GCM(sharedSecret, plainKey))"
-
-// Proposed JWE Compact Serialization
-"sealed": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImVwayI6ey4uLn19.    .nonce.ciphertext.tag"
-//               header          .CEK.  IV  . ciphertext .tag`}</CodeBlock>
-          <p>
-            The <code>epk</code> (ephemeral public key) moves into the JWE protected header,
-            and AES-GCM nonce/ciphertext/tag are standard JWE fields. The same ECDH-ES +
-            HKDF key derivation is used under the hood.
-          </p>
-        </SectionCard>
-
-        <h3>B. Standard JWT Claims for Share Link Tokens</h3>
-        <SectionCard color="slate">
-          <p>
-            Share link tokens currently use custom claim names (<code>domain</code>,{' '}
-            <code>resourceId</code>, <code>type</code>) similar to v1 resource JWTs.
-            The same RFC 7519 mapping applied to <code>resourceJWT</code> in Change 2 above
-            should be applied to share tokens:
-          </p>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem", marginBottom: "0.75rem" }}>
+        <SectionCard color="amber">
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                <th style={th}>Current claim</th>
-                <th style={th}>Standard claim</th>
-                <th style={th}>Notes</th>
+                <th style={th}>Old field</th>
+                <th style={th}>v0.7 status</th>
+                <th style={th}>Reason</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td style={td}><code>domain</code></td>
-                <td style={td}><code>iss</code></td>
-                <td style={td}>Publisher that signed the token</td>
+                <td style={td}><code>resource</code></td>
+                <td style={td}>Removed</td>
+                <td style={td}>Decoded from <code>resourceJWT</code> (the signed source of truth)</td>
               </tr>
               <tr>
-                <td style={td}><code>resourceId</code></td>
-                <td style={td}><code>sub</code></td>
-                <td style={td}>Resource being shared</td>
+                <td style={td}><code>issuerName</code></td>
+                <td style={td}>Removed</td>
+                <td style={td}>The service already knows its own name</td>
               </tr>
               <tr>
-                <td style={td}><code>type: &quot;dca-share&quot;</code></td>
-                <td style={td}>JWT header <code>typ: &quot;dca-share+jwt&quot;</code></td>
-                <td style={td}>Distinguishes from resource JWTs without a payload claim</td>
+                <td style={td}><code>issuerJWT</code></td>
+                <td style={td}>Removed</td>
+                <td style={td}>SHA-256 integrity proofs are redundant — AES-GCM authenticated encryption catches any tampered blob at unseal time</td>
+              </tr>
+              <tr>
+                <td style={td}><code>keyId</code></td>
+                <td style={td}>Removed</td>
+                <td style={td}>The service uses its configured key; a wrong key fails at AES-GCM unseal</td>
+              </tr>
+              <tr>
+                <td style={td}><code>sealed</code></td>
+                <td style={td}>Renamed to <code>contentKeys</code></td>
+                <td style={td}>Describes <em>what</em> the data is (encrypted content keys) rather than <em>what was done to it</em></td>
               </tr>
             </tbody>
           </table>
-          <p>
-            This aligns all publisher-signed JWTs (resource + share) under the same conventions
-            and allows reusing the same verification code path.
+          <p style={{ marginTop: "1rem", marginBottom: 0 }}>
+            <strong>v0.7 services accept both formats:</strong> when <code>resource</code> is present the
+            request is treated as the old format (full validation including issuerJWT). When absent, it is
+            treated as the new format. The deprecated <code>sealed</code> field name is also accepted as a
+            fallback for <code>contentKeys</code>.
           </p>
-        </SectionCard>
-
-        <h3>C. Structured Error Types</h3>
-        <SectionCard color="slate">
-          <p>
-            Currently, callers distinguish error kinds by parsing <code>error.message</code> strings
-            (e.g. <code>error.message.includes(&quot;not trusted&quot;)</code>). This is fragile —
-            message text can change between versions.
-          </p>
-          <p>
-            Instead, the library should expose typed error subclasses with a stable <code>code</code> property:
-          </p>
-          <CodeBlock>{`// Proposed error hierarchy
-class DcaError extends Error {
-  code: string;
-}
-
-class DcaUntrustedPublisherError extends DcaError {
-  code = "UNTRUSTED_PUBLISHER";
-  domain: string;
-}
-
-class DcaKeyMismatchError extends DcaError {
-  code = "KEY_MISMATCH";
-  expected: string;
-  received: string;
-}
-
-class DcaUnsealError extends DcaError {
-  code = "UNSEAL_FAILED";
-  algorithm: string;
-}
-
-// Callers can now match on stable codes
-try {
-  await issuer.unlock(request, decision);
-} catch (err) {
-  if (err instanceof DcaUntrustedPublisherError) {
-    // handle untrusted publisher
-  }
-  // or match on err.code === "UNTRUSTED_PUBLISHER"
-}`}</CodeBlock>
-        </SectionCard>
-
-        <h3>D. Rename <code>DcaSealedContentKey.t</code> Field</h3>
-        <SectionCard color="slate">
-          <p>
-            The <code>DcaSealedContentKey</code> type uses a single-character field name{' '}
-            <code>t</code> for the time bucket identifier:
-          </p>
-          <CodeBlock>{`// Current wire format
-"sealedContentKeys": {
-  "bodytext": [
-    { "t": "2025-06-d", "nonce": "...", "key": "..." },
-    { "t": "2025-06-d-12", "nonce": "...", "key": "..." }
-  ]
-}`}</CodeBlock>
-          <p>
-            The abbreviated name saves a few bytes per entry but hurts readability and
-            discoverability. Two options:
-          </p>
-          <ol>
-            <li>
-              <strong>Rename to <code>timeBucket</code></strong> — explicit and self-documenting.
-              Costs ~10 extra bytes per entry (negligible in practice).
-            </li>
-            <li>
-              <strong>Switch to array format</strong> — use <code>[timeBucket, nonce, key]</code> tuples
-              instead of objects. Smaller wire size than either naming option and positional semantics
-              are unambiguous given the fixed schema.
-            </li>
-          </ol>
         </SectionCard>
       </main>
     </PageWithToc>

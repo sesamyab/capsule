@@ -9,8 +9,8 @@
  * **v1 (current):** All fields present — resource, resourceJWT, issuerJWT,
  * sealed, keyId, issuerName, plus optional clientPublicKey and shareToken.
  *
- * **v2 (beta):** Only resourceJWT, sealed, and keyId are required.
- * The issuerJWT is dropped — AES-GCM provides sealed-blob integrity.
+ * **v2 (beta):** Only resourceJWT and contentKeys are required.
+ * The issuerJWT, keyId, resource, and issuerName are dropped.
  * The service auto-detects the format.
  *
  * The issuer:
@@ -40,10 +40,10 @@ export const POST: APIRoute = async ({ request }) => {
       );
     }
 
-    // Basic validation — v2 only requires resourceJWT, sealed, keyId
-    if (!body.resourceJWT || !body.sealed) {
+    // Basic validation — v2 requires resourceJWT + contentKeys; v1 sends sealed
+    if (!body.resourceJWT || (!body.contentKeys && !body.sealed)) {
       return new Response(
-        JSON.stringify({ error: "Invalid DCA unlock request — missing required fields (resourceJWT, sealed)" }),
+        JSON.stringify({ error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentKeys)" }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -73,9 +73,9 @@ export const POST: APIRoute = async ({ request }) => {
 
     // ── Access decision ────────────────────────────────────────────────
     // IMPORTANT: Derive scope from the *verified* resource (server-side),
-    // NOT from untrusted client fields (body.sealed / body.contentKeyMap).
+    // NOT from untrusted client fields (body.contentKeys / body.contentKeyMap).
     // In v2 there is no issuerJWT integrity proof, so the client could
-    // inflate contentKeyMap/sealed to widen the scope the issuer unseals.
+    // inflate contentKeyMap/contentKeys to widen the scope the issuer unseals.
     //
     // 1. Verify the request JWTs to get the trusted resource.
     // 2. Look up the article server-side to determine the entitled tier.

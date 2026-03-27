@@ -379,7 +379,7 @@ describe("DCA end-to-end", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["test-issuer"],
-                sealed: result.dcaData.issuerData["test-issuer"].sealed,
+                sealed: result.dcaData.issuerData["test-issuer"].contentKeys,
                 keyId: "key-1",
                 issuerName: "test-issuer",
             },
@@ -451,7 +451,7 @@ describe("DCA end-to-end", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["multi-issuer"],
-                sealed: result.dcaData.issuerData["multi-issuer"].sealed,
+                sealed: result.dcaData.issuerData["multi-issuer"].contentKeys,
                 keyId: "mk-1",
                 issuerName: "multi-issuer",
             },
@@ -514,7 +514,7 @@ describe("DCA end-to-end", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["pk-issuer"],
-                sealed: result.dcaData.issuerData["pk-issuer"].sealed,
+                sealed: result.dcaData.issuerData["pk-issuer"].contentKeys,
                 keyId: "pk-1",
                 issuerName: "pk-issuer",
             },
@@ -587,9 +587,9 @@ describe("DCA end-to-end", () => {
         });
 
         // Tamper with the sealed contentKey
-        const tamperedSealed = { ...result.dcaData.issuerData["tamper-issuer"].sealed };
-        tamperedSealed["bodytext"] = {
-            ...tamperedSealed["bodytext"],
+        const tamperedContentKeys = { ...result.dcaData.issuerData["tamper-issuer"].contentKeys };
+        tamperedContentKeys["bodytext"] = {
+            ...tamperedContentKeys["bodytext"],
             contentKey: toBase64Url(generateAesKeyBytes()), // random blob
         };
 
@@ -599,7 +599,7 @@ describe("DCA end-to-end", () => {
                     resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
                     issuerJWT: result.dcaData.issuerJWT["tamper-issuer"],
-                    sealed: tamperedSealed,
+                    sealed: tamperedContentKeys,
                     keyId: "t-1",
                     issuerName: "tamper-issuer",
                 },
@@ -647,7 +647,7 @@ describe("DCA end-to-end", () => {
                     resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
                     issuerJWT: result.dcaData.issuerJWT["domain-issuer"],
-                    sealed: result.dcaData.issuerData["domain-issuer"].sealed,
+                    sealed: result.dcaData.issuerData["domain-issuer"].contentKeys,
                     keyId: "d-1",
                     issuerName: "domain-issuer",
                 },
@@ -693,7 +693,7 @@ describe("DCA end-to-end", () => {
             resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
             issuerJWT: result.dcaData.issuerJWT["verify-issuer"],
-            sealed: result.dcaData.issuerData["verify-issuer"].sealed,
+            sealed: result.dcaData.issuerData["verify-issuer"].contentKeys,
             keyId: "v-1",
             issuerName: "verify-issuer",
         });
@@ -842,7 +842,7 @@ describe("Trusted-publisher allowlist", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["case-issuer"],
-                sealed: result.dcaData.issuerData["case-issuer"].sealed,
+                sealed: result.dcaData.issuerData["case-issuer"].contentKeys,
                 keyId: "c-1",
                 issuerName: "case-issuer",
             },
@@ -921,7 +921,7 @@ describe("Trusted-publisher allowlist", () => {
                 resource: allowed.dcaData.resource,
                 resourceJWT: allowed.dcaData.resourceJWT,
                 issuerJWT: allowed.dcaData.issuerJWT["constrained-issuer"],
-                sealed: allowed.dcaData.issuerData["constrained-issuer"].sealed,
+                sealed: allowed.dcaData.issuerData["constrained-issuer"].contentKeys,
                 keyId: "cr-1",
                 issuerName: "constrained-issuer",
             },
@@ -936,7 +936,7 @@ describe("Trusted-publisher allowlist", () => {
                     resource: denied.dcaData.resource,
                     resourceJWT: denied.dcaData.resourceJWT,
                     issuerJWT: denied.dcaData.issuerJWT["constrained-issuer"],
-                    sealed: denied.dcaData.issuerData["constrained-issuer"].sealed,
+                    sealed: denied.dcaData.issuerData["constrained-issuer"].contentKeys,
                     keyId: "cr-1",
                     issuerName: "constrained-issuer",
                 },
@@ -1000,7 +1000,7 @@ describe("Trusted-publisher allowlist", () => {
                 resource: premium.dcaData.resource,
                 resourceJWT: premium.dcaData.resourceJWT,
                 issuerJWT: premium.dcaData.issuerJWT["regex-issuer"],
-                sealed: premium.dcaData.issuerData["regex-issuer"].sealed,
+                sealed: premium.dcaData.issuerData["regex-issuer"].contentKeys,
                 keyId: "rx-1",
                 issuerName: "regex-issuer",
             },
@@ -1015,7 +1015,7 @@ describe("Trusted-publisher allowlist", () => {
                     resource: free.dcaData.resource,
                     resourceJWT: free.dcaData.resourceJWT,
                     issuerJWT: free.dcaData.issuerJWT["regex-issuer"],
-                    sealed: free.dcaData.issuerData["regex-issuer"].sealed,
+                    sealed: free.dcaData.issuerData["regex-issuer"].contentKeys,
                     keyId: "rx-1",
                     issuerName: "regex-issuer",
                 },
@@ -1062,7 +1062,7 @@ describe("Trusted-publisher allowlist", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["compat-issuer"],
-                sealed: result.dcaData.issuerData["compat-issuer"].sealed,
+                sealed: result.dcaData.issuerData["compat-issuer"].contentKeys,
                 keyId: "co-1",
                 issuerName: "compat-issuer",
             },
@@ -1155,7 +1155,7 @@ describe("DCA client-bound transport", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["cb-issuer"],
-                sealed: result.dcaData.issuerData["cb-issuer"].sealed,
+                sealed: result.dcaData.issuerData["cb-issuer"].contentKeys,
                 keyId: "cb-1",
                 issuerName: "cb-issuer",
                 clientPublicKey: clientKeys.clientPublicKey,
@@ -1220,7 +1220,7 @@ describe("DCA client-bound transport", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["cb-pk-issuer"],
-                sealed: result.dcaData.issuerData["cb-pk-issuer"].sealed,
+                sealed: result.dcaData.issuerData["cb-pk-issuer"].contentKeys,
                 keyId: "cbpk-1",
                 issuerName: "cb-pk-issuer",
                 clientPublicKey: clientKeys.clientPublicKey,
@@ -1296,7 +1296,7 @@ describe("DCA client-bound transport", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["direct-issuer"],
-                sealed: result.dcaData.issuerData["direct-issuer"].sealed,
+                sealed: result.dcaData.issuerData["direct-issuer"].contentKeys,
                 keyId: "d-1",
                 issuerName: "direct-issuer",
                 // no clientPublicKey
@@ -1377,7 +1377,7 @@ describe("Share Link Tokens", () => {
             resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
             issuerJWT: result.dcaData.issuerJWT["share-issuer"],
-            sealed: result.dcaData.issuerData["share-issuer"].sealed,
+            sealed: result.dcaData.issuerData["share-issuer"].contentKeys,
             keyId: "sk-1",
             issuerName: "share-issuer",
             shareToken,
@@ -1441,7 +1441,7 @@ describe("Share Link Tokens", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["share-pk-issuer"],
-                sealed: result.dcaData.issuerData["share-pk-issuer"].sealed,
+                sealed: result.dcaData.issuerData["share-pk-issuer"].contentKeys,
                 keyId: "spk-1",
                 issuerName: "share-pk-issuer",
                 shareToken,
@@ -1528,7 +1528,7 @@ describe("Share Link Tokens", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["expire-issuer"],
-                sealed: result.dcaData.issuerData["expire-issuer"].sealed,
+                sealed: result.dcaData.issuerData["expire-issuer"].contentKeys,
                 keyId: "ek-1",
                 issuerName: "expire-issuer",
                 shareToken,
@@ -1579,7 +1579,7 @@ describe("Share Link Tokens", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["mm-issuer"],
-                sealed: result.dcaData.issuerData["mm-issuer"].sealed,
+                sealed: result.dcaData.issuerData["mm-issuer"].contentKeys,
                 keyId: "mm-1",
                 issuerName: "mm-issuer",
                 shareToken,
@@ -1637,7 +1637,7 @@ describe("Share Link Tokens", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["trust-issuer"],
-                sealed: result.dcaData.issuerData["trust-issuer"].sealed,
+                sealed: result.dcaData.issuerData["trust-issuer"].contentKeys,
                 keyId: "tk-1",
                 issuerName: "trust-issuer",
                 shareToken: evilShareToken,
@@ -1682,7 +1682,7 @@ describe("Share Link Tokens", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["ns-issuer"],
-                sealed: result.dcaData.issuerData["ns-issuer"].sealed,
+                sealed: result.dcaData.issuerData["ns-issuer"].contentKeys,
                 keyId: "ns-1",
                 issuerName: "ns-issuer",
                 // no shareToken
@@ -1734,7 +1734,7 @@ describe("Share Link Tokens", () => {
             resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
             issuerJWT: result.dcaData.issuerJWT["partial-issuer"],
-            sealed: result.dcaData.issuerData["partial-issuer"].sealed,
+            sealed: result.dcaData.issuerData["partial-issuer"].contentKeys,
             keyId: "pk-1",
             issuerName: "partial-issuer",
             shareToken,
@@ -1809,7 +1809,7 @@ describe("Share Link Tokens", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["cb-issuer"],
-                sealed: result.dcaData.issuerData["cb-issuer"].sealed,
+                sealed: result.dcaData.issuerData["cb-issuer"].contentKeys,
                 keyId: "cb-1",
                 issuerName: "cb-issuer",
                 shareToken,
@@ -1877,7 +1877,7 @@ describe("Share Link Tokens", () => {
                     resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
                     issuerJWT: result.dcaData.issuerJWT["rj-issuer"],
-                    sealed: result.dcaData.issuerData["rj-issuer"].sealed,
+                    sealed: result.dcaData.issuerData["rj-issuer"].contentKeys,
                     keyId: "rj-1",
                     issuerName: "rj-issuer",
                     shareToken,
@@ -2122,13 +2122,11 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 request: resourceJWT, issuerJWT, sealed, keyId (no resource, no issuerName)
+        // v2 request: resourceJWT, contentKeys (no resource, no issuerName, no issuerJWT, no keyId)
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["v2-issuer"],
-                sealed: result.dcaData.issuerData["v2-issuer"].sealed,
-                keyId: "v2-key-1",
+                contentKeys: result.dcaData.issuerData["v2-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -2182,9 +2180,7 @@ describe("v2 unlock request format", () => {
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["v2pk-issuer"],
-                sealed: result.dcaData.issuerData["v2pk-issuer"].sealed,
-                keyId: "v2pk-1",
+                contentKeys: result.dcaData.issuerData["v2pk-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "periodKey" },
         );
@@ -2254,7 +2250,7 @@ describe("v2 unlock request format", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["compat-issuer"],
-                sealed: result.dcaData.issuerData["compat-issuer"].sealed,
+                sealed: result.dcaData.issuerData["compat-issuer"].contentKeys,
                 keyId: "c-1",
                 issuerName: "compat-issuer",
             },
@@ -2308,9 +2304,7 @@ describe("v2 unlock request format", () => {
             issuer.unlock(
                 {
                     resourceJWT: result.dcaData.resourceJWT,
-                    issuerJWT: result.dcaData.issuerJWT["reject-issuer"],
-                    sealed: result.dcaData.issuerData["reject-issuer"].sealed,
-                    keyId: "r-1",
+                    contentKeys: result.dcaData.issuerData["reject-issuer"].contentKeys,
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
@@ -2353,13 +2347,11 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 share link unlock — no resource, no issuerName; issuerJWT still required
+        // v2 share link unlock — no resource, no issuerName, no issuerJWT, no keyId
         const response = await issuer.unlockWithShareToken(
             {
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["v2share-issuer"],
-                sealed: result.dcaData.issuerData["v2share-issuer"].sealed,
-                keyId: "vs-1",
+                contentKeys: result.dcaData.issuerData["v2share-issuer"].contentKeys,
                 shareToken,
             },
             { deliveryMode: "contentKey" },
@@ -2377,7 +2369,7 @@ describe("v2 unlock request format", () => {
         expect(decodeUtf8(decrypted)).toBe("v2 share content");
     });
 
-    it("v2 rejects keyId mismatch (keyId from request)", async () => {
+    it("v2 does not check keyId (keyId not sent in v2 requests)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2398,7 +2390,7 @@ describe("v2 unlock request format", () => {
             }],
         });
 
-        // Issuer is configured with a different keyId
+        // Issuer is configured with a different keyId label, but same ECDH key
         const issuer = createDcaIssuer({
             issuerName: "v2kid-issuer",
             privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
@@ -2408,17 +2400,220 @@ describe("v2 unlock request format", () => {
             },
         });
 
+        // v2 request omits keyId — issuer uses its configured key, no mismatch check
+        const response = await issuer.unlock(
+            {
+                resourceJWT: result.dcaData.resourceJWT,
+                contentKeys: result.dcaData.issuerData["v2kid-issuer"].contentKeys,
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+
+        // Should succeed because the same ECDH key pair is used regardless of keyId label
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+    });
+
+    it("v2 without issuerJWT succeeds", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "v2noijwt.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "v2-no-ijwt",
+            contentItems: [{ contentName: "bodytext", content: "v2 no issuerJWT" }],
+            issuers: [{
+                issuerName: "v2noijwt-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "ni-1",
+                unlockUrl: "https://v2noijwt.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "v2noijwt-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "ni-1",
+            trustedPublisherKeys: {
+                "v2noijwt.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        // v2 request without issuerJWT — should succeed
+        const response = await issuer.unlock(
+            {
+                resourceJWT: result.dcaData.resourceJWT,
+                contentKeys: result.dcaData.issuerData["v2noijwt-issuer"].contentKeys,
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
+        const sealData = result.dcaData.contentSealData["bodytext"];
+        const decrypted = await decryptContent(
+            fromBase64Url(result.sealedContent["bodytext"]),
+            contentKeyBytes,
+            fromBase64Url(sealData.nonce),
+            encodeUtf8(sealData.aad),
+        );
+        expect(decodeUtf8(decrypted)).toBe("v2 no issuerJWT");
+    });
+
+    it("v2 without keyId succeeds", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "v2nokid.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "v2-no-kid",
+            contentItems: [{ contentName: "bodytext", content: "v2 no keyId" }],
+            issuers: [{
+                issuerName: "v2nokid-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "nk-1",
+                unlockUrl: "https://v2nokid.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "v2nokid-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "nk-1",
+            trustedPublisherKeys: {
+                "v2nokid.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        // v2 request without keyId — should succeed
+        const response = await issuer.unlock(
+            {
+                resourceJWT: result.dcaData.resourceJWT,
+                contentKeys: result.dcaData.issuerData["v2nokid-issuer"].contentKeys,
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
+        const sealData = result.dcaData.contentSealData["bodytext"];
+        const decrypted = await decryptContent(
+            fromBase64Url(result.sealedContent["bodytext"]),
+            contentKeyBytes,
+            fromBase64Url(sealData.nonce),
+            encodeUtf8(sealData.aad),
+        );
+        expect(decodeUtf8(decrypted)).toBe("v2 no keyId");
+    });
+
+    it("v1 still requires issuerJWT", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "v1ijwt.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "v1-needs-ijwt",
+            contentItems: [{ contentName: "bodytext", content: "v1 needs issuerJWT" }],
+            issuers: [{
+                issuerName: "v1ijwt-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "vi-1",
+                unlockUrl: "https://v1ijwt.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "v1ijwt-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "vi-1",
+            trustedPublisherKeys: {
+                "v1ijwt.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        // v1 request (has resource) but missing issuerJWT — should fail
         await expect(
             issuer.unlock(
                 {
+                    resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
-                    issuerJWT: result.dcaData.issuerJWT["v2kid-issuer"],
-                    sealed: result.dcaData.issuerData["v2kid-issuer"].sealed,
-                    keyId: "wrong-key",
+                    // issuerJWT omitted
+                    sealed: result.dcaData.issuerData["v1ijwt-issuer"].contentKeys,
+                    keyId: "vi-1",
+                    issuerName: "v1ijwt-issuer",
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
-        ).rejects.toThrow("keyId mismatch");
+        ).rejects.toThrow(/issuerJWT/);
+    });
+
+    it("v1 clients sending 'sealed' still works (deprecated field name)", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "v1sealed.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "v1-sealed-compat",
+            contentItems: [{ contentName: "bodytext", content: "v1 sealed compat" }],
+            issuers: [{
+                issuerName: "v1sealed-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "vs-1",
+                unlockUrl: "https://v1sealed.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "v1sealed-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "vs-1",
+            trustedPublisherKeys: {
+                "v1sealed.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        // v1 request using the deprecated "sealed" field name — should still work
+        const response = await issuer.unlock(
+            {
+                resource: result.dcaData.resource,
+                resourceJWT: result.dcaData.resourceJWT,
+                issuerJWT: result.dcaData.issuerJWT["v1sealed-issuer"],
+                sealed: result.dcaData.issuerData["v1sealed-issuer"].contentKeys,
+                keyId: "vs-1",
+                issuerName: "v1sealed-issuer",
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+
+        expect(response.keys["bodytext"].contentKey).toBeDefined();
+        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
+        const sealData = result.dcaData.contentSealData["bodytext"];
+        const decrypted = await decryptContent(
+            fromBase64Url(result.sealedContent["bodytext"]),
+            contentKeyBytes,
+            fromBase64Url(sealData.nonce),
+            encodeUtf8(sealData.aad),
+        );
+        expect(decodeUtf8(decrypted)).toBe("v1 sealed compat");
     });
 });
 
@@ -2459,7 +2654,7 @@ describe("keyName (v2 role-based access)", () => {
         expect(result.dcaData.contentKeyMap!["teaser"]).toBe("teaser");
 
         // All three items are sealed for the issuer
-        expect(Object.keys(result.dcaData.issuerData["kn-issuer"].sealed)).toEqual(
+        expect(Object.keys(result.dcaData.issuerData["kn-issuer"].contentKeys)).toEqual(
             expect.arrayContaining(["bodytext", "sidebar", "teaser"]),
         );
 
@@ -2511,7 +2706,7 @@ describe("keyName (v2 role-based access)", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["sp-issuer"],
-                sealed: result.dcaData.issuerData["sp-issuer"].sealed,
+                sealed: result.dcaData.issuerData["sp-issuer"].contentKeys,
                 keyId: "sp-1",
                 issuerName: "sp-issuer",
             },
@@ -2609,7 +2804,7 @@ describe("keyName (v2 role-based access)", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["gkn-issuer"],
-                sealed: result.dcaData.issuerData["gkn-issuer"].sealed,
+                sealed: result.dcaData.issuerData["gkn-issuer"].contentKeys,
                 keyId: "gkn-1",
                 issuerName: "gkn-issuer",
                 contentKeyMap: result.dcaData.contentKeyMap,
@@ -2671,13 +2866,11 @@ describe("keyName (v2 role-based access)", () => {
             },
         });
 
-        // v2: no resource, no issuerName; with contentKeyMap for keyName resolution
+        // v2: no resource, no issuerName, no issuerJWT, no keyId; with contentKeyMap for keyName resolution
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["v2kn-issuer"],
-                sealed: result.dcaData.issuerData["v2kn-issuer"].sealed,
-                keyId: "v2kn-1",
+                contentKeys: result.dcaData.issuerData["v2kn-issuer"].contentKeys,
                 contentKeyMap: result.dcaData.contentKeyMap,
             },
             { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
@@ -2767,7 +2960,7 @@ describe("keyName (v2 role-based access)", () => {
             resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
             issuerJWT: result.dcaData.issuerJWT["skn-issuer"],
-            sealed: result.dcaData.issuerData["skn-issuer"].sealed,
+            sealed: result.dcaData.issuerData["skn-issuer"].contentKeys,
             keyId: "skn-1",
             issuerName: "skn-issuer",
             shareToken,
@@ -2804,11 +2997,11 @@ describe("keyName (v2 role-based access)", () => {
         });
 
         // Only body and sidebar should be sealed (both have keyName "premium")
-        const sealedNames = Object.keys(result.dcaData.issuerData["premium-issuer"].sealed);
+        const sealedNames = Object.keys(result.dcaData.issuerData["premium-issuer"].contentKeys);
         expect(sealedNames.sort()).toEqual(["body", "sidebar"]);
 
         // "teaser" should not be in sealed data for this issuer
-        expect(result.dcaData.issuerData["premium-issuer"].sealed["teaser"]).toBeUndefined();
+        expect(result.dcaData.issuerData["premium-issuer"].contentKeys["teaser"]).toBeUndefined();
     });
 
     it("grantedKeyNames without contentKeyMap falls back to treating keyNames as contentNames", async () => {
@@ -2850,7 +3043,7 @@ describe("keyName (v2 role-based access)", () => {
                 resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
                 issuerJWT: result.dcaData.issuerJWT["fb-issuer"],
-                sealed: result.dcaData.issuerData["fb-issuer"].sealed,
+                sealed: result.dcaData.issuerData["fb-issuer"].contentKeys,
                 keyId: "fb-1",
                 issuerName: "fb-issuer",
                 // no contentKeyMap

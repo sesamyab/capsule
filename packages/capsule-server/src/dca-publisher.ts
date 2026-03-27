@@ -38,7 +38,7 @@ import type {
     DcaContentSealData,
     DcaSealedContentKey,
     DcaIssuerEntry,
-    DcaIssuerSealed,
+    DcaContentKeys,
     DcaPublisherConfig,
     DcaRenderOptions,
     DcaRenderResult,
@@ -249,7 +249,7 @@ async function render(
             issuerConfig.algorithm,
         );
 
-        const sealed: Record<string, DcaIssuerSealed> = {};
+        const issuerContentKeys: Record<string, DcaContentKeys> = {};
 
         // Resolve which content items to seal for this issuer.
         // keyNames takes precedence: seal all items whose keyName is in the list.
@@ -284,14 +284,14 @@ async function render(
                 sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm);
             }
 
-            sealed[contentName] = {
+            issuerContentKeys[contentName] = {
                 contentKey: sealedContentKey,
                 periodKeys: sealedPeriodKeys,
             };
         }
 
         issuerData[issuerConfig.issuerName] = {
-            sealed,
+            contentKeys: issuerContentKeys,
             unlockUrl: issuerConfig.unlockUrl,
             keyId: issuerConfig.keyId,
         };
@@ -316,7 +316,7 @@ async function render(
         issuerJWT[issuerConfig.issuerName] = await createIssuerJwt(
             renderId,
             issuerConfig.issuerName,
-            issuerData[issuerConfig.issuerName].sealed,
+            issuerData[issuerConfig.issuerName].contentKeys,
             signingKey,
             issuerConfig.keyId,
         );
