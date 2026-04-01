@@ -107,7 +107,6 @@ export function EncryptedSection({
           const contentNames = Object.keys(page.dcaData.contentSealData);
           const issuerNames = Object.keys(page.dcaData.issuerData);
           log(`DCA data parsed: ${contentNames.length} content item(s), ${issuerNames.length} issuer(s)`, "info");
-          log(`Resource: ${page.dcaData.resource.resourceId}, domain: ${page.dcaData.resource.domain}`, "info");
           log(`Content items: ${contentNames.join(", ")}`, "info");
           log(`Issuers: ${issuerNames.join(", ")}`, "info");
 

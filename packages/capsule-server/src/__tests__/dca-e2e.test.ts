@@ -42,6 +42,7 @@ import {
     encodeUtf8,
     decodeUtf8,
     sha256,
+    type WebCryptoKey,
 } from "../web-crypto";
 import { encryptContent, decryptContent, generateContentKey } from "../encryption";
 
@@ -349,14 +350,10 @@ describe("DCA end-to-end", () => {
         });
 
         // Verify DCA data structure
-        expect(result.dcaData.version).toBe("1");
-        expect(result.dcaData.resource.domain).toBe("example.com");
-        expect(result.dcaData.resource.resourceId).toBe("article-1");
-        expect(result.dcaData.resource.data).toEqual({ section: "politics" });
+        expect(result.dcaData.version).toBe("2");
         expect(result.dcaData.contentSealData["bodytext"]).toBeDefined();
         expect(result.dcaData.sealedContentKeys["bodytext"]).toHaveLength(2); // current + next period
         expect(result.dcaData.issuerData["test-issuer"]).toBeDefined();
-        expect(result.dcaData.issuerJWT["test-issuer"]).toBeDefined();
         expect(result.sealedContent["bodytext"]).toBeDefined();
 
         // Verify HTML output
@@ -376,12 +373,8 @@ describe("DCA end-to-end", () => {
 
         const unlockResponse = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["test-issuer"],
-                sealed: result.dcaData.issuerData["test-issuer"].contentKeys,
-                keyId: "key-1",
-                issuerName: "test-issuer",
+                contentKeys: result.dcaData.issuerData["test-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -448,12 +441,8 @@ describe("DCA end-to-end", () => {
 
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["multi-issuer"],
-                sealed: result.dcaData.issuerData["multi-issuer"].contentKeys,
-                keyId: "mk-1",
-                issuerName: "multi-issuer",
+                contentKeys: result.dcaData.issuerData["multi-issuer"].contentKeys,
             },
             { grantedContentNames: ["body", "sidebar", "data"], deliveryMode: "contentKey" },
         );
@@ -511,12 +500,8 @@ describe("DCA end-to-end", () => {
         // Request periodKeys instead of contentKey
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["pk-issuer"],
-                sealed: result.dcaData.issuerData["pk-issuer"].contentKeys,
-                keyId: "pk-1",
-                issuerName: "pk-issuer",
+                contentKeys: result.dcaData.issuerData["pk-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "periodKey" },
         );
@@ -596,16 +581,12 @@ describe("DCA end-to-end", () => {
         await expect(
             issuer.unlock(
                 {
-                    resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
-                    issuerJWT: result.dcaData.issuerJWT["tamper-issuer"],
-                    sealed: tamperedContentKeys,
-                    keyId: "t-1",
-                    issuerName: "tamper-issuer",
+                    contentKeys: tamperedContentKeys,
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
-        ).rejects.toThrow("Integrity failure");
+        ).rejects.toThrow();
     });
 
     it("issuer rejects unknown publisher domain", async () => {
@@ -644,12 +625,8 @@ describe("DCA end-to-end", () => {
         await expect(
             issuer.unlock(
                 {
-                    resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
-                    issuerJWT: result.dcaData.issuerJWT["domain-issuer"],
-                    sealed: result.dcaData.issuerData["domain-issuer"].contentKeys,
-                    keyId: "d-1",
-                    issuerName: "domain-issuer",
+                    contentKeys: result.dcaData.issuerData["domain-issuer"].contentKeys,
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
@@ -690,18 +667,13 @@ describe("DCA end-to-end", () => {
         });
 
         const verified = await issuer.verify({
-            resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
-            issuerJWT: result.dcaData.issuerJWT["verify-issuer"],
-            sealed: result.dcaData.issuerData["verify-issuer"].contentKeys,
-            keyId: "v-1",
-            issuerName: "verify-issuer",
+            contentKeys: result.dcaData.issuerData["verify-issuer"].contentKeys,
         });
 
         expect(verified.resource.resourceId).toBe("verify-test");
         expect(verified.resource.domain).toBe("verify.example.com");
         expect(verified.resource.data).toEqual({ section: "politics" });
-        expect(verified.issuerPayload.issuerName).toBe("verify-issuer");
     });
 
     it("JSON API response includes all fields", async () => {
@@ -729,11 +701,9 @@ describe("DCA end-to-end", () => {
 
         // JSON response should have all DCA data fields plus sealedContent
         const json = result.json;
-        expect(json.version).toBe("1");
+        expect(json.version).toBe("2");
         expect(json.sealedContent["bodytext"]).toBeDefined();
-        expect(json.resource).toBeDefined();
         expect(json.resourceJWT).toBeDefined();
-        expect(json.issuerJWT).toBeDefined();
         expect(json.contentSealData).toBeDefined();
         expect(json.sealedContentKeys).toBeDefined();
         expect(json.issuerData).toBeDefined();
@@ -763,6 +733,115 @@ describe("DCA end-to-end", () => {
         });
 
         expect(result.dcaData.contentSealData["bodytext"].aad).toBe("aad.example.com|aad-article|bodytext|1");
+    });
+
+    it("rejects cross-resource key substitution (seal AAD binding)", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "aad.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        // Render two different resources
+        const resultA = await publisher.render({
+            resourceId: "article-A",
+            contentItems: [{ contentName: "bodytext", content: "Content A" }],
+            issuers: [{
+                issuerName: "aad-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "aad-1",
+                unlockUrl: "https://aad.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const resultB = await publisher.render({
+            resourceId: "article-B",
+            contentItems: [{ contentName: "bodytext", content: "Content B" }],
+            issuers: [{
+                issuerName: "aad-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "aad-1",
+                unlockUrl: "https://aad.test/unlock",
+                contentNames: ["bodytext"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "aad-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "aad-1",
+            trustedPublisherKeys: {
+                "aad.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        // Normal unlock works
+        const responseA = await issuer.unlock(
+            {
+                resourceJWT: resultA.dcaData.resourceJWT,
+                contentKeys: resultA.dcaData.issuerData["aad-issuer"].contentKeys,
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+        expect(responseA.keys["bodytext"].contentKey).toBeDefined();
+
+        // Substitution attack: resourceJWT from A, contentKeys from B
+        await expect(
+            issuer.unlock(
+                {
+                    resourceJWT: resultA.dcaData.resourceJWT,
+                    contentKeys: resultB.dcaData.issuerData["aad-issuer"].contentKeys,
+                },
+                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            ),
+        ).rejects.toThrow();
+    });
+
+    it("seal AAD: unseal with matching renderId succeeds", async () => {
+        const keyPair = await generateEcdhP256KeyPair();
+        const pems = await exportP256KeyPairPem(keyPair.privateKey, keyPair.publicKey);
+
+        const { key: pubKey } = await importIssuerPublicKey(pems.publicKeyPem, "ECDH-P256");
+        const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
+
+        const originalKey = generateAesKeyBytes();
+        const aad = encodeUtf8("test-render-id");
+
+        const sealed = await sealEcdhP256(originalKey, pubKey, aad);
+        const unsealed = await unsealEcdhP256(sealed, privKey, aad);
+        expect(unsealed).toEqual(originalKey);
+    });
+
+    it("seal AAD: unseal with wrong AAD fails", async () => {
+        const keyPair = await generateEcdhP256KeyPair();
+        const pems = await exportP256KeyPairPem(keyPair.privateKey, keyPair.publicKey);
+
+        const { key: pubKey } = await importIssuerPublicKey(pems.publicKeyPem, "ECDH-P256");
+        const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
+
+        const originalKey = generateAesKeyBytes();
+        const aad = encodeUtf8("render-A");
+        const wrongAad = encodeUtf8("render-B");
+
+        const sealed = await sealEcdhP256(originalKey, pubKey, aad);
+        await expect(unsealEcdhP256(sealed, privKey, wrongAad)).rejects.toThrow();
+    });
+
+    it("seal AAD: unseal without AAD fails when AAD was used", async () => {
+        const keyPair = await generateEcdhP256KeyPair();
+        const pems = await exportP256KeyPairPem(keyPair.privateKey, keyPair.publicKey);
+
+        const { key: pubKey } = await importIssuerPublicKey(pems.publicKeyPem, "ECDH-P256");
+        const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
+
+        const originalKey = generateAesKeyBytes();
+        const aad = encodeUtf8("some-render-id");
+
+        const sealed = await sealEcdhP256(originalKey, pubKey, aad);
+        await expect(unsealEcdhP256(sealed, privKey)).rejects.toThrow();
     });
 });
 
@@ -839,12 +918,8 @@ describe("Trusted-publisher allowlist", () => {
 
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["case-issuer"],
-                sealed: result.dcaData.issuerData["case-issuer"].contentKeys,
-                keyId: "c-1",
-                issuerName: "case-issuer",
+                contentKeys: result.dcaData.issuerData["case-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -918,12 +993,8 @@ describe("Trusted-publisher allowlist", () => {
         // Allowed resource
         const response = await issuer.unlock(
             {
-                resource: allowed.dcaData.resource,
                 resourceJWT: allowed.dcaData.resourceJWT,
-                issuerJWT: allowed.dcaData.issuerJWT["constrained-issuer"],
-                sealed: allowed.dcaData.issuerData["constrained-issuer"].contentKeys,
-                keyId: "cr-1",
-                issuerName: "constrained-issuer",
+                contentKeys: allowed.dcaData.issuerData["constrained-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -933,12 +1004,8 @@ describe("Trusted-publisher allowlist", () => {
         await expect(
             issuer.unlock(
                 {
-                    resource: denied.dcaData.resource,
                     resourceJWT: denied.dcaData.resourceJWT,
-                    issuerJWT: denied.dcaData.issuerJWT["constrained-issuer"],
-                    sealed: denied.dcaData.issuerData["constrained-issuer"].contentKeys,
-                    keyId: "cr-1",
-                    issuerName: "constrained-issuer",
+                    contentKeys: denied.dcaData.issuerData["constrained-issuer"].contentKeys,
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
@@ -997,12 +1064,8 @@ describe("Trusted-publisher allowlist", () => {
         // "premium-article-42" matches /^premium-/
         const response = await issuer.unlock(
             {
-                resource: premium.dcaData.resource,
                 resourceJWT: premium.dcaData.resourceJWT,
-                issuerJWT: premium.dcaData.issuerJWT["regex-issuer"],
-                sealed: premium.dcaData.issuerData["regex-issuer"].contentKeys,
-                keyId: "rx-1",
-                issuerName: "regex-issuer",
+                contentKeys: premium.dcaData.issuerData["regex-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -1012,12 +1075,8 @@ describe("Trusted-publisher allowlist", () => {
         await expect(
             issuer.unlock(
                 {
-                    resource: free.dcaData.resource,
                     resourceJWT: free.dcaData.resourceJWT,
-                    issuerJWT: free.dcaData.issuerJWT["regex-issuer"],
-                    sealed: free.dcaData.issuerData["regex-issuer"].contentKeys,
-                    keyId: "rx-1",
-                    issuerName: "regex-issuer",
+                    contentKeys: free.dcaData.issuerData["regex-issuer"].contentKeys,
                 },
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
@@ -1059,12 +1118,8 @@ describe("Trusted-publisher allowlist", () => {
 
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["compat-issuer"],
-                sealed: result.dcaData.issuerData["compat-issuer"].contentKeys,
-                keyId: "co-1",
-                issuerName: "compat-issuer",
+                contentKeys: result.dcaData.issuerData["compat-issuer"].contentKeys,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -1109,7 +1164,7 @@ describe("DCA client-bound transport", () => {
     }
 
     /** RSA-OAEP decrypt a base64url blob with the client's private key */
-    async function rsaUnwrap(wrappedB64: string, privateKey: CryptoKey): Promise<Uint8Array> {
+    async function rsaUnwrap(wrappedB64: string, privateKey: WebCryptoKey): Promise<Uint8Array> {
         const ciphertext = fromBase64Url(wrappedB64);
         const decrypted = await crypto.subtle.decrypt(
             { name: "RSA-OAEP" },
@@ -1152,12 +1207,8 @@ describe("DCA client-bound transport", () => {
 
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["cb-issuer"],
-                sealed: result.dcaData.issuerData["cb-issuer"].contentKeys,
-                keyId: "cb-1",
-                issuerName: "cb-issuer",
+                contentKeys: result.dcaData.issuerData["cb-issuer"].contentKeys,
                 clientPublicKey: clientKeys.clientPublicKey,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
@@ -1217,12 +1268,8 @@ describe("DCA client-bound transport", () => {
 
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["cb-pk-issuer"],
-                sealed: result.dcaData.issuerData["cb-pk-issuer"].contentKeys,
-                keyId: "cbpk-1",
-                issuerName: "cb-pk-issuer",
+                contentKeys: result.dcaData.issuerData["cb-pk-issuer"].contentKeys,
                 clientPublicKey: clientKeys.clientPublicKey,
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "periodKey" },
@@ -1293,12 +1340,8 @@ describe("DCA client-bound transport", () => {
         // No clientPublicKey — should use direct transport
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["direct-issuer"],
-                sealed: result.dcaData.issuerData["direct-issuer"].contentKeys,
-                keyId: "d-1",
-                issuerName: "direct-issuer",
+                contentKeys: result.dcaData.issuerData["direct-issuer"].contentKeys,
                 // no clientPublicKey
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
@@ -1374,12 +1417,8 @@ describe("Share Link Tokens", () => {
         });
 
         const response = await issuer.unlockWithShareToken({
-            resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
-            issuerJWT: result.dcaData.issuerJWT["share-issuer"],
-            sealed: result.dcaData.issuerData["share-issuer"].contentKeys,
-            keyId: "sk-1",
-            issuerName: "share-issuer",
+            contentKeys: result.dcaData.issuerData["share-issuer"].contentKeys,
             shareToken,
         });
 
@@ -1438,12 +1477,8 @@ describe("Share Link Tokens", () => {
 
         const response = await issuer.unlockWithShareToken(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["share-pk-issuer"],
-                sealed: result.dcaData.issuerData["share-pk-issuer"].contentKeys,
-                keyId: "spk-1",
-                issuerName: "share-pk-issuer",
+                contentKeys: result.dcaData.issuerData["share-pk-issuer"].contentKeys,
                 shareToken,
             },
             { deliveryMode: "periodKey" },
@@ -1525,12 +1560,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["expire-issuer"],
-                sealed: result.dcaData.issuerData["expire-issuer"].contentKeys,
-                keyId: "ek-1",
-                issuerName: "expire-issuer",
+                contentKeys: result.dcaData.issuerData["expire-issuer"].contentKeys,
                 shareToken,
             }),
         ).rejects.toThrow(/expired/);
@@ -1576,12 +1607,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["mm-issuer"],
-                sealed: result.dcaData.issuerData["mm-issuer"].contentKeys,
-                keyId: "mm-1",
-                issuerName: "mm-issuer",
+                contentKeys: result.dcaData.issuerData["mm-issuer"].contentKeys,
                 shareToken,
             }),
         ).rejects.toThrow(/resourceId mismatch/);
@@ -1634,12 +1661,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["trust-issuer"],
-                sealed: result.dcaData.issuerData["trust-issuer"].contentKeys,
-                keyId: "tk-1",
-                issuerName: "trust-issuer",
+                contentKeys: result.dcaData.issuerData["trust-issuer"].contentKeys,
                 shareToken: evilShareToken,
             }),
         ).rejects.toThrow(/signature/i);
@@ -1679,12 +1702,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["ns-issuer"],
-                sealed: result.dcaData.issuerData["ns-issuer"].contentKeys,
-                keyId: "ns-1",
-                issuerName: "ns-issuer",
+                contentKeys: result.dcaData.issuerData["ns-issuer"].contentKeys,
                 // no shareToken
             }),
         ).rejects.toThrow(/shareToken/);
@@ -1731,12 +1750,8 @@ describe("Share Link Tokens", () => {
         });
 
         const response = await issuer.unlockWithShareToken({
-            resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
-            issuerJWT: result.dcaData.issuerJWT["partial-issuer"],
-            sealed: result.dcaData.issuerData["partial-issuer"].contentKeys,
-            keyId: "pk-1",
-            issuerName: "partial-issuer",
+            contentKeys: result.dcaData.issuerData["partial-issuer"].contentKeys,
             shareToken,
         });
 
@@ -1806,12 +1821,8 @@ describe("Share Link Tokens", () => {
 
         const response = await issuer.unlockWithShareToken(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["cb-issuer"],
-                sealed: result.dcaData.issuerData["cb-issuer"].contentKeys,
-                keyId: "cb-1",
-                issuerName: "cb-issuer",
+                contentKeys: result.dcaData.issuerData["cb-issuer"].contentKeys,
                 shareToken,
             },
             {
@@ -1874,12 +1885,8 @@ describe("Share Link Tokens", () => {
         await expect(
             issuer.unlockWithShareToken(
                 {
-                    resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
-                    issuerJWT: result.dcaData.issuerJWT["rj-issuer"],
-                    sealed: result.dcaData.issuerData["rj-issuer"].contentKeys,
-                    keyId: "rj-1",
-                    issuerName: "rj-issuer",
+                    contentKeys: result.dcaData.issuerData["rj-issuer"].contentKeys,
                     shareToken,
                 },
                 {
@@ -2084,11 +2091,11 @@ describe("Share Link Tokens", () => {
 });
 
 // ============================================================================
-// v2 Unlock Request Format (Beta)
+// Unlock Request Format
 // ============================================================================
 
-describe("v2 unlock request format", () => {
-    it("unlocks with v2 request (no resource, no issuerName)", async () => {
+describe("unlock request format", () => {
+    it("unlocks with resourceJWT and contentKeys", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2122,7 +2129,7 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 request: resourceJWT, contentKeys (no resource, no issuerName, no issuerJWT, no keyId)
+        // Unlock request: resourceJWT + contentKeys
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
@@ -2146,7 +2153,7 @@ describe("v2 unlock request format", () => {
         expect(decodeUtf8(decrypted)).toBe("<p>v2 content</p>");
     });
 
-    it("v2 with periodKey delivery mode", async () => {
+    it("unlocks with periodKey delivery mode", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2176,7 +2183,7 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 request with periodKey delivery
+        // Unlock with periodKey delivery
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
@@ -2214,62 +2221,7 @@ describe("v2 unlock request format", () => {
         expect(decodeUtf8(decrypted)).toBe("v2 period key content");
     });
 
-    it("v1 request still works with updated issuer (backwards compatible)", async () => {
-        const keys = await generateTestKeys();
-
-        const publisher = createDcaPublisher({
-            domain: "compat.example.com",
-            signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
-        });
-
-        const result = await publisher.render({
-            resourceId: "compat-article",
-            contentItems: [{ contentName: "bodytext", content: "v1 compat" }],
-            issuers: [{
-                issuerName: "compat-issuer",
-                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
-                keyId: "c-1",
-                unlockUrl: "https://compat.test/unlock",
-                contentNames: ["bodytext"],
-            }],
-        });
-
-        const issuer = createDcaIssuer({
-            issuerName: "compat-issuer",
-            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
-            keyId: "c-1",
-            trustedPublisherKeys: {
-                "compat.example.com": keys.signingPems.publicKeyPem,
-            },
-        });
-
-        // v1 request — with resource, keyId, issuerName (all present)
-        const response = await issuer.unlock(
-            {
-                resource: result.dcaData.resource,
-                resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["compat-issuer"],
-                sealed: result.dcaData.issuerData["compat-issuer"].contentKeys,
-                keyId: "c-1",
-                issuerName: "compat-issuer",
-            },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
-        );
-
-        expect(response.keys["bodytext"].contentKey).toBeDefined();
-        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
-        const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
-            contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
-        );
-        expect(decodeUtf8(decrypted)).toBe("v1 compat");
-    });
-
-    it("v2 rejects untrusted domain (decoded from JWT)", async () => {
+    it("rejects untrusted domain (decoded from JWT)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2311,7 +2263,7 @@ describe("v2 unlock request format", () => {
         ).rejects.toThrow("Untrusted publisher domain");
     });
 
-    it("v2 with share link token", async () => {
+    it("unlocks with share link token", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2347,7 +2299,7 @@ describe("v2 unlock request format", () => {
             },
         });
 
-        // v2 share link unlock — no resource, no issuerName, no issuerJWT, no keyId
+        // Share link unlock
         const response = await issuer.unlockWithShareToken(
             {
                 resourceJWT: result.dcaData.resourceJWT,
@@ -2369,259 +2321,53 @@ describe("v2 unlock request format", () => {
         expect(decodeUtf8(decrypted)).toBe("v2 share content");
     });
 
-    it("v2 does not check keyId (keyId not sent in v2 requests)", async () => {
+    it("rejects request without contentKeys", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
-            domain: "v2kid.example.com",
+            domain: "v2nokeys.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
             periodSecret: keys.periodSecret,
         });
 
         const result = await publisher.render({
-            resourceId: "v2-kid-test",
-            contentItems: [{ contentName: "bodytext", content: "key id test" }],
+            resourceId: "v2-no-keys",
+            contentItems: [{ contentName: "bodytext", content: "no keys" }],
             issuers: [{
-                issuerName: "v2kid-issuer",
-                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
-                keyId: "wrong-key",
-                unlockUrl: "https://v2kid.test/unlock",
-                contentNames: ["bodytext"],
-            }],
-        });
-
-        // Issuer is configured with a different keyId label, but same ECDH key
-        const issuer = createDcaIssuer({
-            issuerName: "v2kid-issuer",
-            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
-            keyId: "correct-key",
-            trustedPublisherKeys: {
-                "v2kid.example.com": keys.signingPems.publicKeyPem,
-            },
-        });
-
-        // v2 request omits keyId — issuer uses its configured key, no mismatch check
-        const response = await issuer.unlock(
-            {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentKeys: result.dcaData.issuerData["v2kid-issuer"].contentKeys,
-            },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
-        );
-
-        // Should succeed because the same ECDH key pair is used regardless of keyId label
-        expect(response.keys["bodytext"].contentKey).toBeDefined();
-    });
-
-    it("v2 without issuerJWT succeeds", async () => {
-        const keys = await generateTestKeys();
-
-        const publisher = createDcaPublisher({
-            domain: "v2noijwt.example.com",
-            signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
-        });
-
-        const result = await publisher.render({
-            resourceId: "v2-no-ijwt",
-            contentItems: [{ contentName: "bodytext", content: "v2 no issuerJWT" }],
-            issuers: [{
-                issuerName: "v2noijwt-issuer",
-                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
-                keyId: "ni-1",
-                unlockUrl: "https://v2noijwt.test/unlock",
-                contentNames: ["bodytext"],
-            }],
-        });
-
-        const issuer = createDcaIssuer({
-            issuerName: "v2noijwt-issuer",
-            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
-            keyId: "ni-1",
-            trustedPublisherKeys: {
-                "v2noijwt.example.com": keys.signingPems.publicKeyPem,
-            },
-        });
-
-        // v2 request without issuerJWT — should succeed
-        const response = await issuer.unlock(
-            {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentKeys: result.dcaData.issuerData["v2noijwt-issuer"].contentKeys,
-            },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
-        );
-
-        expect(response.keys["bodytext"].contentKey).toBeDefined();
-        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
-        const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
-            contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
-        );
-        expect(decodeUtf8(decrypted)).toBe("v2 no issuerJWT");
-    });
-
-    it("v2 without keyId succeeds", async () => {
-        const keys = await generateTestKeys();
-
-        const publisher = createDcaPublisher({
-            domain: "v2nokid.example.com",
-            signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
-        });
-
-        const result = await publisher.render({
-            resourceId: "v2-no-kid",
-            contentItems: [{ contentName: "bodytext", content: "v2 no keyId" }],
-            issuers: [{
-                issuerName: "v2nokid-issuer",
+                issuerName: "v2nokeys-issuer",
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "nk-1",
-                unlockUrl: "https://v2nokid.test/unlock",
+                unlockUrl: "https://v2nokeys.test/unlock",
                 contentNames: ["bodytext"],
             }],
         });
 
         const issuer = createDcaIssuer({
-            issuerName: "v2nokid-issuer",
+            issuerName: "v2nokeys-issuer",
             privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
             keyId: "nk-1",
             trustedPublisherKeys: {
-                "v2nokid.example.com": keys.signingPems.publicKeyPem,
+                "v2nokeys.example.com": keys.signingPems.publicKeyPem,
             },
         });
 
-        // v2 request without keyId — should succeed
-        const response = await issuer.unlock(
-            {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentKeys: result.dcaData.issuerData["v2nokid-issuer"].contentKeys,
-            },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
-        );
-
-        expect(response.keys["bodytext"].contentKey).toBeDefined();
-        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
-        const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
-            contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
-        );
-        expect(decodeUtf8(decrypted)).toBe("v2 no keyId");
-    });
-
-    it("v1 still requires issuerJWT", async () => {
-        const keys = await generateTestKeys();
-
-        const publisher = createDcaPublisher({
-            domain: "v1ijwt.example.com",
-            signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
-        });
-
-        const result = await publisher.render({
-            resourceId: "v1-needs-ijwt",
-            contentItems: [{ contentName: "bodytext", content: "v1 needs issuerJWT" }],
-            issuers: [{
-                issuerName: "v1ijwt-issuer",
-                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
-                keyId: "vi-1",
-                unlockUrl: "https://v1ijwt.test/unlock",
-                contentNames: ["bodytext"],
-            }],
-        });
-
-        const issuer = createDcaIssuer({
-            issuerName: "v1ijwt-issuer",
-            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
-            keyId: "vi-1",
-            trustedPublisherKeys: {
-                "v1ijwt.example.com": keys.signingPems.publicKeyPem,
-            },
-        });
-
-        // v1 request (has resource) but missing issuerJWT — should fail
+        // Request without contentKeys — should fail at runtime even though type requires it
         await expect(
             issuer.unlock(
                 {
-                    resource: result.dcaData.resource,
                     resourceJWT: result.dcaData.resourceJWT,
-                    // issuerJWT omitted
-                    sealed: result.dcaData.issuerData["v1ijwt-issuer"].contentKeys,
-                    keyId: "vi-1",
-                    issuerName: "v1ijwt-issuer",
-                },
+                } as any,
                 { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
             ),
-        ).rejects.toThrow(/issuerJWT/);
-    });
-
-    it("v1 clients sending 'sealed' still works (deprecated field name)", async () => {
-        const keys = await generateTestKeys();
-
-        const publisher = createDcaPublisher({
-            domain: "v1sealed.example.com",
-            signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
-        });
-
-        const result = await publisher.render({
-            resourceId: "v1-sealed-compat",
-            contentItems: [{ contentName: "bodytext", content: "v1 sealed compat" }],
-            issuers: [{
-                issuerName: "v1sealed-issuer",
-                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
-                keyId: "vs-1",
-                unlockUrl: "https://v1sealed.test/unlock",
-                contentNames: ["bodytext"],
-            }],
-        });
-
-        const issuer = createDcaIssuer({
-            issuerName: "v1sealed-issuer",
-            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
-            keyId: "vs-1",
-            trustedPublisherKeys: {
-                "v1sealed.example.com": keys.signingPems.publicKeyPem,
-            },
-        });
-
-        // v1 request using the deprecated "sealed" field name — should still work
-        const response = await issuer.unlock(
-            {
-                resource: result.dcaData.resource,
-                resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["v1sealed-issuer"],
-                sealed: result.dcaData.issuerData["v1sealed-issuer"].contentKeys,
-                keyId: "vs-1",
-                issuerName: "v1sealed-issuer",
-            },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
-        );
-
-        expect(response.keys["bodytext"].contentKey).toBeDefined();
-        const contentKeyBytes = fromBase64Url(response.keys["bodytext"].contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
-        const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
-            contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
-        );
-        expect(decodeUtf8(decrypted)).toBe("v1 sealed compat");
+        ).rejects.toThrow(/contentKeys/);
     });
 });
 
 // ============================================================================
-// keyName — role-based access / key domain separation (v2)
+// keyName — role-based access / key domain separation
 // ============================================================================
 
-describe("keyName (v2 role-based access)", () => {
+describe("keyName (role-based access)", () => {
     it("publishes multiple content items sharing a keyName", async () => {
         const keys = await generateTestKeys();
 
@@ -2703,12 +2449,8 @@ describe("keyName (v2 role-based access)", () => {
         // Unlock with periodKey delivery — request just "body"
         const bodyResponse = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["sp-issuer"],
-                sealed: result.dcaData.issuerData["sp-issuer"].contentKeys,
-                keyId: "sp-1",
-                issuerName: "sp-issuer",
+                contentKeys: result.dcaData.issuerData["sp-issuer"].contentKeys,
             },
             { grantedContentNames: ["body"], deliveryMode: "periodKey" },
         );
@@ -2801,12 +2543,8 @@ describe("keyName (v2 role-based access)", () => {
         // Grant by keyName "premium" → should unlock "body" and "sidebar"
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["gkn-issuer"],
-                sealed: result.dcaData.issuerData["gkn-issuer"].contentKeys,
-                keyId: "gkn-1",
-                issuerName: "gkn-issuer",
+                contentKeys: result.dcaData.issuerData["gkn-issuer"].contentKeys,
                 contentKeyMap: result.dcaData.contentKeyMap,
             },
             { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
@@ -2833,7 +2571,7 @@ describe("keyName (v2 role-based access)", () => {
         }
     });
 
-    it("v2 request with grantedKeyNames (no resource, no issuerName)", async () => {
+    it("unlocks with grantedKeyNames", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2866,7 +2604,7 @@ describe("keyName (v2 role-based access)", () => {
             },
         });
 
-        // v2: no resource, no issuerName, no issuerJWT, no keyId; with contentKeyMap for keyName resolution
+        // Unlock with contentKeyMap for keyName resolution
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
@@ -2957,12 +2695,8 @@ describe("keyName (v2 role-based access)", () => {
         });
 
         const response = await issuer.unlockWithShareToken({
-            resource: result.dcaData.resource,
             resourceJWT: result.dcaData.resourceJWT,
-            issuerJWT: result.dcaData.issuerJWT["skn-issuer"],
-            sealed: result.dcaData.issuerData["skn-issuer"].contentKeys,
-            keyId: "skn-1",
-            issuerName: "skn-issuer",
+            contentKeys: result.dcaData.issuerData["skn-issuer"].contentKeys,
             shareToken,
             contentKeyMap: result.dcaData.contentKeyMap,
         });
@@ -3040,12 +2774,8 @@ describe("keyName (v2 role-based access)", () => {
         // Use grantedKeyNames with no contentKeyMap — should treat "bodytext" as keyName
         const response = await issuer.unlock(
             {
-                resource: result.dcaData.resource,
                 resourceJWT: result.dcaData.resourceJWT,
-                issuerJWT: result.dcaData.issuerJWT["fb-issuer"],
-                sealed: result.dcaData.issuerData["fb-issuer"].contentKeys,
-                keyId: "fb-1",
-                issuerName: "fb-issuer",
+                contentKeys: result.dcaData.issuerData["fb-issuer"].contentKeys,
                 // no contentKeyMap
             },
             { grantedKeyNames: ["bodytext"], deliveryMode: "contentKey" },

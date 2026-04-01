@@ -6,30 +6,21 @@ import { articles } from "@/lib/articles";
 /**
  * POST /api/unlock
  *
- * DCA unlock endpoint. Supports both v1 and v2 request formats:
- *
- * **v1 (current):** All fields present — resource, resourceJWT, issuerJWT,
- * sealed, keyId, issuerName, plus optional clientPublicKey and shareToken.
- *
- * **v2 (beta):** Only resourceJWT and contentKeys are required.
- * The issuerJWT, keyId, resource, and issuerName are dropped.
- * The service auto-detects the format.
+ * DCA unlock endpoint. Requires resourceJWT and contentKeys.
  *
  * The issuer:
  * 1. Verifies the publisher's JWT signature against the trusted-publisher allowlist
- * 2. v1 only: Verifies issuerJWT integrity proofs (SHA-256 of sealed blobs)
- * 3. Makes an access decision:
+ * 2. Makes an access decision:
  *    - If shareToken is present: validates the publisher-signed token and grants
  *      access to the content names specified in the token
  *    - Otherwise: makes a normal access decision (in demo: always grant)
- * 4. Unseals and returns contentKeys or periodKeys
+ * 3. Unseals and returns contentKeys or periodKeys
  */
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as DcaUnlockRequest;
 
-    // Basic validation — v2 requires resourceJWT + contentKeys; v1 sends sealed
-    if (!body.resourceJWT || (!body.contentKeys && !body.sealed)) {
+    if (!body.resourceJWT || !body.contentKeys) {
       return NextResponse.json(
         { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentKeys)" },
         { status: 400 },

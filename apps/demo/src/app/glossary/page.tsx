@@ -196,26 +196,58 @@ wrappedKey = AES-GCM(periodKey, contentKey, wrapIv)`}
             An AES-GCM feature that authenticates extra context alongside the
             ciphertext. The AAD is not encrypted, but decryption will fail if
             the AAD provided at decrypt time doesn&apos;t match what was used at
-            encrypt time.
+            encrypt time. Capsule uses AAD in two layers to prevent both
+            content relocation and cross-resource key substitution attacks.
+          </p>
+          <p>
+            <strong>Content AAD</strong> binds encrypted content to its resource
+            context. If an attacker moves ciphertext to a different page or
+            domain, decryption fails because the AAD no longer matches.
+          </p>
+          <p>
+            <strong>Seal AAD</strong> binds sealed key material (content keys
+            and period keys) to the specific render via the{" "}
+            <code>renderId</code>. This prevents an attacker from substituting
+            sealed keys from one resource into another &mdash; unsealing will
+            fail because the <code>renderId</code> AAD won&apos;t match.
           </p>
           <div className="properties">
             <span className="property">
-              Format: <code>domain|resourceId|contentName|version</code>
+              Content AAD: <code>domain|resourceId|contentName|[keyName]|version</code>
+            </span>
+            <span className="property">
+              Seal AAD: <code>renderId</code>
             </span>
             <span className="property">Encoding: UTF-8 bytes</span>
-            <span className="property">Storage: In contentSealData.aad</span>
+            <span className="property">
+              Storage: Content AAD in contentSealData.aad, Seal AAD implicit
+              from renderId
+            </span>
           </div>
           <pre className="code-example">
-            {`// AAD example
-aad = "www.news-site.com|article-123|bodytext|1"
+            {`// Content AAD — binds ciphertext to its resource context
+contentAad = "www.news-site.com|article-123|bodytext|1"
 
-// Encrypt with AAD
-ciphertext = AES-GCM(contentKey, plaintext, iv, aad)
+// Encrypt content with content AAD
+ciphertext = AES-GCM(contentKey, plaintext, iv, contentAad)
 
-// Decrypt — must provide the same AAD
-plaintext = AES-GCM-Decrypt(contentKey, ciphertext, iv, aad)
-// Fails if AAD doesn't match → prevents content relocation`}
+// Decrypt — must provide the same content AAD
+plaintext = AES-GCM-Decrypt(contentKey, ciphertext, iv, contentAad)
+// Fails if AAD doesn't match → prevents content relocation
+
+// Seal AAD — binds sealed key material to the render
+sealedContentKey = seal(contentKey, issuerPubKey, algorithm, encodeUtf8(renderId))
+sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(renderId))
+// Unsealing fails if renderId doesn't match → prevents key substitution`}
           </pre>
+          <p>
+            <strong>Why two layers?</strong> Content AAD protects the
+            ciphertext &mdash; it ensures encrypted content cannot be moved to a
+            different page. Seal AAD protects the key material &mdash; it
+            ensures sealed keys from one render cannot be transplanted into
+            another resource&apos;s DCA data. Together they provide end-to-end
+            binding from the key material through to the ciphertext.
+          </p>
         </div>
 
         <div className="concept-card">
@@ -364,12 +396,16 @@ sealedContentKeys: {
             Key material (content keys and period keys) is <strong>sealed</strong>{" "}
             with the issuer&apos;s public key. Only the issuer holding the
             matching private key can unseal them. Each issuer gets its own
-            sealed copies, enabling multi-issuer support.
+            sealed copies, enabling multi-issuer support. Sealed blobs include
+            AAD binding via the <code>renderId</code>, which ties the sealed
+            key material to a specific render and prevents cross-resource key
+            substitution.
           </p>
           <div className="properties">
             <span className="property">ECDH P-256: Ephemeral key per seal</span>
             <span className="property">RSA-OAEP: Standard ciphertext</span>
             <span className="property">Auto-detection: From PEM key type</span>
+            <span className="property">AAD: renderId (UTF-8 encoded)</span>
           </div>
           <pre className="code-example">
             {`// Issuer sealed structure
@@ -377,7 +413,7 @@ issuerData: {
   "sesamy": {
     sealed: {
       "bodytext": {
-        contentKey: "base64url...",   // sealed with issuer pubkey
+        contentKey: "base64url...",   // sealed with issuer pubkey + renderId AAD
         periodKeys: {
           "251023T13": "base64url...",
           "251023T14": "base64url..."

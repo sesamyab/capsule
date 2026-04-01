@@ -4,12 +4,13 @@ import { PageWithToc } from "@/components/PageWithToc";
 const th = { textAlign: "left" as const, padding: "0.5rem", borderBottom: "2px solid #333" };
 const td = { padding: "0.5rem", borderBottom: "1px solid #ddd" };
 
-function SectionCard({ color, children }: { color: "amber" | "indigo" | "emerald" | "slate"; children: React.ReactNode }) {
+function SectionCard({ color, children }: { color: "amber" | "indigo" | "emerald" | "slate" | "rose"; children: React.ReactNode }) {
   const palette = {
     amber:   { bg: "rgba(251, 191, 36, 0.08)", border: "rgba(251, 191, 36, 0.35)" },
     indigo:  { bg: "rgba(99, 102, 241, 0.08)", border: "rgba(99, 102, 241, 0.35)" },
     emerald: { bg: "rgba(16, 185, 129, 0.08)", border: "rgba(16, 185, 129, 0.35)" },
     slate:   { bg: "rgba(148, 163, 184, 0.08)", border: "rgba(148, 163, 184, 0.35)" },
+    rose:    { bg: "rgba(244, 63, 94, 0.08)",  border: "rgba(244, 63, 94, 0.35)" },
   }[color];
   return (
     <section style={{
@@ -24,13 +25,21 @@ function SectionCard({ color, children }: { color: "amber" | "indigo" | "emerald
   );
 }
 
-function CompatBadge({ compatible }: { compatible: boolean }) {
+function CompatBadge({ compatible, breaking }: { compatible?: boolean; breaking?: boolean }) {
+  const bg = breaking
+    ? "linear-gradient(135deg, #ef4444, #dc2626)"
+    : compatible
+      ? "linear-gradient(135deg, #10b981, #059669)"
+      : "linear-gradient(135deg, #f59e0b, #d97706)";
+  const label = breaking
+    ? "Breaking"
+    : compatible
+      ? "Backwards compatible"
+      : "Not backwards compatible";
   return (
     <span style={{
       display: "inline-block",
-      background: compatible
-        ? "linear-gradient(135deg, #10b981, #059669)"
-        : "linear-gradient(135deg, #f59e0b, #d97706)",
+      background: bg,
       color: "#fff",
       padding: "0.1rem 0.55rem",
       borderRadius: "5px",
@@ -38,7 +47,7 @@ function CompatBadge({ compatible }: { compatible: boolean }) {
       fontWeight: 700,
       verticalAlign: "middle",
     }}>
-      {compatible ? "Backwards compatible" : "Not backwards compatible"}
+      {label}
     </span>
   );
 }
@@ -72,10 +81,119 @@ export default function ChangelogPage() {
         </p>
 
         {/* ================================================================
+            v0.8
+            ================================================================ */}
+
+        <h2>v0.8 <VersionBadge version="Latest" /></h2>
+        <p>
+          v0.8 introduces a security fix for sealed key binding and removes the legacy v1 request format.
+        </p>
+
+        {/* ---- Change 1: Seal AAD Binding ---- */}
+
+        <h3>Seal AAD Binding</h3>
+        <SectionCard color="rose">
+          <CompatBadge compatible={false} />
+
+          <h4>What Changed</h4>
+          <p>
+            Sealed key blobs (<code>contentKeys</code> and <code>periodKeys</code>) are now
+            cryptographically bound to the render via <code>renderId</code> as AES-GCM AAD /
+            RSA-OAEP label.
+          </p>
+
+          <h4>Why</h4>
+          <p>
+            Prevents a <strong>cross-resource key substitution attack</strong> where an attacker
+            could swap <code>contentKeys</code> from resource B into a request authorized for
+            resource A, gaining unauthorized access to B&apos;s content.
+          </p>
+
+          <h4>How It Works</h4>
+          <ol>
+            <li>
+              The <strong>publisher</strong> passes <code>renderId</code> as AAD when sealing keys
+              for issuers.
+            </li>
+            <li>
+              The <strong>issuer</strong> passes the same <code>renderId</code> (from the verified{" "}
+              <code>resourceJWT</code>) when unsealing.
+            </li>
+            <li>
+              Mismatched AAD causes decryption to <strong>fail</strong> — a blob sealed for render X
+              cannot be unsealed in a request for render Y.
+            </li>
+          </ol>
+
+          <CodeBlock>{`// Publisher side — renderId bound as AAD during seal
+const result = await publisher.render({
+  resourceId: "article-123",
+  contentItems: [
+    { contentName: "bodytext", content: body, contentType: "text/html" },
+  ],
+  issuers: [{ issuerName: "sesamy", publicKeyPem, keyId, unlockUrl, keyNames: ["bodytext"] }],
+});
+// renderId is automatically included as AES-GCM AAD in the sealed blobs
+
+// Issuer side — renderId from verified resourceJWT used as AAD during unseal
+const result = await issuer.unlock(request, {
+  grantedKeyNames: ["bodytext"],
+  deliveryMode: "contentKey",
+});
+// If contentKeys were swapped from a different render, unseal fails`}</CodeBlock>
+        </SectionCard>
+
+        {/* ---- Change 2: v1 Legacy Removed ---- */}
+
+        <h3>v1 Legacy Removed</h3>
+        <SectionCard color="amber">
+          <CompatBadge breaking />
+
+          <h4>What Changed</h4>
+          <p>
+            Removed the v1 request format. The following fields are no longer accepted:
+          </p>
+          <ul>
+            <li><code>resource</code> (unsigned copy)</li>
+            <li><code>issuerJWT</code></li>
+            <li><code>sealed</code></li>
+            <li><code>keyId</code></li>
+            <li><code>issuerName</code></li>
+          </ul>
+          <p>
+            <code>DcaData</code> version is now <code>&quot;2&quot;</code> (was <code>&quot;1&quot;</code>).
+          </p>
+
+          <h4>Why</h4>
+          <p>
+            v2 is simpler (2 fields instead of 6 + 2 JWTs) and seal AAD provides stronger
+            cryptographic binding than <code>issuerJWT</code> integrity proofs.
+          </p>
+
+          <h4>Removed Types &amp; Functions</h4>
+          <ul>
+            <li>Types: <code>DcaIssuerJwtPayload</code>, <code>DcaIssuerProof</code></li>
+            <li>Functions: <code>createIssuerJwt</code>, <code>buildIssuerProof</code>, <code>verifyIssuerProof</code></li>
+          </ul>
+
+          <h4>Migration</h4>
+          <p>
+            Use the v2 unlock request format:
+          </p>
+          <CodeBlock>{`// v2 request format (the only format now)
+POST /api/unlock
+{
+  "resourceJWT": "eyJ…",
+  "contentKeys": { "bodytext": { "contentKey": "…", "periodKeys": { … } } },
+  "clientPublicKey": "…"   // optional
+}`}</CodeBlock>
+        </SectionCard>
+
+        {/* ================================================================
             v0.7
             ================================================================ */}
 
-        <h2>v0.7 <VersionBadge version="Latest" /></h2>
+        <h2>v0.7</h2>
         <p>
           v0.7 introduces three changes to the unlock protocol.
         </p>
@@ -421,7 +539,7 @@ const result = await issuer.unlock(request, {
             by <code>keyName</code> instead of <code>contentName</code>, so unlocking any
             &quot;premium&quot; article automatically caches the key for all other &quot;premium&quot; articles:
           </p>
-          <CodeBlock>{`const client = new DcaClient({ requestFormat: "v2" });
+          <CodeBlock>{`const client = new DcaClient();
 const page = client.parsePage();
 
 // contentKeyMap is included automatically in the unlock request
@@ -447,24 +565,17 @@ const side = await client.decrypt(page, "sidebar", keys);
         <h3>Client Usage</h3>
         <CodeBlock>{`import { DcaClient } from '@sesamy/capsule-client';
 
-// Old format (default) — compatible with all services
-const clientV1 = new DcaClient();
+const client = new DcaClient();
 
-// New format — requires v0.7+ service
-const clientV2 = new DcaClient({ requestFormat: "v2" });
-
-// Usage is identical — only the wire format changes
-const page = clientV2.parsePage();
-const response = await clientV2.unlock(page, "sesamy");
-const html = await clientV2.decrypt(page, "bodytext", response);`}</CodeBlock>
+const page = client.parsePage();
+const response = await client.unlock(page, "sesamy");
+const html = await client.decrypt(page, "bodytext", response);`}</CodeBlock>
 
         <h3>Service-Side Setup</h3>
         <p>
-          The service automatically handles both old and new request formats with no configuration
-          needed. Detection is based on whether the <code>resource</code> field is present:
+          The service accepts unlock requests with <code>resourceJWT</code> and <code>contentKeys</code>:
         </p>
-        <CodeBlock>{`// No code changes needed — auto-detection is built in
-const issuer = createDcaIssuer({
+        <CodeBlock>{`const issuer = createDcaIssuer({
   issuerName: "sesamy",
   privateKeyPem: process.env.ISSUER_ECDH_P256_PRIVATE_KEY!,
   keyId: "2025-10",
@@ -473,7 +584,6 @@ const issuer = createDcaIssuer({
   },
 });
 
-// Handles both formats transparently
 const result = await issuer.unlock(request, {
   grantedContentNames: ["bodytext"],
   deliveryMode: "contentKey",
@@ -493,22 +603,22 @@ const result = await issuer.unlock(request, {
           <tbody>
             <tr>
               <td style={td}><strong>Publisher</strong></td>
-              <td style={td}>No change (still generates issuerJWT for old clients)</td>
+              <td style={td}>No change</td>
               <td style={td}>No</td>
             </tr>
             <tr>
               <td style={td}><strong>Service</strong></td>
-              <td style={td}>Auto-detects old/new format; new format skips proof verification</td>
-              <td style={td}>No — old requests still work unchanged</td>
+              <td style={td}>Accepts resourceJWT + contentKeys</td>
+              <td style={td}>No</td>
             </tr>
             <tr>
               <td style={td}><strong>Client</strong></td>
-              <td style={td}>New <code>requestFormat: &quot;v2&quot;</code> option; drops issuerJWT, keyId, resource, issuerName; renames sealed → contentKeys</td>
-              <td style={td}>No — defaults to old format</td>
+              <td style={td}>Sends resourceJWT + contentKeys (legacy fields removed)</td>
+              <td style={td}>Yes — legacy v1 format removed</td>
             </tr>
             <tr>
               <td style={td}><strong>Wire format</strong></td>
-              <td style={td}>5 fields + 1 JWT removed; <code>sealed</code> renamed to <code>contentKeys</code></td>
+              <td style={td}>Only resourceJWT + contentKeys; legacy fields (issuerJWT, keyId, resource, issuerName, sealed) removed</td>
               <td style={td}>Yes — new format fails against pre-v0.7 services</td>
             </tr>
           </tbody>

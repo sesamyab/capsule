@@ -39,11 +39,11 @@ export default function SpecPage() {
           <tbody>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Publisher</strong></td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Encrypts content at render time. Seals per-content keys for each issuer with ECDH P-256. Signs a <code>resourceJWT</code> (ES256) binding metadata and an <code>issuerJWT</code> proving sealed-blob integrity (SHA-256 hashes).</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Encrypts content at render time. Seals per-content keys for each issuer with ECDH P-256, using <code>renderId</code> as seal AAD. Signs a <code>resourceJWT</code> (ES256) binding metadata.</td>
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Issuer</strong></td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Owns an ECDH P-256 key pair. On unlock, verifies both JWTs, checks integrity proofs, unseals keys, and returns them to the client.</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Owns an ECDH P-256 key pair. On unlock, verifies <code>resourceJWT</code>, extracts <code>renderId</code>, unseals keys using <code>renderId</code> as seal AAD, and returns them to the client.</td>
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Client</strong></td>
@@ -94,33 +94,66 @@ const result = await publisher.render({
 // 2. ECDH shared secret derived: ephemeralPrivate × issuerPublic
 // 3. HKDF-SHA256(secret, salt="dca-seal", info="dca-seal-aes256gcm") → 256-bit wrapping key
 // 4. AES-256-GCM wrap each key with a unique 12-byte nonce
+//    AAD = renderId (binds sealed blob to this specific render)
 // 5. Sealed blob = ephemeralPublicKey(65B) ‖ nonce(12B) ‖ ciphertext+tag`}</CodeBlock>
 
-        <h3>Integrity Proofs</h3>
+        <h3>Seal AAD (Additional Authenticated Data)</h3>
         <p>
-          The publisher signs an <code>issuerJWT</code> for each issuer containing
-          SHA-256 hashes of every sealed blob. On unlock, the issuer verifies these
-          hashes before unsealing — preventing a tampered page from tricking the
-          issuer into revealing keys for content it didn't encrypt.
+          When sealing contentKeys and periodKeys for issuers, the publisher
+          passes the <code>renderId</code> as AAD to the AES-GCM encryption
+          (for ECDH P-256 sealing) or as the RSA-OAEP label (for RSA-based
+          sealing). This cryptographically binds each sealed key blob to the
+          specific render that produced it.
         </p>
-        <CodeBlock>{`// issuerJWT payload (signed by publisher's ES256 key)
-{
-  "renderId": "abc123…",           // Binds to resourceJWT
-  "issuerName": "sesamy",
-  "proof": {
-    "bodytext": {
-      "contentKey": "base64url(SHA-256(sealedContentKeyBlob))",
-      "periodKeys": {
-        "251023T13": "base64url(SHA-256(sealedPeriodKeyBlob))"
-      }
-    }
-  }
-}`}</CodeBlock>
+        <p>
+          On unlock, the issuer extracts <code>renderId</code> from the
+          verified <code>resourceJWT</code> and provides it as AAD when
+          unsealing. If the <code>renderId</code> does not match, AES-GCM
+          decryption fails with an authentication error.
+        </p>
+        <p>
+          <strong>Why this matters:</strong> Seal AAD prevents{" "}
+          <em>cross-resource key substitution attacks</em>. Without it, an
+          attacker could swap sealed contentKeys from resource B into a request
+          authorized for resource A. The issuer would unseal the wrong keys
+          without detecting the substitution. With seal AAD, the sealed blobs
+          from resource B are bound to resource B&apos;s <code>renderId</code> and
+          cannot be unsealed under resource A&apos;s <code>renderId</code>.
+        </p>
+        <CodeBlock>{`// Seal AAD binding
+// Publisher (during render):
+//   sealedBlob = AES-256-GCM-Encrypt(wrappingKey, contentKey, nonce, aad=renderId)
+//
+// Issuer (during unlock):
+//   1. Verify resourceJWT → extract renderId from payload
+//   2. contentKey = AES-256-GCM-Decrypt(wrappingKey, sealedBlob, nonce, aad=renderId)
+//   3. If renderId mismatches → GCM auth tag check fails → reject`}</CodeBlock>
+
+        <h3>Integrity Protection</h3>
+        <p>
+          In v2, integrity of sealed key blobs is guaranteed by{" "}
+          <strong>seal AAD</strong> rather than a separate <code>issuerJWT</code>.
+          The <code>renderId</code> (from the signed <code>resourceJWT</code>) is
+          used as AAD during AES-GCM sealing, so any substitution or tampering of
+          sealed blobs causes a GCM authentication failure at unseal time. This
+          replaces the v1 approach of signing per-issuer SHA-256 hash proofs in a
+          separate JWT.
+        </p>
+        <CodeBlock>{`// v2 integrity: seal AAD replaces issuerJWT
+//
+// v1 (deprecated): publisher signed an issuerJWT with SHA-256 hashes of sealed blobs
+//   → issuer verified hashes before unsealing
+//
+// v2 (current): publisher passes renderId as AAD during AES-GCM sealing
+//   → issuer provides renderId (from verified resourceJWT) as AAD during unsealing
+//   → GCM authentication tag rejects any blob not sealed for this render
+//
+// Result: same protection against key substitution, fewer JWTs, simpler flow`}</CodeBlock>
 
         <h3>DCA HTML Embedding</h3>
         <p>
           DCA data and sealed content are embedded using two elements. The{" "}
-          <code>&lt;script&gt;</code> tag holds all metadata, JWTs, and sealed keys.
+          <code>&lt;script&gt;</code> tag holds all metadata, the <code>resourceJWT</code>, and sealed keys.
           The <code>&lt;template&gt;</code> tag holds the encrypted content blobs
           (inert — no scripts execute, no images load).
         </p>
@@ -136,7 +169,6 @@ const result = await publisher.render({
     "data": { "section": "politics", "date.published": "2025-10-20T10:30:00Z" }
   },
   "resourceJWT": "eyJ…",
-  "issuerJWT": { "sesamy": "eyJ…" },
   "contentSealData": {
     "bodytext": { "contentType": "text/html", "nonce": "…", "aad": "…" }
   },
@@ -170,23 +202,29 @@ const result = await publisher.render({
         </p>
         <ol>
           <li>Verify <code>resourceJWT</code> signature (ES256) using the publisher's public key, looked up by <code>resource.domain</code>.</li>
-          <li>Verify <code>issuerJWT</code> signature with the same publisher key; check that <code>renderId</code> matches.</li>
-          <li>Verify integrity proofs — SHA-256 of each sealed blob must match the signed hashes in <code>issuerJWT</code>.</li>
-          <li>Unseal keys using the issuer's ECDH private key (reverse of the sealing process).</li>
+          <li>Extract <code>renderId</code> from the verified <code>resourceJWT</code> payload.</li>
+          <li>Unseal keys using the issuer's ECDH private key, providing <code>renderId</code> as AAD (GCM auth tag validates the blob was sealed for this render).</li>
           <li>Return keys to the client — either as plaintext (direct) or RSA-OAEP wrapped (client-bound).</li>
         </ol>
 
-        <CodeBlock>{`// Client → Issuer
+        <CodeBlock>{`// Client → Issuer (v2)
 POST /api/unlock
 {
-  "resource": { "domain": "news.example.com", "resourceId": "article-123", … },
   "resourceJWT": "eyJ…",
-  "issuerJWT": "eyJ…",
-  "sealed": { "bodytext": { "contentKey": "…", "periodKeys": { "251023T13": "…" } } },
-  "keyId": "issuer-key-1",
-  "issuerName": "sesamy",
+  "contentKeys": {
+    "bodytext": {
+      "contentKey": "base64url-sealed-blob",
+      "periodKeys": { "251023T13": "base64url-sealed-blob" }
+    }
+  },
   "clientPublicKey": "base64url-SPKI-RSA-public-key"   // ← enables client-bound mode
 }
+
+// Issuer verification:
+// 1. Verify resourceJWT → extract renderId, domain, resourceId
+// 2. Unseal each key blob with ECDH private key + renderId as AAD
+//    (mismatched renderId → GCM auth failure → reject)
+// 3. Return keys
 
 // Issuer → Client
 {
@@ -399,8 +437,8 @@ observer.observe(document.body, {
         <h3>Token Structure</h3>
         <p>
           Share link tokens are ES256 (ECDSA P-256) signed JWTs, using the
-          same publisher signing key that signs <code>resourceJWT</code> and{" "}
-          <code>issuerJWT</code>. The issuer already trusts this key via its{" "}
+          same publisher signing key that signs <code>resourceJWT</code>.
+          The issuer already trusts this key via its{" "}
           <code>trustedPublisherKeys</code> allowlist.
         </p>
 
@@ -482,7 +520,7 @@ export async function POST(request: Request) {
 
         <p>The issuer performs these validation steps:</p>
         <ol>
-          <li>Verifies request JWTs (same as normal unlock)</li>
+          <li>Verifies <code>resourceJWT</code> and extracts <code>renderId</code> (same as normal unlock)</li>
           <li>Verifies share token signature with the publisher&apos;s ES256 key</li>
           <li>Validates type discriminator (<code>&quot;dca-share&quot;</code>)</li>
           <li>Validates domain binding (token domain must match resource domain)</li>
@@ -494,15 +532,13 @@ export async function POST(request: Request) {
         </ol>
 
         <h3>Unlock Request with Share Token</h3>
-        <CodeBlock>{`// Client → Issuer
+        <CodeBlock>{`// Client → Issuer (v2)
 POST /api/unlock
 {
-  "resource": { "domain": "news.example.com", "resourceId": "article-123", … },
   "resourceJWT": "eyJ…",
-  "issuerJWT": "eyJ…",
-  "sealed": { "bodytext": { "contentKey": "…", "periodKeys": { … } } },
-  "keyId": "issuer-key-1",
-  "issuerName": "sesamy",
+  "contentKeys": {
+    "bodytext": { "contentKey": "…", "periodKeys": { … } }
+  },
   "shareToken": "eyJ…",                  // ← Share link token
   "clientPublicKey": "base64url-SPKI…"   // Optional: client-bound transport
 }
@@ -786,6 +822,17 @@ const result = await issuer.unlockWithShareToken(body, {
             ✅ <strong>Secure Key Transport:</strong> ECDH P-256 sealing + optional RSA-OAEP client-bound wrapping
           </li>
           <li>
+            ✅ <strong>Content Key Binding:</strong> Two layers of AAD prevent
+            substitution — content AAD (<code>domain|resourceId|contentName|version</code>)
+            binds ciphertext to resource context, seal AAD (<code>renderId</code>)
+            binds sealed key material to the render
+          </li>
+          <li>
+            ✅ <strong>Cross-Resource Protection:</strong> Seal AAD prevents
+            content key substitution between resources — sealed blobs cannot be
+            unsealed under a different render&apos;s context
+          </li>
+          <li>
             ✅ <strong>Offline Access:</strong> Cached keys work without network
           </li>
           <li>
@@ -816,7 +863,7 @@ const result = await issuer.unlockWithShareToken(body, {
         <h2>Implementation Checklist</h2>
         <ul>
           <li>✅ AES-256-GCM for content encryption</li>
-          <li>✅ ECDH P-256 for key sealing</li>
+          <li>✅ ECDH P-256 for key sealing (with renderId as seal AAD)</li>
           <li>✅ ES256 (ECDSA P-256) for JWT signing</li>
           <li>✅ Unique 96-bit IV per encrypted content</li>
           <li>✅ 128-bit authentication tag (GCM)</li>

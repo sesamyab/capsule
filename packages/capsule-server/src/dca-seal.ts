@@ -68,6 +68,7 @@ const SEAL_HKDF_INFO = "dca-seal-aes256gcm";
 export async function sealEcdhP256(
     plaintext: Uint8Array,
     issuerPublicKey: WebCryptoKey,
+    aad?: Uint8Array,
 ): Promise<string> {
     // Generate fresh ephemeral keypair
     const ephemeral = await generateEcdhP256KeyPair();
@@ -79,7 +80,7 @@ export async function sealEcdhP256(
 
     // Encrypt key material
     const iv = generateIv();
-    const { encryptedContent } = await aesGcmEncrypt(plaintext, aesKey, iv);
+    const { encryptedContent } = await aesGcmEncrypt(plaintext, aesKey, iv, aad);
 
     // Export ephemeral public key as raw 65 bytes
     const ephemeralPubRaw = await exportEcdhP256PublicKeyRaw(ephemeral.publicKey);
@@ -99,6 +100,7 @@ export async function sealEcdhP256(
 export async function unsealEcdhP256(
     sealedBlob: string,
     issuerPrivateKey: WebCryptoKey,
+    aad?: Uint8Array,
 ): Promise<Uint8Array> {
     const blob = fromBase64Url(sealedBlob);
 
@@ -123,7 +125,7 @@ export async function unsealEcdhP256(
     const aesKey = await importAesKey(derivedKey, ["decrypt"]);
 
     // Decrypt
-    return aesGcmDecrypt(ciphertext, aesKey, iv);
+    return aesGcmDecrypt(ciphertext, aesKey, iv, aad);
 }
 
 // ============================================================================
@@ -140,8 +142,9 @@ export async function unsealEcdhP256(
 export async function sealRsaOaep(
     plaintext: Uint8Array,
     issuerPublicKey: WebCryptoKey,
+    aad?: Uint8Array,
 ): Promise<string> {
-    const encrypted = await rsaOaepEncrypt(issuerPublicKey, plaintext);
+    const encrypted = await rsaOaepEncrypt(issuerPublicKey, plaintext, aad);
     return toBase64Url(encrypted);
 }
 
@@ -155,9 +158,10 @@ export async function sealRsaOaep(
 export async function unsealRsaOaep(
     sealedBlob: string,
     issuerPrivateKey: WebCryptoKey,
+    aad?: Uint8Array,
 ): Promise<Uint8Array> {
     const ciphertext = fromBase64Url(sealedBlob);
-    return rsaOaepDecrypt(issuerPrivateKey, ciphertext);
+    return rsaOaepDecrypt(issuerPrivateKey, ciphertext, aad);
 }
 
 // ============================================================================
@@ -173,11 +177,12 @@ export async function seal(
     plaintext: Uint8Array,
     issuerPublicKey: WebCryptoKey,
     algorithm: DcaSealAlgorithm,
+    aad?: Uint8Array,
 ): Promise<string> {
     if (algorithm === "ECDH-P256") {
-        return sealEcdhP256(plaintext, issuerPublicKey);
+        return sealEcdhP256(plaintext, issuerPublicKey, aad);
     }
-    return sealRsaOaep(plaintext, issuerPublicKey);
+    return sealRsaOaep(plaintext, issuerPublicKey, aad);
 }
 
 /**
@@ -187,11 +192,12 @@ export async function unseal(
     sealedBlob: string,
     issuerPrivateKey: WebCryptoKey,
     algorithm: DcaSealAlgorithm,
+    aad?: Uint8Array,
 ): Promise<Uint8Array> {
     if (algorithm === "ECDH-P256") {
-        return unsealEcdhP256(sealedBlob, issuerPrivateKey);
+        return unsealEcdhP256(sealedBlob, issuerPrivateKey, aad);
     }
-    return unsealRsaOaep(sealedBlob, issuerPrivateKey);
+    return unsealRsaOaep(sealedBlob, issuerPrivateKey, aad);
 }
 
 /**

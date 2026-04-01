@@ -7,9 +7,8 @@
  *   - `iss` = publisher domain, `sub` = resourceId, `iat` = render time, `jti` = renderId
  *   - `data` = custom publisher metadata
  *
- * Two JWTs per page:
+ * One JWT per page:
  *   - resourceJWT: signs resource metadata (shared across issuers)
- *   - issuerJWT: per-issuer, signs SHA-256 proofs of encrypted content key blobs
  */
 
 import {
@@ -28,9 +27,6 @@ import {
 import type {
   DcaResource,
   DcaResourceJwtPayload,
-  DcaIssuerJwtPayload,
-  DcaContentKeys,
-  DcaIssuerProof,
 } from "./dca-types";
 
 // ============================================================================
@@ -133,34 +129,6 @@ export async function computeProofHash(sealedBlobBase64Url: string): Promise<str
 }
 
 /**
- * Build the proof object for one issuer's sealed blobs.
- *
- * @param contentKeys - Map of contentName → { contentKey, periodKeys } encrypted blobs
- * @returns Proof object matching the issuerJWT payload shape
- */
-export async function buildIssuerProof(
-  contentKeys: Record<string, DcaContentKeys>,
-): Promise<Record<string, DcaIssuerProof>> {
-  const proof: Record<string, DcaIssuerProof> = {};
-
-  for (const [contentName, entry] of Object.entries(contentKeys)) {
-    const contentKeyHash = await computeProofHash(entry.contentKey);
-    const periodKeysHashes: Record<string, string> = {};
-
-    for (const [t, sealedPeriodKey] of Object.entries(entry.periodKeys)) {
-      periodKeysHashes[t] = await computeProofHash(sealedPeriodKey);
-    }
-
-    proof[contentName] = {
-      contentKey: contentKeyHash,
-      periodKeys: periodKeysHashes,
-    };
-  }
-
-  return proof;
-}
-
-/**
  * Create a resourceJWT: ES256 JWT signing the resource using standard claims.
  *
  * Maps DcaResource fields to standard JWT claims:
@@ -196,67 +164,3 @@ export function resourceJwtPayloadToResource(payload: DcaResourceJwtPayload): Dc
   };
 }
 
-/**
- * Create an issuerJWT: ES256 JWT signing the integrity proofs for one issuer.
- *
- * @param renderId - Render ID binding this JWT to the resource
- * @param issuerName - Canonical issuer name
- * @param contentKeys - Encrypted blobs to create integrity proofs for
- * @param signingKey - ES256 signing key
- * @param keyId - Optional issuer key ID (included in v2 format)
- */
-export async function createIssuerJwt(
-  renderId: string,
-  issuerName: string,
-  contentKeys: Record<string, DcaContentKeys>,
-  signingKey: WebCryptoKey | string,
-  keyId?: string,
-): Promise<string> {
-  const proof = await buildIssuerProof(contentKeys);
-
-  const payload: DcaIssuerJwtPayload = {
-    renderId,
-    issuerName,
-    proof,
-    ...(keyId !== undefined ? { keyId } : {}),
-  };
-
-  return createJwt(payload, signingKey);
-}
-
-/**
- * Verify an issuerJWT's integrity proofs against the actual encrypted blobs.
- *
- * @param issuerJwtPayload - Verified issuerJWT payload
- * @param contentKeys - The actual encrypted blobs from the unlock request
- * @throws Error on any hash mismatch (integrity failure)
- */
-export async function verifyIssuerProof(
-  issuerJwtPayload: DcaIssuerJwtPayload,
-  contentKeys: Record<string, DcaContentKeys>,
-): Promise<void> {
-  for (const [contentName, proofEntry] of Object.entries(issuerJwtPayload.proof)) {
-    const keysEntry = contentKeys[contentName];
-    if (!keysEntry) {
-      throw new Error(`Integrity failure: content item "${contentName}" in proof but not in contentKeys`);
-    }
-
-    // Verify contentKey hash
-    const actualContentKeyHash = await computeProofHash(keysEntry.contentKey);
-    if (actualContentKeyHash !== proofEntry.contentKey) {
-      throw new Error(`Integrity failure: contentKey hash mismatch for "${contentName}"`);
-    }
-
-    // Verify periodKey hashes
-    for (const [t, expectedHash] of Object.entries(proofEntry.periodKeys)) {
-      const encryptedPeriodKey = keysEntry.periodKeys[t];
-      if (!encryptedPeriodKey) {
-        throw new Error(`Integrity failure: period "${t}" in proof but not in contentKeys for "${contentName}"`);
-      }
-      const actualHash = await computeProofHash(encryptedPeriodKey);
-      if (actualHash !== expectedHash) {
-        throw new Error(`Integrity failure: periodKey hash mismatch for "${contentName}" period "${t}"`);
-      }
-    }
-  }
-}

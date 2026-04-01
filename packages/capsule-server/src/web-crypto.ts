@@ -433,10 +433,11 @@ export async function importRsaPublicKey(
 export async function rsaOaepEncrypt(
     publicKey: WebCryptoKey,
     data: Uint8Array,
+    label?: Uint8Array,
 ): Promise<Uint8Array> {
     const crypto = getCrypto();
     const encrypted = await crypto.subtle.encrypt(
-        { name: "RSA-OAEP" },
+        { name: "RSA-OAEP", ...(label ? { label } : {}) },
         publicKey,
         data,
     );
@@ -842,10 +843,11 @@ export async function importRsaPrivateKey(
 export async function rsaOaepDecrypt(
     privateKey: WebCryptoKey,
     data: Uint8Array,
+    label?: Uint8Array,
 ): Promise<Uint8Array> {
     const crypto = getCrypto();
     const decrypted = await crypto.subtle.decrypt(
-        { name: "RSA-OAEP" },
+        { name: "RSA-OAEP", ...(label ? { label } : {}) },
         privateKey,
         data,
     );
