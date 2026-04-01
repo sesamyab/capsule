@@ -98,7 +98,6 @@ const content = await client.decrypt(page, "bodytext", keys);
 | `clientBound` | `boolean` | `false` | Enable client-bound transport (RSA-OAEP key wrapping) |
 | `rsaKeySize` | `2048 \| 4096` | `2048` | RSA key size for client-bound transport |
 | `keyDbName` | `string` | `"dca-keys"` | IndexedDB database name for key pair storage |
-| `requestFormat` | `"v1" \| "v2"` | `"v1"` | Unlock request format version |
 
 ### `client.parsePage(root?)`
 
@@ -241,10 +240,7 @@ const client = new DcaClient({
 
 ## Request Format
 
-The `requestFormat` option controls the unlock request structure:
-
-- **v1** (default): Sends `resource`, `resourceJWT`, `issuerJWT`, `sealed`, `issuerName`, `keyId`
-- **v2**: Omits `resource` and `issuerJWT` (AES-GCM provides integrity). Sends `resourceJWT`, `sealed`, `contentKeyMap` when present.
+The unlock request sends `resourceJWT` and `contentKeys`. When `contentKeyMap` is present in the page data, it is included automatically for keyName-based access resolution.
 
 ## Types
 

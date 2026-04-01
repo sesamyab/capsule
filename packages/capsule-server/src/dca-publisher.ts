@@ -6,7 +6,7 @@
  *   2. Encrypts content with AES-256-GCM + AAD
  *   3. Derives periodKeys and wraps contentKeys with them
  *   4. Seals contentKeys and periodKeys for each issuer
- *   5. Signs resourceJWT and issuerJWTs (ES256)
+ *   5. Signs resourceJWT (ES256)
  *   6. Assembles the DCA data JSON and sealed HTML template
  */
 
@@ -30,7 +30,7 @@ import { generateRenderId, getCurrentTimeBuckets, deriveDcaPeriodKey } from "./d
 
 import { seal, importIssuerPublicKey } from "./dca-seal";
 
-import { createResourceJwt, createIssuerJwt, createJwt } from "./dca-jwt";
+import { createResourceJwt, createJwt } from "./dca-jwt";
 
 import type {
     DcaData,
@@ -266,6 +266,9 @@ async function render(
             throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or keyNames`);
         }
 
+        // AAD binds sealed blobs to this render — prevents cross-resource key substitution
+        const sealAad = encodeUtf8(renderId);
+
         for (const contentName of contentNamesToSeal) {
             const contentKey = contentKeys[contentName];
             if (!contentKey) {
@@ -275,13 +278,13 @@ async function render(
             const keyName = resolvedKeyNames[contentName];
 
             // Seal contentKey
-            const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm);
+            const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm, sealAad);
 
             // Seal periodKeys (using keyName, not contentName, for derivation)
             const sealedPeriodKeys: Record<string, string> = {};
             for (const bucket of [buckets.current, buckets.next]) {
                 const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
-                sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm);
+                sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm, sealAad);
             }
 
             issuerContentKeys[contentName] = {
@@ -310,24 +313,10 @@ async function render(
     const signingKey = await getSigningKey();
     const resourceJWT = await createResourceJwt(resource, signingKey);
 
-    // 8. Sign issuerJWTs (include keyId for v2 unlock format)
-    const issuerJWT: Record<string, string> = {};
-    for (const issuerConfig of issuers) {
-        issuerJWT[issuerConfig.issuerName] = await createIssuerJwt(
-            renderId,
-            issuerConfig.issuerName,
-            issuerData[issuerConfig.issuerName].contentKeys,
-            signingKey,
-            issuerConfig.keyId,
-        );
-    }
-
-    // 9. Assemble DCA data
+    // 8. Assemble DCA data
     const dcaData: DcaData = {
-        version: "1",
-        resource,
+        version: "2",
         resourceJWT,
-        issuerJWT,
         contentSealData,
         sealedContentKeys,
         issuerData,

@@ -86,8 +86,6 @@ export {
   verifyJwt,
   decodeJwtPayload,
   createResourceJwt,
-  createIssuerJwt,
-  verifyIssuerProof,
   computeProofHash,
   resourceJwtPayloadToResource,
 } from "./dca-jwt";
@@ -131,8 +129,6 @@ export type {
   DcaSealedContentKey,
   DcaIssuerEntry,
   DcaContentKeys,
-  DcaIssuerJwtPayload,
-  DcaIssuerProof,
   DcaJsonApiResponse,
   DcaPublisherConfig,
   DcaContentItem,
