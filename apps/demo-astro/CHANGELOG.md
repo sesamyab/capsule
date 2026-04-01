@@ -1,5 +1,17 @@
 # @sesamy/demo-astro
 
+## 0.4.0
+
+### Minor Changes
+
+- [#22](https://github.com/sesamyab/capsule/pull/22) [`26d976d`](https://github.com/sesamyab/capsule/commit/26d976d2a602b0f0bf609ca6647e557d6fdf0104) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Remove fallback code
+
+### Patch Changes
+
+- Updated dependencies [[`26d976d`](https://github.com/sesamyab/capsule/commit/26d976d2a602b0f0bf609ca6647e557d6fdf0104)]:
+  - @sesamy/capsule@0.8.0
+  - @sesamy/capsule-server@0.8.0
+
 ## 0.3.0
 
 ### Minor Changes
