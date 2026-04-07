@@ -647,6 +647,13 @@ export class DcaClient {
                     // or it may contain nested DCA content elements.
                     const targets: Element[] = [];
 
+                    if (node.matches("script.dca-data")) {
+                        const scriptContainer = node.parentElement ?? node;
+                        if (!targets.includes(scriptContainer)) {
+                            targets.push(scriptContainer);
+                        }
+                    }
+
                     const scripts = node.querySelectorAll("script.dca-data");
                     for (const script of Array.from(scripts)) {
                         const scriptContainer = script.parentElement ?? node;
