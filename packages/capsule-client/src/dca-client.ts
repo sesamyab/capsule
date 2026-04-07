@@ -84,6 +84,11 @@ export interface DcaUnlockResponse {
     transport?: "direct" | "client-bound";
 }
 
+/** Result of an access check */
+export interface DcaAccessResult {
+    hasAccess: boolean;
+}
+
 /** Options for DcaClient */
 export interface DcaClientOptions {
     /**
@@ -122,6 +127,22 @@ export interface DcaClientOptions {
      * Defaults to "dca-keys".
      */
     keyDbName?: string;
+    /**
+     * Check whether the user has access to the content before attempting
+     * unlock. Receives the `publisher-content-id` attribute value from the
+     * article element. Return `{ hasAccess: true }` to proceed with
+     * decryption, or `null` / `{ hasAccess: false }` to skip unlock and
+     * trigger the paywall via {@link paywallFn}.
+     */
+    accessCheck?: (publisherContentId: string) => Promise<DcaAccessResult | null>;
+    /**
+     * Called when {@link accessCheck} indicates the user has no access.
+     * Use this to inject a paywall UI.
+     *
+     * @param publisherContentId - The content ID that was denied
+     * @param root - The DOM root that contains the DCA content
+     */
+    paywallFn?: (publisherContentId: string, root: Document | Element) => void;
 }
 
 /** Simple key-value cache interface for period keys */
@@ -196,6 +217,8 @@ export class DcaClient {
     private rsaKeySize: 2048 | 4096;
     private keyDbName: string;
     private keyPairPromise: Promise<CryptoKeyPair> | null = null;
+    private accessCheck?: (publisherContentId: string) => Promise<DcaAccessResult | null>;
+    private paywallFn?: (publisherContentId: string, root: Document | Element) => void;
 
     constructor(options: DcaClientOptions = {}) {
         this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -204,6 +227,8 @@ export class DcaClient {
         this.clientBound = options.clientBound ?? false;
         this.rsaKeySize = options.rsaKeySize ?? 2048;
         this.keyDbName = options.keyDbName ?? DEFAULT_KEY_DB_NAME;
+        this.accessCheck = options.accessCheck;
+        this.paywallFn = options.paywallFn;
     }
 
     // --------------------------------------------------------------------------
@@ -495,7 +520,23 @@ export class DcaClient {
      * @returns Decrypted content map (`contentName` → decrypted HTML string)
      */
     async processPage(options: DcaProcessPageOptions = {}): Promise<Record<string, string>> {
-        const page = this.parsePage(options.root);
+        const root = options.root ?? document;
+
+        // Check entitlement before attempting unlock
+        if (this.accessCheck) {
+            const publisherContentId = DcaClient.getPublisherContentId(root);
+            if (publisherContentId) {
+                const result = await this.accessCheck(publisherContentId);
+                if (!result || !result.hasAccess) {
+                    if (this.paywallFn) {
+                        this.paywallFn(publisherContentId, root);
+                    }
+                    return {};
+                }
+            }
+        }
+
+        const page = this.parsePage(root);
 
         const issuerName = options.issuerName
             ?? Object.keys(page.dcaData.issuerData)[0];
@@ -542,6 +583,82 @@ export class DcaClient {
         }
 
         return rendered;
+    }
+
+    /**
+     * Find the `publisher-content-id` attribute on the nearest ancestor of the
+     * DCA content, or on the root element itself.
+     *
+     * @param root - DOM root to search (default: document)
+     * @returns The publisher content ID, or null if not found
+     */
+    static getPublisherContentId(root?: Document | Element): string | null {
+        const container = root ?? document;
+
+        // If root is an element, check it and its ancestors
+        if (container instanceof Element) {
+            const match = container.closest("[publisher-content-id]");
+            if (match) return match.getAttribute("publisher-content-id");
+        }
+
+        // Fall back to searching from the dca-data script element
+        const scriptEl = container.querySelector("script.dca-data");
+        if (scriptEl) {
+            const match = scriptEl.closest("[publisher-content-id]");
+            if (match) return match.getAttribute("publisher-content-id");
+        }
+
+        return null;
+    }
+
+    /**
+     * Start observing the DOM for dynamically added DCA content.
+     *
+     * When new elements containing `<script class="dca-data">` are inserted,
+     * the observer automatically runs the access check and, if entitled,
+     * calls {@link processPage} + {@link renderToPage}. If not entitled,
+     * it calls the configured {@link DcaClientOptions.paywallFn | paywallFn}.
+     *
+     * @param root - DOM root to observe (default: document.body)
+     * @param options - Options forwarded to {@link processPage}
+     * @returns The MutationObserver instance (call `.disconnect()` to stop)
+     */
+    observe(
+        root?: Element,
+        options?: Omit<DcaProcessPageOptions, "root">,
+    ): MutationObserver {
+        const container = root ?? document.body;
+
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                for (const node of Array.from(mutation.addedNodes)) {
+                    if (!(node instanceof HTMLElement)) continue;
+
+                    // The added node itself may be a container with DCA content,
+                    // or it may contain nested DCA content elements.
+                    const targets: Element[] = [];
+
+                    if (node.querySelector("script.dca-data")) {
+                        targets.push(node);
+                    }
+
+                    for (const target of targets) {
+                        this.processPage({ ...options, root: target })
+                            .then((content) => {
+                                if (Object.keys(content).length > 0) {
+                                    this.renderToPage(content, target);
+                                }
+                            })
+                            .catch((err) =>
+                                console.error("DCA auto-process failed:", err),
+                            );
+                    }
+                }
+            }
+        });
+
+        observer.observe(container, { childList: true, subtree: true });
+        return observer;
     }
 
     // --------------------------------------------------------------------------
