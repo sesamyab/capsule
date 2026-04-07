@@ -1,5 +1,11 @@
 # @sesamy/capsule
 
+## 0.9.0
+
+### Minor Changes
+
+- [#24](https://github.com/sesamyab/capsule/pull/24) [`899511b`](https://github.com/sesamyab/capsule/commit/899511bb3c27affca2e3f4fb5d89edccf1525994) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Validate entitlements before unlocking
+
 ## 0.8.0
 
 ### Minor Changes
