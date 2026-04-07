@@ -32,6 +32,7 @@ import { DcaClient } from "./dca-client";
 
 export {
   DcaClient,
+  type DcaAccessResult,
   type DcaClientOptions,
   type DcaParsedPage,
   type DcaPeriodKeyCache,
