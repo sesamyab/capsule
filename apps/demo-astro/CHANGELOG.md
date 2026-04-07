@@ -1,5 +1,12 @@
 # @sesamy/demo-astro
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [[`899511b`](https://github.com/sesamyab/capsule/commit/899511bb3c27affca2e3f4fb5d89edccf1525994)]:
+  - @sesamy/capsule@0.9.0
+
 ## 0.4.0
 
 ### Minor Changes
