@@ -142,7 +142,7 @@ export interface DcaClientOptions {
      * @param publisherContentId - The content ID that was denied
      * @param root - The DOM root that contains the DCA content
      */
-    paywallFn?: (publisherContentId: string, root: Document | Element) => void;
+    paywallFn?: (publisherContentId: string | null, root: Document | Element) => void;
 }
 
 /** Simple key-value cache interface for period keys */
@@ -218,7 +218,7 @@ export class DcaClient {
     private keyDbName: string;
     private keyPairPromise: Promise<CryptoKeyPair> | null = null;
     private accessCheck?: (publisherContentId: string) => Promise<DcaAccessResult | null>;
-    private paywallFn?: (publisherContentId: string, root: Document | Element) => void;
+    private paywallFn?: (publisherContentId: string | null, root: Document | Element) => void;
 
     constructor(options: DcaClientOptions = {}) {
         this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -522,17 +522,26 @@ export class DcaClient {
     async processPage(options: DcaProcessPageOptions = {}): Promise<Record<string, string>> {
         const root = options.root ?? document;
 
-        // Check entitlement before attempting unlock
+        // Check entitlement before attempting unlock.
+        // When accessCheck is configured but no publisher-content-id attribute
+        // is found, we treat it as "denied" for safety: notify via paywallFn
+        // (so consumers can decide how to handle a null id) and return early.
         if (this.accessCheck) {
             const publisherContentId = DcaClient.getPublisherContentId(root);
-            if (publisherContentId) {
-                const result = await this.accessCheck(publisherContentId);
-                if (!result || !result.hasAccess) {
-                    if (this.paywallFn) {
-                        this.paywallFn(publisherContentId, root);
-                    }
-                    return {};
+            if (!publisherContentId) {
+                console.warn("DCA: accessCheck is configured but no publisher-content-id attribute was found on the page. Treating as denied.");
+                if (this.paywallFn) {
+                    this.paywallFn(publisherContentId, root);
                 }
+                return {};
+            }
+
+            const result = await this.accessCheck(publisherContentId);
+            if (!result || !result.hasAccess) {
+                if (this.paywallFn) {
+                    this.paywallFn(publisherContentId, root);
+                }
+                return {};
             }
         }
 
@@ -638,8 +647,12 @@ export class DcaClient {
                     // or it may contain nested DCA content elements.
                     const targets: Element[] = [];
 
-                    if (node.querySelector("script.dca-data")) {
-                        targets.push(node);
+                    const scripts = node.querySelectorAll("script.dca-data");
+                    for (const script of Array.from(scripts)) {
+                        const container = script.parentElement ?? node;
+                        if (!targets.includes(container)) {
+                            targets.push(container);
+                        }
                     }
 
                     for (const target of targets) {
