@@ -649,9 +649,9 @@ export class DcaClient {
 
                     const scripts = node.querySelectorAll("script.dca-data");
                     for (const script of Array.from(scripts)) {
-                        const container = script.parentElement ?? node;
-                        if (!targets.includes(container)) {
-                            targets.push(container);
+                        const scriptContainer = script.parentElement ?? node;
+                        if (!targets.includes(scriptContainer)) {
+                            targets.push(scriptContainer);
                         }
                     }
 
