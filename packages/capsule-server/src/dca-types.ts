@@ -50,6 +50,11 @@ export interface DcaResource {
     issuedAt: string;
     /** Publisher's article/resource identifier */
     resourceId: string;
+    /**
+     * Required entitlement key domains for this resource.
+     * Declares what keyNames (tiers/roles) are needed to unlock the content.
+     */
+    keyNames: string[];
     /** Publisher-defined metadata for access decisions */
     data: Record<string, unknown>;
 }
@@ -73,6 +78,13 @@ export interface DcaResourceJwtPayload {
     iat: number;
     /** Render ID (maps to DcaResource.renderId) */
     jti: string;
+    /**
+     * Required entitlement key domains for this resource.
+     * Declares what keyNames (tiers/roles) are needed to unlock the content.
+     * The issuer can compare against the user's entitlements without a
+     * separate server-side lookup.
+     */
+    keyNames: string[];
     /** Publisher-defined metadata for access decisions */
     data: Record<string, unknown>;
 }
@@ -105,8 +117,8 @@ export interface DcaSealedContentKey {
  * Per-issuer entry in `issuerData`.
  */
 export interface DcaIssuerEntry {
-    /** Map of contentName → encrypted content keys for this issuer */
-    contentKeys: Record<string, DcaContentKeys>;
+    /** Encrypted content keys for this issuer */
+    contentEncryptionKeys: DcaContentEncryptionKey[];
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
     /** Identifies which issuer private key to use */
@@ -114,14 +126,33 @@ export interface DcaIssuerEntry {
 }
 
 /**
- * Encrypted keys for one content item, for one issuer.
- * Both contentKey and periodKeys are encrypted with the issuer's public key.
+ * Encryption key material for one content item.
+ *
+ * Used in three contexts with different semantics:
+ *   - In `issuerData`: sealed (encrypted with issuer's public key)
+ *   - In unlock request: sealed (client forwards from issuerData)
+ *   - In unlock response: unsealed (raw or RSA-OAEP wrapped)
+ *
+ * All fields are optional to support the simplest case (single unnamed
+ * content item with direct key delivery).
  */
-export interface DcaContentKeys {
-    /** contentKey encrypted with issuer public key (base64url opaque blob) */
-    contentKey: string;
-    /** Map of period bucket "t" → periodKey encrypted with issuer public key */
-    periodKeys: Record<string, string>;
+export interface DcaContentEncryptionKey {
+    /** Content item name. Defaults to "default" when omitted. */
+    contentName?: string;
+    /** base64url-encoded contentKey */
+    contentKey?: string;
+    /** Period keys for time-bucketed access */
+    periodKeys?: DcaPeriodKeyEntry[];
+}
+
+/**
+ * A single period key entry (flat replacement for Record<string, string>).
+ */
+export interface DcaPeriodKeyEntry {
+    /** Period bucket label (e.g., "251023T13") */
+    bucket: string;
+    /** base64url-encoded period key */
+    key: string;
 }
 
 // ============================================================================
@@ -315,7 +346,7 @@ export interface DcaIssuerServerConfig {
 /**
  * Unlock request — what the client sends to the issuer.
  *
- * Contains `resourceJWT` + `contentKeys` (sealed key material for one issuer).
+ * Contains `resourceJWT` + `contentEncryptionKeys` (sealed key material for one issuer).
  * Sealed blobs are bound to the render via AAD (renderId from resourceJWT),
  * preventing cross-resource key substitution.
  */
@@ -323,7 +354,7 @@ export interface DcaUnlockRequest {
     /** Signed resource JWT (publisher-signed, ES256) */
     resourceJWT: string;
     /** This issuer's encrypted content keys */
-    contentKeys: Record<string, DcaContentKeys>;
+    contentEncryptionKeys: DcaContentEncryptionKey[];
     /**
      * Client's RSA-OAEP public key (base64url-encoded SPKI).
      * When present, the issuer wraps returned keys with this key
@@ -350,29 +381,14 @@ export interface DcaUnlockRequest {
  * Contains either contentKeys or periodKeys (issuer's choice per request).
  */
 export interface DcaUnlockResponse {
-    /** Map of contentName → key material for granted content items */
-    keys: Record<string, DcaUnlockedKeys>;
+    /** Key material for granted content items */
+    contentEncryptionKeys: DcaContentEncryptionKey[];
     /**
      * Transport mode used for key delivery:
      *   - "direct": keys are plaintext base64url strings (default)
      *   - "client-bound": keys are RSA-OAEP wrapped with the client's public key
      */
     transport?: "direct" | "client-bound";
-}
-
-/**
- * Unlocked keys for one content item.
- * The issuer returns either contentKey or periodKeys (or both, though unusual).
- *
- * In direct transport: values are base64url-encoded raw key bytes.
- * In client-bound transport: values are base64url-encoded RSA-OAEP ciphertext
- * that only the client's non-extractable private key can decrypt.
- */
-export interface DcaUnlockedKeys {
-    /** base64url-encoded contentKey (raw in direct mode, RSA-OAEP wrapped in client-bound mode) */
-    contentKey?: string;
-    /** Map of period bucket "t" → base64url-encoded periodKey (raw or RSA-OAEP wrapped) */
-    periodKeys?: Record<string, string>;
 }
 
 // ============================================================================

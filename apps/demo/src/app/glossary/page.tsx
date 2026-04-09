@@ -616,12 +616,13 @@ contentItems: [
             the request originates from a trusted publisher.
           </p>
           <pre className="code-example">
-            {`// resourceJWT payload
+            {`// resourceJWT payload (standard JWT claims)
 {
-  "renderId": "base64url...",        // binds request
-  "domain": "www.news-site.com",     // publisher domain
-  "issuedAt": "2025-10-23T13:00:00Z",
-  "resourceId": "article-123",
+  "iss": "www.news-site.com",        // publisher domain
+  "sub": "article-123",              // resource ID
+  "iat": 1698062400,                 // render timestamp (Unix seconds)
+  "jti": "base64url...",             // render ID (binds sealed keys)
+  "keyNames": ["premium"],           // required entitlements
   "data": { "section": "politics" }  // access metadata
 }`}
           </pre>

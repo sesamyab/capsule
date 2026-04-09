@@ -143,6 +143,7 @@ export async function createResourceJwt(
     sub: resource.resourceId,
     iat: Math.floor(new Date(resource.issuedAt).getTime() / 1000),
     jti: resource.renderId,
+    keyNames: resource.keyNames,
     data: resource.data,
   };
   return createJwt(payload, signingKey);
@@ -160,6 +161,7 @@ export function resourceJwtPayloadToResource(payload: DcaResourceJwtPayload): Dc
     resourceId: payload.sub,
     issuedAt: new Date(payload.iat * 1000).toISOString(),
     renderId: payload.jti,
+    keyNames: payload.keyNames ?? [],
     data: payload.data,
   };
 }

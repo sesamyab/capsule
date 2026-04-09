@@ -128,7 +128,8 @@ export type {
   DcaContentSealData,
   DcaSealedContentKey,
   DcaIssuerEntry,
-  DcaContentKeys,
+  DcaContentEncryptionKey,
+  DcaPeriodKeyEntry,
   DcaJsonApiResponse,
   DcaPublisherConfig,
   DcaContentItem,
@@ -139,7 +140,6 @@ export type {
   DcaTrustedPublisher,
   DcaUnlockRequest,
   DcaUnlockResponse,
-  DcaUnlockedKeys,
   DcaShareLinkTokenPayload,
   DcaShareLinkOptions,
 } from "./dca-types";

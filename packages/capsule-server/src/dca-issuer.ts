@@ -29,7 +29,7 @@ import type {
     DcaTrustedPublisher,
     DcaUnlockRequest,
     DcaUnlockResponse,
-    DcaUnlockedKeys,
+    DcaContentEncryptionKey,
     DcaShareLinkTokenPayload,
 } from "./dca-types";
 
@@ -324,8 +324,8 @@ async function verifyRequest(
     publisherMap: NormalisedPublisherMap,
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
-    if (!request.contentKeys) {
-        throw new Error("Missing contentKeys in unlock request");
+    if (!request.contentEncryptionKeys) {
+        throw new Error("Missing contentEncryptionKeys in unlock request");
     }
 
     // 1. Decode (unverified) resourceJWT to get domain for publisher key lookup.
@@ -380,18 +380,22 @@ async function unsealAndRespond(
         clientRsaPubKey = await importRsaPublicKey(fromBase64Url(request.clientPublicKey!));
     }
 
-    const contentKeys = request.contentKeys;
+    // Build lookup map from flat array
+    const keysByName = new Map<string, DcaContentEncryptionKey>();
+    for (const entry of request.contentEncryptionKeys) {
+        keysByName.set(entry.contentName ?? "default", entry);
+    }
 
     // AAD binds sealed blobs to this render — prevents cross-resource key substitution.
     const sealAad = encodeUtf8(resource.renderId);
 
     // Unseal granted content items
-    const keys: Record<string, DcaUnlockedKeys> = {};
+    const contentEncryptionKeys: DcaContentEncryptionKey[] = [];
 
     for (const contentName of grantedContentNames) {
-        const keysEntry = contentKeys[contentName];
+        const keysEntry = keysByName.get(contentName);
         if (!keysEntry) {
-            throw new Error(`No contentKeys data for content item "${contentName}"`);
+            throw new Error(`No contentEncryptionKeys data for content item "${contentName}"`);
         }
 
         if (deliveryMode === "contentKey") {
@@ -400,29 +404,33 @@ async function unsealAndRespond(
                 throw new Error(`Missing contentKey for content item "${contentName}"`);
             }
             const contentKeyBytes = await unseal(keysEntry.contentKey, privateKey, algorithm, sealAad);
-            keys[contentName] = {
+            contentEncryptionKeys.push({
+                contentName,
                 contentKey: clientBound
                     ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, contentKeyBytes))
                     : toBase64Url(contentKeyBytes),
-            };
+            });
         } else {
             // Cacheable path: unseal and return periodKeys
-            if (!keysEntry.periodKeys || typeof keysEntry.periodKeys !== "object") {
+            if (!keysEntry.periodKeys || !Array.isArray(keysEntry.periodKeys)) {
                 throw new Error(`Missing or invalid periodKeys for content item "${contentName}"`);
             }
-            const periodKeys: Record<string, string> = {};
-            for (const [t, encryptedPeriodKey] of Object.entries(keysEntry.periodKeys)) {
-                const periodKeyBytes = await unseal(encryptedPeriodKey, privateKey, algorithm, sealAad);
-                periodKeys[t] = clientBound
-                    ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, periodKeyBytes))
-                    : toBase64Url(periodKeyBytes);
+            const periodKeys = [];
+            for (const pk of keysEntry.periodKeys) {
+                const periodKeyBytes = await unseal(pk.key, privateKey, algorithm, sealAad);
+                periodKeys.push({
+                    bucket: pk.bucket,
+                    key: clientBound
+                        ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, periodKeyBytes))
+                        : toBase64Url(periodKeyBytes),
+                });
             }
-            keys[contentName] = { periodKeys };
+            contentEncryptionKeys.push({ contentName, periodKeys });
         }
     }
 
     return {
-        keys,
+        contentEncryptionKeys,
         ...(clientBound ? { transport: "client-bound" as const } : {}),
     };
 }
@@ -459,6 +467,11 @@ function resolveGrantedContentNames(
     accessDecision: DcaAccessDecision,
     request: DcaUnlockRequest,
 ): string[] {
+    // Build a set of available content names from the flat array
+    const availableNames = new Set(
+        request.contentEncryptionKeys.map(k => k.contentName ?? "default"),
+    );
+
     if (accessDecision.grantedContentNames && accessDecision.grantedContentNames.length > 0) {
         return accessDecision.grantedContentNames;
     }
@@ -472,11 +485,11 @@ function resolveGrantedContentNames(
             return Object.entries(contentKeyMap)
                 .filter(([, keyName]) => keyNameSet.has(keyName))
                 .map(([contentName]) => contentName)
-                .filter(contentName => contentName in request.contentKeys);
+                .filter(contentName => availableNames.has(contentName));
         }
 
         // No contentKeyMap: treat keyNames as contentNames (backward compat)
-        return accessDecision.grantedKeyNames.filter(name => name in request.contentKeys);
+        return accessDecision.grantedKeyNames.filter(name => availableNames.has(name));
     }
 
     throw new Error("Access decision must specify grantedContentNames or grantedKeyNames");
@@ -591,8 +604,10 @@ async function processShareLinkUnlock(
 
     // 6. Build access decision from the share token's claims.
     //    Resolve keyNames → contentNames if the token uses keyNames.
-    //    Only grant content names that exist in both the token/keyNames AND the contentKeys.
-    const availableContentNames = new Set(Object.keys(request.contentKeys));
+    //    Only grant content names that exist in both the token/keyNames AND the contentEncryptionKeys.
+    const availableContentNames = new Set(
+        request.contentEncryptionKeys.map(k => k.contentName ?? "default"),
+    );
     let grantedContentNames: string[];
 
     if (sharePayload.keyNames && sharePayload.keyNames.length > 0) {

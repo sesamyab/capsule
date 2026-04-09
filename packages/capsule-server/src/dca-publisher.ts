@@ -38,7 +38,8 @@ import type {
     DcaContentSealData,
     DcaSealedContentKey,
     DcaIssuerEntry,
-    DcaContentKeys,
+    DcaContentEncryptionKey,
+    DcaPeriodKeyEntry,
     DcaPublisherConfig,
     DcaRenderOptions,
     DcaRenderResult,
@@ -249,7 +250,7 @@ async function render(
             issuerConfig.algorithm,
         );
 
-        const issuerContentKeys: Record<string, DcaContentKeys> = {};
+        const issuerContentEncryptionKeys: DcaContentEncryptionKey[] = [];
 
         // Resolve which content items to seal for this issuer.
         // keyNames takes precedence: seal all items whose keyName is in the list.
@@ -281,31 +282,39 @@ async function render(
             const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm, sealAad);
 
             // Seal periodKeys (using keyName, not contentName, for derivation)
-            const sealedPeriodKeys: Record<string, string> = {};
+            const sealedPeriodKeys: DcaPeriodKeyEntry[] = [];
             for (const bucket of [buckets.current, buckets.next]) {
                 const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
-                sealedPeriodKeys[bucket.t] = await seal(periodKey, issuerPubKey, algorithm, sealAad);
+                sealedPeriodKeys.push({
+                    bucket: bucket.t,
+                    key: await seal(periodKey, issuerPubKey, algorithm, sealAad),
+                });
             }
 
-            issuerContentKeys[contentName] = {
+            issuerContentEncryptionKeys.push({
+                contentName,
                 contentKey: sealedContentKey,
                 periodKeys: sealedPeriodKeys,
-            };
+            });
         }
 
         issuerData[issuerConfig.issuerName] = {
-            contentKeys: issuerContentKeys,
+            contentEncryptionKeys: issuerContentEncryptionKeys,
             unlockUrl: issuerConfig.unlockUrl,
             keyId: issuerConfig.keyId,
         };
     }
 
     // 6. Build resource object
+    // Compute unique keyNames (deduplicated, in order of first appearance)
+    const uniqueKeyNames = [...new Set(Object.values(resolvedKeyNames))];
+
     const resource: DcaResource = {
         renderId,
         domain,
         issuedAt: new Date().toISOString(),
         resourceId,
+        keyNames: uniqueKeyNames,
         data: resourceData ?? {},
     };
 

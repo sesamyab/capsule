@@ -121,7 +121,7 @@ export function EncryptedSection({
 
             // Auto-unlock with share token
             const keys = await client.unlockWithShareToken(page, issuerName, shareToken);
-            const keyMode = Object.values(keys.keys).some((k) => k.contentKey)
+            const keyMode = keys.contentEncryptionKeys.some((k) => k.contentKey)
               ? "contentKey (direct)"
               : "periodKeys (cacheable)";
             log(`Share link unlock successful! Key mode: ${keyMode}`, "success");
@@ -187,9 +187,7 @@ export function EncryptedSection({
             // Build a synthetic unlock response with empty keys to trigger
             // the cached-periodKey fallback path inside DcaClient.decrypt()
             const emptyKeys: import("@sesamy/capsule").DcaUnlockResponse = {
-              keys: Object.fromEntries(
-                contentNames.map((name) => [name, {}]),
-              ),
+              contentEncryptionKeys: contentNames.map((name) => ({ contentName: name })),
             };
 
             const html = await client.decrypt(page, contentName, emptyKeys);
@@ -333,7 +331,7 @@ export function EncryptedSection({
         }
       }
 
-      const keyMode = Object.values(keys.keys).some((k) => k.contentKey)
+      const keyMode = keys.contentEncryptionKeys.some((k) => k.contentKey)
         ? "contentKey (direct)"
         : "periodKeys (cacheable)";
       log(`Unlock successful! Key mode: ${keyMode}`, "success");

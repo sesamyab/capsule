@@ -48,9 +48,10 @@ export interface DcaData {
         key: string;
     }>>;
     issuerData: Record<string, {
-        contentKeys: Record<string, {
-            contentKey: string;
-            periodKeys: Record<string, string>;
+        contentEncryptionKeys: Array<{
+            contentName?: string;
+            contentKey?: string;
+            periodKeys?: Array<{ bucket: string; key: string }>;
         }>;
         unlockUrl: string;
         keyId: string;
@@ -71,9 +72,10 @@ export interface DcaParsedPage {
 
 /** Unlock response from issuer */
 export interface DcaUnlockResponse {
-    keys: Record<string, {
+    contentEncryptionKeys: Array<{
+        contentName?: string;
         contentKey?: string;
-        periodKeys?: Record<string, string>;
+        periodKeys?: Array<{ bucket: string; key: string }>;
     }>;
     /**
      * Transport mode used by the issuer:
@@ -314,7 +316,7 @@ export class DcaClient {
         // Build request body
         const body: Record<string, unknown> = {
             resourceJWT: page.dcaData.resourceJWT,
-            contentKeys: issuerEntry.contentKeys,
+            contentEncryptionKeys: issuerEntry.contentEncryptionKeys,
             ...(page.dcaData.contentKeyMap ? { contentKeyMap: page.dcaData.contentKeyMap } : {}),
             ...additionalBody,
         };
@@ -413,13 +415,21 @@ export class DcaClient {
             throw new Error(`DCA: sealed content not found for "${contentName}"`);
         }
 
-        const keyEntry = unlockResponse.keys[contentName];
+        // Look up key entry from flat array
+        const keyEntry = unlockResponse.contentEncryptionKeys.find(
+            k => (k.contentName ?? "default") === contentName,
+        );
         if (!keyEntry) {
             throw new Error(`DCA: no key provided for "${contentName}"`);
         }
 
         // Determine if keys need RSA-OAEP unwrapping
         const isClientBound = unlockResponse.transport === "client-bound";
+
+        // Convert flat periodKeys array to Record for internal use
+        const periodKeysRecord = keyEntry.periodKeys
+            ? Object.fromEntries(keyEntry.periodKeys.map(pk => [pk.bucket, pk.key]))
+            : undefined;
 
         // Resolve contentKey
         let contentKeyBytes: Uint8Array;
@@ -431,20 +441,20 @@ export class DcaClient {
                 : base64UrlDecode(keyEntry.contentKey);
 
             // Cache associated periodKeys if present
-            if (keyEntry.periodKeys && this.periodKeyCache) {
+            if (periodKeysRecord && this.periodKeyCache) {
                 // For client-bound, unwrap periodKeys before caching (store raw keys)
                 const rawPeriodKeys = isClientBound
-                    ? await this.unwrapPeriodKeyMap(keyEntry.periodKeys)
-                    : keyEntry.periodKeys;
+                    ? await this.unwrapPeriodKeyMap(periodKeysRecord)
+                    : periodKeysRecord;
                 // Cache by keyName (not contentName) for cross-content sharing
                 const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
                 await this.cachePeriodKeys(keyName, rawPeriodKeys);
             }
-        } else if (keyEntry.periodKeys) {
+        } else if (periodKeysRecord) {
             // Cacheable path: unwrap contentKey from sealedContentKeys using a periodKey
             const rawPeriodKeys = isClientBound
-                ? await this.unwrapPeriodKeyMap(keyEntry.periodKeys)
-                : keyEntry.periodKeys;
+                ? await this.unwrapPeriodKeyMap(periodKeysRecord)
+                : periodKeysRecord;
 
             contentKeyBytes = await this.unwrapWithPeriodKeys(
                 page.dcaData.sealedContentKeys[contentName] ?? [],
@@ -500,7 +510,8 @@ export class DcaClient {
         unlockResponse: DcaUnlockResponse,
     ): Promise<Record<string, string>> {
         const results: Record<string, string> = {};
-        for (const contentName of Object.keys(unlockResponse.keys)) {
+        for (const entry of unlockResponse.contentEncryptionKeys) {
+            const contentName = entry.contentName ?? "default";
             results[contentName] = await this.decrypt(page, contentName, unlockResponse);
         }
         return results;

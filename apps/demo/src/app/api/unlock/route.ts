@@ -20,9 +20,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as DcaUnlockRequest;
 
-    if (!body.resourceJWT || !body.contentKeys) {
+    if (!body.resourceJWT || !body.contentEncryptionKeys) {
       return NextResponse.json(
-        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentKeys)" },
+        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentEncryptionKeys)" },
         { status: 400 },
       );
     }
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
     // ── Access decision ────────────────────────────────────────────────
     // IMPORTANT: Derive scope from the *verified* resource (server-side),
-    // NOT from untrusted client fields (body.contentKeys / body.contentKeyMap).
+    // NOT from untrusted client fields (body.contentEncryptionKeys / body.contentKeyMap).
     // In v2 there is no issuerJWT integrity proof, so the client could
     // inflate contentKeyMap/contentKeys to widen the scope the issuer unseals.
     //
