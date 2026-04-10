@@ -1,5 +1,17 @@
 # @sesamy/demo-astro
 
+## 0.5.0
+
+### Minor Changes
+
+- [#26](https://github.com/sesamyab/capsule/pull/26) [`04e7054`](https://github.com/sesamyab/capsule/commit/04e7054ca1a324e389edd5213db4efa82eb06c23) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Update the format for unlocking content
+
+### Patch Changes
+
+- Updated dependencies [[`04e7054`](https://github.com/sesamyab/capsule/commit/04e7054ca1a324e389edd5213db4efa82eb06c23)]:
+  - @sesamy/capsule@0.10.0
+  - @sesamy/capsule-server@0.9.0
+
 ## 0.4.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@sesamy/capsule-server",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Server-side encryption library for Capsule - CMS content encryption and subscription server integration",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
