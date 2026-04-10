@@ -30,6 +30,7 @@ import type {
     DcaUnlockRequest,
     DcaUnlockResponse,
     DcaContentEncryptionKey,
+    DcaSealedContentEncryptionKey,
     DcaShareLinkTokenPayload,
 } from "./dca-types";
 
@@ -324,8 +325,35 @@ async function verifyRequest(
     publisherMap: NormalisedPublisherMap,
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
-    if (!request.contentEncryptionKeys) {
-        throw new Error("Missing contentEncryptionKeys in unlock request");
+    if (!Array.isArray(request.contentEncryptionKeys)) {
+        throw new Error("contentEncryptionKeys must be an array");
+    }
+
+    if (request.contentEncryptionKeys.length === 0) {
+        throw new Error("contentEncryptionKeys must not be empty");
+    }
+
+    const seenContentNames = new Set<string>();
+    for (const entry of request.contentEncryptionKeys) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+            throw new Error("Each contentEncryptionKeys entry must be a plain object");
+        }
+
+        if ("contentName" in entry && typeof entry.contentName !== "string") {
+            throw new Error("contentEncryptionKeys entry contentName must be a string");
+        }
+
+        const effectiveName = (entry as DcaSealedContentEncryptionKey).contentName ?? "default";
+        if (effectiveName === "") {
+            throw new Error("contentEncryptionKeys entry contentName must not be empty");
+        }
+
+        if (seenContentNames.has(effectiveName)) {
+            throw new Error(
+                `Duplicate contentName "${effectiveName}" in contentEncryptionKeys`,
+            );
+        }
+        seenContentNames.add(effectiveName);
     }
 
     // 1. Decode (unverified) resourceJWT to get domain for publisher key lookup.
@@ -381,7 +409,7 @@ async function unsealAndRespond(
     }
 
     // Build lookup map from flat array
-    const keysByName = new Map<string, DcaContentEncryptionKey>();
+    const keysByName = new Map<string, DcaSealedContentEncryptionKey>();
     for (const entry of request.contentEncryptionKeys) {
         keysByName.set(entry.contentName ?? "default", entry);
     }

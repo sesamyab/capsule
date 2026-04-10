@@ -38,7 +38,7 @@ import type {
     DcaContentSealData,
     DcaSealedContentKey,
     DcaIssuerEntry,
-    DcaContentEncryptionKey,
+    DcaSealedContentEncryptionKey,
     DcaPeriodKeyEntry,
     DcaPublisherConfig,
     DcaRenderOptions,
@@ -250,7 +250,7 @@ async function render(
             issuerConfig.algorithm,
         );
 
-        const issuerContentEncryptionKeys: DcaContentEncryptionKey[] = [];
+        const issuerContentEncryptionKeys: DcaSealedContentEncryptionKey[] = [];
 
         // Resolve which content items to seal for this issuer.
         // keyNames takes precedence: seal all items whose keyName is in the list.

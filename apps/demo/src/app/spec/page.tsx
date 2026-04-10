@@ -225,18 +225,25 @@ POST /api/unlock
 //    (mismatched renderId → GCM auth failure → reject)
 // 3. Return keys
 
-// Issuer → Client
+// Issuer → Client (one delivery form per entry)
+//   deliveryMode: "contentKey" → returns contentKey only
+//   deliveryMode: "periodKey"  → returns periodKeys only (cacheable, 1-hour buckets)
+{
+  "contentEncryptionKeys": [
+    { "contentName": "bodytext", "contentKey": "base64url-key-or-wrapped-key" }
+  ],
+  "transport": "client-bound"    // or "direct" (default)
+}
+// — or with periodKey delivery —
 {
   "contentEncryptionKeys": [
     {
       "contentName": "bodytext",
-      "contentKey": "base64url-key-or-wrapped-key",
       "periodKeys": [
         { "bucket": "251023T13", "key": "base64url-key-or-wrapped-key" }
       ]
     }
-  ],
-  "transport": "client-bound"    // or "direct" (default)
+  ]
 }`}</CodeBlock>
 
         <h3>Transport Modes</h3>

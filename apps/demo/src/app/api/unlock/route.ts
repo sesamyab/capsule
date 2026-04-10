@@ -6,7 +6,7 @@ import { articles } from "@/lib/articles";
 /**
  * POST /api/unlock
  *
- * DCA unlock endpoint. Requires resourceJWT and contentKeys.
+ * DCA unlock endpoint. Requires resourceJWT and contentEncryptionKeys.
  *
  * The issuer:
  * 1. Verifies the publisher's JWT signature against the trusted-publisher allowlist
@@ -14,7 +14,7 @@ import { articles } from "@/lib/articles";
  *    - If shareToken is present: validates the publisher-signed token and grants
  *      access to the content names specified in the token
  *    - Otherwise: makes a normal access decision (in demo: always grant)
- * 3. Unseals and returns contentKeys or periodKeys
+ * 3. Unseals and returns contentEncryptionKeys or periodKeys
  */
 export async function POST(request: NextRequest) {
   try {

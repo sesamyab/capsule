@@ -187,7 +187,7 @@ export function EncryptedSection({
             // Build a synthetic unlock response with empty keys to trigger
             // the cached-periodKey fallback path inside DcaClient.decrypt()
             const emptyKeys: import("@sesamy/capsule").DcaUnlockResponse = {
-              contentEncryptionKeys: contentNames.map((name) => ({ contentName: name })),
+              contentEncryptionKeys: contentNames.map((name) => ({ contentName: name, periodKeys: [] })),
             };
 
             const html = await client.decrypt(page, contentName, emptyKeys);

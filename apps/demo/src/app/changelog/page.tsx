@@ -152,9 +152,9 @@ const grantedKeyNames = resource.keyNames.filter(k => userTiers.includes(k));`}<
             This affects three surfaces:
           </p>
           <ul>
-            <li><code>issuerData[name].contentKeys</code> → <code>issuerData[name].contentEncryptionKeys</code></li>
-            <li><code>DcaUnlockRequest.contentKeys</code> → <code>DcaUnlockRequest.contentEncryptionKeys</code></li>
-            <li><code>DcaUnlockResponse.keys</code> → <code>DcaUnlockResponse.contentEncryptionKeys</code></li>
+            <li><code>issuerData[name].contentKeys</code> → <code>issuerData[name].contentEncryptionKeys</code> (typed as <code>DcaSealedContentEncryptionKey[]</code>)</li>
+            <li><code>DcaUnlockRequest.contentKeys</code> → <code>DcaUnlockRequest.contentEncryptionKeys</code> (typed as <code>DcaSealedContentEncryptionKey[]</code>)</li>
+            <li><code>DcaUnlockResponse.keys</code> → <code>DcaUnlockResponse.contentEncryptionKeys</code> (typed as <code>DcaContentEncryptionKey[]</code> — union of delivery variants)</li>
           </ul>
 
           <h4>Why</h4>
@@ -191,14 +191,30 @@ const grantedKeyNames = resource.keyNames.filter(k => userTiers.includes(k));`}<
 
 // Simplest case — single unnamed content item:
 {
-  "contentEncryptionKeys": [{ "contentKey": "base64url…" }]
+  "contentEncryptionKeys": [
+    { "contentKey": "base64url…", "periodKeys": [{ "bucket": "260409T11", "key": "base64url…" }] }
+  ]
 }`}</CodeBlock>
 
           <h4>New Types</h4>
-          <CodeBlock>{`interface DcaContentEncryptionKey {
-  contentName?: string;    // defaults to "default" when omitted
-  contentKey?: string;
-  periodKeys?: DcaPeriodKeyEntry[];
+          <CodeBlock>{`// Wire format (issuerData + unlock request): both fields required
+interface DcaSealedContentEncryptionKey {
+  contentName?: string;           // defaults to "default" when omitted
+  contentKey: string;             // sealed contentKey (always present)
+  periodKeys: DcaPeriodKeyEntry[];  // sealed periodKeys (always present, default 1-hour buckets)
+}
+
+// Unlock response: exactly one delivery form per entry
+type DcaContentEncryptionKey = DcaContentKeyDelivery | DcaPeriodKeyDelivery;
+
+interface DcaContentKeyDelivery {
+  contentName?: string;
+  contentKey: string;             // direct key delivery
+}
+
+interface DcaPeriodKeyDelivery {
+  contentName?: string;
+  periodKeys: DcaPeriodKeyEntry[];  // cacheable period key delivery
 }
 
 interface DcaPeriodKeyEntry {
@@ -208,7 +224,7 @@ interface DcaPeriodKeyEntry {
 
           <h4>Removed Types</h4>
           <ul>
-            <li><code>DcaContentKeys</code> — replaced by <code>DcaContentEncryptionKey</code></li>
+            <li><code>DcaContentKeys</code> — replaced by <code>DcaSealedContentEncryptionKey</code></li>
             <li><code>DcaUnlockedKeys</code> — folded into <code>DcaContentEncryptionKey</code></li>
           </ul>
 

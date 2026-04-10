@@ -50,8 +50,8 @@ export interface DcaData {
     issuerData: Record<string, {
         contentEncryptionKeys: Array<{
             contentName?: string;
-            contentKey?: string;
-            periodKeys?: Array<{ bucket: string; key: string }>;
+            contentKey: string;
+            periodKeys: Array<{ bucket: string; key: string }>;
         }>;
         unlockUrl: string;
         keyId: string;
@@ -70,13 +70,12 @@ export interface DcaParsedPage {
     sealedContent: Record<string, string>;
 }
 
-/** Unlock response from issuer */
+/** Unlock response from issuer — each entry has exactly one delivery form */
 export interface DcaUnlockResponse {
-    contentEncryptionKeys: Array<{
-        contentName?: string;
-        contentKey?: string;
-        periodKeys?: Array<{ bucket: string; key: string }>;
-    }>;
+    contentEncryptionKeys: Array<
+        | { contentName?: string; contentKey: string; periodKeys?: never }
+        | { contentName?: string; periodKeys: Array<{ bucket: string; key: string }>; contentKey?: never }
+    >;
     /**
      * Transport mode used by the issuer:
      *   - "direct": keys are plaintext base64url strings
@@ -404,6 +403,8 @@ export class DcaClient {
         page: DcaParsedPage,
         contentName: string,
         unlockResponse: DcaUnlockResponse,
+        /** @internal Pre-resolved key entry — skips the linear scan when provided. */
+        resolvedKeyEntry?: DcaUnlockResponse["contentEncryptionKeys"][number],
     ): Promise<string> {
         const sealData = page.dcaData.contentSealData[contentName];
         if (!sealData) {
@@ -415,8 +416,8 @@ export class DcaClient {
             throw new Error(`DCA: sealed content not found for "${contentName}"`);
         }
 
-        // Look up key entry from flat array
-        const keyEntry = unlockResponse.contentEncryptionKeys.find(
+        // Use pre-resolved entry if available, otherwise look up from flat array
+        const keyEntry = resolvedKeyEntry ?? unlockResponse.contentEncryptionKeys.find(
             k => (k.contentName ?? "default") === contentName,
         );
         if (!keyEntry) {
@@ -510,9 +511,12 @@ export class DcaClient {
         unlockResponse: DcaUnlockResponse,
     ): Promise<Record<string, string>> {
         const results: Record<string, string> = {};
-        for (const entry of unlockResponse.contentEncryptionKeys) {
-            const contentName = entry.contentName ?? "default";
-            results[contentName] = await this.decrypt(page, contentName, unlockResponse);
+        // Build a map once so decrypt() doesn't re-scan the array for each item
+        const keyEntryMap = new Map(
+            unlockResponse.contentEncryptionKeys.map(e => [e.contentName ?? "default", e]),
+        );
+        for (const [contentName, entry] of keyEntryMap) {
+            results[contentName] = await this.decrypt(page, contentName, unlockResponse, entry);
         }
         return results;
     }
