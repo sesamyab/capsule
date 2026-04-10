@@ -81,10 +81,183 @@ export default function ChangelogPage() {
         </p>
 
         {/* ================================================================
+            v0.9
+            ================================================================ */}
+
+        <h2>v0.9 <VersionBadge version="Latest" /></h2>
+        <p>
+          v0.9 introduces two changes: entitlement claims in the resourceJWT and a flattened
+          wire format for content encryption keys.
+        </p>
+
+        {/* ---- Change 1: keyNames in resourceJWT ---- */}
+
+        <h3>Entitlement Claims in resourceJWT</h3>
+        <SectionCard color="emerald">
+          <CompatBadge compatible={true} />
+
+          <h4>What Changed</h4>
+          <p>
+            The <code>resourceJWT</code> payload now includes a <code>keyNames</code> claim — an array
+            of required entitlement key domains (tiers/roles) declared by the publisher at render time.
+          </p>
+
+          <h4>Why</h4>
+          <p>
+            Previously the issuer had to independently look up which tier a resource required
+            (e.g. querying a database by <code>resourceId</code>). With <code>keyNames</code> in
+            the signed JWT, the issuer has a <strong>trusted source of truth</strong> for what
+            entitlements are needed — it can compare directly against the user&apos;s subscription
+            without a separate server-side lookup.
+          </p>
+          <p>
+            The client can also read <code>keyNames</code> before calling unlock to show
+            the right paywall (e.g. &quot;Subscribe to Premium to read this&quot;) without a round-trip.
+          </p>
+
+          <CodeBlock>{`// resourceJWT payload (decoded)
+{
+  "iss": "news.example.com",
+  "sub": "article-123",
+  "iat": 1735689600,
+  "jti": "abc123def456",
+  "keyNames": ["premium"],           // ← NEW: required entitlements
+  "data": { "section": "politics" }
+}
+
+// Issuer access decision is now a simple set intersection:
+// user entitlements ∩ resource keyNames → grant
+const { resource } = await issuer.verify(request);
+const userTiers = await getUserSubscriptions(userId);
+const grantedKeyNames = resource.keyNames.filter(k => userTiers.includes(k));`}</CodeBlock>
+
+          <h4>Backwards Compatibility</h4>
+          <p>
+            Fully backwards compatible. The field is populated automatically by the publisher.
+            Issuers that don&apos;t use it can ignore it. The <code>keyNames</code> field defaults
+            to an empty array when parsing older JWTs that lack it.
+          </p>
+        </SectionCard>
+
+        {/* ---- Change 2: Flat contentEncryptionKeys ---- */}
+
+        <h3>Flat contentEncryptionKeys Array</h3>
+        <SectionCard color="rose">
+          <CompatBadge breaking />
+
+          <h4>What Changed</h4>
+          <p>
+            The deeply nested <code>Record&lt;string, DcaContentKeys&gt;</code> wire format for
+            content encryption keys is replaced with a flat <code>DcaContentEncryptionKey[]</code> array.
+            This affects three surfaces:
+          </p>
+          <ul>
+            <li><code>issuerData[name].contentKeys</code> → <code>issuerData[name].contentEncryptionKeys</code> (typed as <code>DcaSealedContentEncryptionKey[]</code>)</li>
+            <li><code>DcaUnlockRequest.contentKeys</code> → <code>DcaUnlockRequest.contentEncryptionKeys</code> (typed as <code>DcaSealedContentEncryptionKey[]</code>)</li>
+            <li><code>DcaUnlockResponse.keys</code> → <code>DcaUnlockResponse.contentEncryptionKeys</code> (typed as <code>DcaContentEncryptionKey[]</code> — union of delivery variants)</li>
+          </ul>
+
+          <h4>Why</h4>
+          <p>
+            The nested <code>Record&lt;string, Record&lt;string, string&gt;&gt;</code> shape had
+            poor TypeScript ergonomics — no autocomplete on dynamic keys, hard to type, and
+            <code>any</code>-adjacent in practice. The flat array gives every field a name and
+            makes the simplest case (single unnamed content item) trivially simple.
+          </p>
+
+          <CodeBlock>{`// Before (v0.8) — nested Records
+{
+  "contentKeys": {
+    "bodytext": {
+      "contentKey": "base64url…",
+      "periodKeys": { "260409T11": "base64url…", "260409T12": "base64url…" }
+    }
+  }
+}
+
+// After (v0.9) — flat array
+{
+  "contentEncryptionKeys": [
+    {
+      "contentName": "bodytext",
+      "contentKey": "base64url…",
+      "periodKeys": [
+        { "bucket": "260409T11", "key": "base64url…" },
+        { "bucket": "260409T12", "key": "base64url…" }
+      ]
+    }
+  ]
+}
+
+// Simplest case — single unnamed content item:
+{
+  "contentEncryptionKeys": [
+    { "contentKey": "base64url…", "periodKeys": [{ "bucket": "260409T11", "key": "base64url…" }] }
+  ]
+}`}</CodeBlock>
+
+          <h4>New Types</h4>
+          <CodeBlock>{`// Wire format (issuerData + unlock request): both fields required
+interface DcaSealedContentEncryptionKey {
+  contentName?: string;           // defaults to "default" when omitted
+  contentKey: string;             // sealed contentKey (always present)
+  periodKeys: DcaPeriodKeyEntry[];  // sealed periodKeys (always present, default 1-hour buckets)
+}
+
+// Unlock response: exactly one delivery form per entry
+type DcaContentEncryptionKey = DcaContentKeyDelivery | DcaPeriodKeyDelivery;
+
+interface DcaContentKeyDelivery {
+  contentName?: string;
+  contentKey: string;             // direct key delivery
+}
+
+interface DcaPeriodKeyDelivery {
+  contentName?: string;
+  periodKeys: DcaPeriodKeyEntry[];  // cacheable period key delivery
+}
+
+interface DcaPeriodKeyEntry {
+  bucket: string;          // e.g. "260409T11"
+  key: string;             // base64url-encoded key
+}`}</CodeBlock>
+
+          <h4>Removed Types</h4>
+          <ul>
+            <li><code>DcaContentKeys</code> — replaced by <code>DcaSealedContentEncryptionKey</code></li>
+            <li><code>DcaUnlockedKeys</code> — folded into <code>DcaContentEncryptionKey</code></li>
+          </ul>
+
+          <h4>Migration</h4>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem", marginBottom: "0.5rem" }}>
+            <thead>
+              <tr>
+                <th style={th}>Component</th>
+                <th style={th}>Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={td}><strong>Publisher</strong></td>
+                <td style={td}>Automatic — <code>render()</code> now produces the new format</td>
+              </tr>
+              <tr>
+                <td style={td}><strong>Client</strong></td>
+                <td style={td}>Update to <code>@sesamy/capsule</code> v0.9 — reads <code>contentEncryptionKeys</code> from both page data and unlock response</td>
+              </tr>
+              <tr>
+                <td style={td}><strong>Service</strong></td>
+                <td style={td}>Update to <code>@sesamy/capsule-server</code> v0.9 — <code>issuer.unlock()</code> accepts and returns the new format</td>
+              </tr>
+            </tbody>
+          </table>
+        </SectionCard>
+
+        {/* ================================================================
             v0.8
             ================================================================ */}
 
-        <h2>v0.8 <VersionBadge version="Latest" /></h2>
+        <h2>v0.8</h2>
         <p>
           v0.8 introduces a security fix for sealed key binding and removes the legacy v1 request format.
         </p>

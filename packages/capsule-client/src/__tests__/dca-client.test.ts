@@ -17,7 +17,7 @@ function setupDom(publisherContentId: string) {
         sealedContentKeys: {},
         issuerData: {
           testIssuer: {
-            contentKeys: { bodytext: { contentKey: "ck", periodKeys: {} } },
+            contentEncryptionKeys: [{ contentName: "bodytext", contentKey: "ck", periodKeys: [] }],
             unlockUrl: "https://example.com/unlock",
             keyId: "k1",
           },
@@ -74,7 +74,7 @@ describe("processPage access check", () => {
     const root = setupDom("article-789");
     const paywallFn = vi.fn();
     const unlockFn = vi.fn().mockResolvedValue({
-      keys: { bodytext: { contentKey: "fake-key" } },
+      contentEncryptionKeys: [{ contentName: "bodytext", contentKey: "fake-key" }],
     });
 
     const client = new DcaClient({

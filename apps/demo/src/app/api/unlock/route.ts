@@ -6,7 +6,7 @@ import { articles } from "@/lib/articles";
 /**
  * POST /api/unlock
  *
- * DCA unlock endpoint. Requires resourceJWT and contentKeys.
+ * DCA unlock endpoint. Requires resourceJWT and contentEncryptionKeys.
  *
  * The issuer:
  * 1. Verifies the publisher's JWT signature against the trusted-publisher allowlist
@@ -14,15 +14,22 @@ import { articles } from "@/lib/articles";
  *    - If shareToken is present: validates the publisher-signed token and grants
  *      access to the content names specified in the token
  *    - Otherwise: makes a normal access decision (in demo: always grant)
- * 3. Unseals and returns contentKeys or periodKeys
+ * 3. Unseals and returns contentEncryptionKeys or periodKeys
  */
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as DcaUnlockRequest;
 
-    if (!body.resourceJWT || !body.contentKeys) {
+    if (
+      !body.resourceJWT ||
+      !Array.isArray(body.contentEncryptionKeys) ||
+      body.contentEncryptionKeys.some(
+        (k: unknown) =>
+          typeof k !== "object" || k === null || typeof (k as Record<string, unknown>).contentKey !== "string",
+      )
+    ) {
       return NextResponse.json(
-        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentKeys)" },
+        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentEncryptionKeys)" },
         { status: 400 },
       );
     }
@@ -50,7 +57,7 @@ export async function POST(request: NextRequest) {
 
     // ── Access decision ────────────────────────────────────────────────
     // IMPORTANT: Derive scope from the *verified* resource (server-side),
-    // NOT from untrusted client fields (body.contentKeys / body.contentKeyMap).
+    // NOT from untrusted client fields (body.contentEncryptionKeys / body.contentKeyMap).
     // In v2 there is no issuerJWT integrity proof, so the client could
     // inflate contentKeyMap/contentKeys to widen the scope the issuer unseals.
     //

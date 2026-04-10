@@ -160,14 +160,7 @@ const result = await publisher.render({
         <CodeBlock>{`<!-- DCA metadata + sealed keys -->
 <script type="application/json" class="dca-data">
 {
-  "version": "1",
-  "resource": {
-    "renderId": "abc123",
-    "domain": "news.example.com",
-    "resourceId": "article-123",
-    "issuedAt": "2025-01-15T12:00:00Z",
-    "data": { "section": "politics", "date.published": "2025-10-20T10:30:00Z" }
-  },
+  "version": "2",
   "resourceJWT": "eyJ…",
   "contentSealData": {
     "bodytext": { "contentType": "text/html", "nonce": "…", "aad": "…" }
@@ -177,12 +170,15 @@ const result = await publisher.render({
   },
   "issuerData": {
     "sesamy": {
-      "sealed": {
-        "bodytext": {
+      "contentEncryptionKeys": [
+        {
+          "contentName": "bodytext",
           "contentKey": "base64url-sealed-blob",
-          "periodKeys": { "251023T13": "base64url-sealed-blob" }
+          "periodKeys": [
+            { "bucket": "251023T13", "key": "base64url-sealed-blob" }
+          ]
         }
-      },
+      ],
       "unlockUrl": "https://issuer.example.com/api/unlock",
       "keyId": "issuer-key-1"
     }
@@ -207,34 +203,47 @@ const result = await publisher.render({
           <li>Return keys to the client — either as plaintext (direct) or RSA-OAEP wrapped (client-bound).</li>
         </ol>
 
-        <CodeBlock>{`// Client → Issuer (v2)
+        <CodeBlock>{`// Client → Issuer
 POST /api/unlock
 {
   "resourceJWT": "eyJ…",
-  "contentKeys": {
-    "bodytext": {
+  "contentEncryptionKeys": [
+    {
+      "contentName": "bodytext",
       "contentKey": "base64url-sealed-blob",
-      "periodKeys": { "251023T13": "base64url-sealed-blob" }
+      "periodKeys": [
+        { "bucket": "251023T13", "key": "base64url-sealed-blob" }
+      ]
     }
-  },
+  ],
   "clientPublicKey": "base64url-SPKI-RSA-public-key"   // ← enables client-bound mode
 }
 
 // Issuer verification:
-// 1. Verify resourceJWT → extract renderId, domain, resourceId
+// 1. Verify resourceJWT → extract renderId, domain, resourceId, keyNames
 // 2. Unseal each key blob with ECDH private key + renderId as AAD
 //    (mismatched renderId → GCM auth failure → reject)
 // 3. Return keys
 
-// Issuer → Client
+// Issuer → Client (one delivery form per entry)
+//   deliveryMode: "contentKey" → returns contentKey only
+//   deliveryMode: "periodKey"  → returns periodKeys only (cacheable, 1-hour buckets)
 {
-  "keys": {
-    "bodytext": {
-      "contentKey": "base64url-key-or-wrapped-key",
-      "periodKeys": { "251023T13": "base64url-key-or-wrapped-key" }
-    }
-  },
+  "contentEncryptionKeys": [
+    { "contentName": "bodytext", "contentKey": "base64url-key-or-wrapped-key" }
+  ],
   "transport": "client-bound"    // or "direct" (default)
+}
+// — or with periodKey delivery —
+{
+  "contentEncryptionKeys": [
+    {
+      "contentName": "bodytext",
+      "periodKeys": [
+        { "bucket": "251023T13", "key": "base64url-key-or-wrapped-key" }
+      ]
+    }
+  ]
 }`}</CodeBlock>
 
         <h3>Transport Modes</h3>
@@ -532,24 +541,22 @@ export async function POST(request: Request) {
         </ol>
 
         <h3>Unlock Request with Share Token</h3>
-        <CodeBlock>{`// Client → Issuer (v2)
+        <CodeBlock>{`// Client → Issuer
 POST /api/unlock
 {
   "resourceJWT": "eyJ…",
-  "contentKeys": {
-    "bodytext": { "contentKey": "…", "periodKeys": { … } }
-  },
+  "contentEncryptionKeys": [
+    { "contentName": "bodytext", "contentKey": "…", "periodKeys": [{ "bucket": "…", "key": "…" }] }
+  ],
   "shareToken": "eyJ…",                  // ← Share link token
   "clientPublicKey": "base64url-SPKI…"   // Optional: client-bound transport
 }
 
 // Issuer → Client (same response format as normal unlock)
 {
-  "keys": {
-    "bodytext": {
-      "contentKey": "base64url-key-or-wrapped-key"
-    }
-  },
+  "contentEncryptionKeys": [
+    { "contentName": "bodytext", "contentKey": "base64url-key-or-wrapped-key" }
+  ],
   "transport": "client-bound"
 }`}</CodeBlock>
 

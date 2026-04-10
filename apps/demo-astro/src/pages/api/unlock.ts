@@ -4,14 +4,7 @@
  * Receives a DCA unlock request, verifies the publisher JWT,
  * unseals period keys, and returns them to the client.
  *
- * Supports both v1 and v2 request formats:
- *
- * **v1 (current):** All fields present — resource, resourceJWT, issuerJWT,
- * sealed, keyId, issuerName, plus optional clientPublicKey and shareToken.
- *
- * **v2 (beta):** Only resourceJWT and contentKeys are required.
- * The issuerJWT, keyId, resource, and issuerName are dropped.
- * The service auto-detects the format.
+ * Requires resourceJWT and contentEncryptionKeys.
  *
  * The issuer:
  * 1. Verifies the publisher's JWT signature against the trusted-publisher allowlist
@@ -40,10 +33,10 @@ export const POST: APIRoute = async ({ request }) => {
       );
     }
 
-    // Basic validation — v2 requires resourceJWT + contentKeys; v1 sends sealed
-    if (!body.resourceJWT || (!body.contentKeys && !body.sealed)) {
+    // Requires resourceJWT + contentEncryptionKeys
+    if (!body.resourceJWT || !body.contentEncryptionKeys) {
       return new Response(
-        JSON.stringify({ error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentKeys)" }),
+        JSON.stringify({ error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentEncryptionKeys)" }),
         { status: 400, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -73,7 +66,7 @@ export const POST: APIRoute = async ({ request }) => {
 
     // ── Access decision ────────────────────────────────────────────────
     // IMPORTANT: Derive scope from the *verified* resource (server-side),
-    // NOT from untrusted client fields (body.contentKeys / body.contentKeyMap).
+    // NOT from untrusted client fields (body.contentEncryptionKeys / body.contentKeyMap).
     // In v2 there is no issuerJWT integrity proof, so the client could
     // inflate contentKeyMap/contentKeys to widen the scope the issuer unseals.
     //
