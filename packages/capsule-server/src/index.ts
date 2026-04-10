@@ -132,6 +132,7 @@ export type {
   DcaContentEncryptionKey,
   DcaContentKeyDelivery,
   DcaPeriodKeyDelivery,
+  DcaSealedPeriodKeyEntry,
   DcaPeriodKeyEntry,
   DcaJsonApiResponse,
   DcaPublisherConfig,

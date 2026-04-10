@@ -128,8 +128,9 @@ export interface DcaIssuerEntry {
 /**
  * Sealed encryption key material for one content item (wire format).
  *
- * Used in `issuerData` and unlock requests — both delivery forms are always
- * present because the publisher seals both the contentKey and its periodKeys.
+ * Used in `issuerData` and unlock requests — the publisher seals both the
+ * contentKey and its periodKeys with the issuer's public key. The issuer must
+ * unseal the keys before returning them to the client.
  */
 export interface DcaSealedContentEncryptionKey {
     /** Content item name. Defaults to "default" when omitted. */
@@ -137,7 +138,7 @@ export interface DcaSealedContentEncryptionKey {
     /** base64url-encoded sealed contentKey */
     contentKey: string;
     /** Sealed period keys for time-bucketed access (default: 1-hour buckets) */
-    periodKeys: DcaPeriodKeyEntry[];
+    periodKeys: DcaSealedPeriodKeyEntry[];
 }
 
 /**
@@ -172,12 +173,24 @@ export interface DcaPeriodKeyDelivery {
 export type DcaContentEncryptionKey = DcaContentKeyDelivery | DcaPeriodKeyDelivery;
 
 /**
- * A single period key entry (flat replacement for Record<string, string>).
+ * A sealed period key entry — the key is ciphertext produced by the publisher
+ * using the issuer's public key. Only the issuer can unseal it.
+ */
+export interface DcaSealedPeriodKeyEntry {
+    /** Period bucket label (e.g., "251023T13") */
+    bucket: string;
+    /** base64url-encoded sealed (encrypted) period key */
+    sealedKey: string;
+}
+
+/**
+ * An unsealed period key entry — contains the raw (or client-bound re-encrypted)
+ * period key returned by the issuer to the client.
  */
 export interface DcaPeriodKeyEntry {
     /** Period bucket label (e.g., "251023T13") */
     bucket: string;
-    /** base64url-encoded period key */
+    /** base64url-encoded period key (plaintext or client-bound encrypted) */
     key: string;
 }
 

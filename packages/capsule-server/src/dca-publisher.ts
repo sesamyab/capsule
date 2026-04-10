@@ -39,7 +39,7 @@ import type {
     DcaSealedContentKey,
     DcaIssuerEntry,
     DcaSealedContentEncryptionKey,
-    DcaPeriodKeyEntry,
+    DcaSealedPeriodKeyEntry,
     DcaPublisherConfig,
     DcaRenderOptions,
     DcaRenderResult,
@@ -282,12 +282,12 @@ async function render(
             const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm, sealAad);
 
             // Seal periodKeys (using keyName, not contentName, for derivation)
-            const sealedPeriodKeys: DcaPeriodKeyEntry[] = [];
+            const sealedPeriodKeys: DcaSealedPeriodKeyEntry[] = [];
             for (const bucket of [buckets.current, buckets.next]) {
                 const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
                 sealedPeriodKeys.push({
                     bucket: bucket.t,
-                    key: await seal(periodKey, issuerPubKey, algorithm, sealAad),
+                    sealedKey: await seal(periodKey, issuerPubKey, algorithm, sealAad),
                 });
             }
 

@@ -20,7 +20,14 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as DcaUnlockRequest;
 
-    if (!body.resourceJWT || !body.contentEncryptionKeys) {
+    if (
+      !body.resourceJWT ||
+      !Array.isArray(body.contentEncryptionKeys) ||
+      body.contentEncryptionKeys.some(
+        (k: unknown) =>
+          typeof k !== "object" || k === null || typeof (k as Record<string, unknown>).contentKey !== "string",
+      )
+    ) {
       return NextResponse.json(
         { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentEncryptionKeys)" },
         { status: 400 },

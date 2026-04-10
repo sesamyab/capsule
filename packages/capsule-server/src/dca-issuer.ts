@@ -428,8 +428,8 @@ async function unsealAndRespond(
 
         if (deliveryMode === "contentKey") {
             // Direct path: unseal and return contentKey
-            if (!keysEntry.contentKey) {
-                throw new Error(`Missing contentKey for content item "${contentName}"`);
+            if (typeof keysEntry.contentKey !== "string" || !keysEntry.contentKey) {
+                throw new Error(`Missing or invalid contentKey for content item "${contentName}"`);
             }
             const contentKeyBytes = await unseal(keysEntry.contentKey, privateKey, algorithm, sealAad);
             contentEncryptionKeys.push({
@@ -445,7 +445,16 @@ async function unsealAndRespond(
             }
             const periodKeys = [];
             for (const pk of keysEntry.periodKeys) {
-                const periodKeyBytes = await unseal(pk.key, privateKey, algorithm, sealAad);
+                if (
+                    typeof pk !== "object" || pk === null ||
+                    typeof pk.sealedKey !== "string" || !pk.sealedKey ||
+                    typeof pk.bucket !== "string" || !pk.bucket
+                ) {
+                    throw new Error(
+                        `Invalid periodKeys: missing sealedKey/bucket for contentName "${contentName}"`,
+                    );
+                }
+                const periodKeyBytes = await unseal(pk.sealedKey, privateKey, algorithm, sealAad);
                 periodKeys.push({
                     bucket: pk.bucket,
                     key: clientBound
@@ -661,9 +670,13 @@ async function processShareLinkUnlock(
     }
 
     if (grantedContentNames.length === 0) {
+        const availableList = [...availableContentNames].join(", ");
+        const tokenDetail =
+            sharePayload.keyNames && sharePayload.keyNames.length > 0
+                ? `keyNames [${sharePayload.keyNames.join(", ")}]`
+                : `contentNames [${sharePayload.contentNames.join(", ")}]`;
         throw new Error(
-            "Share token: no matching content items — token grants " +
-            `[${sharePayload.contentNames.join(", ")}] but contentKeys contains [${[...availableContentNames].join(", ")}]`,
+            `Share token: no matching content items — token grants ${tokenDetail} but contentEncryptionKeys contains [${availableList}]`,
         );
     }
 
