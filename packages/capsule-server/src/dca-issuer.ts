@@ -191,6 +191,10 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
         /**
          * Process an unlock request.
          *
+         * If `resourceJWT` is present, verifies the publisher's signature
+         * and trust chain before unsealing. If absent, proceeds directly
+         * to unsealing — the keyName AAD binding provides integrity.
+         *
          * @param request - The unlock request from the client
          * @param accessDecision - Which content to grant and how to deliver keys
          * @returns Unlock response with decrypted key material
@@ -205,17 +209,10 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
         /**
          * Process an unlock request authorized by a share link token.
          *
-         * The share link token is a publisher-signed JWT that grants
-         * pre-authenticated access to specific content. The issuer:
-         *   1. Verifies the request JWTs (same as normal unlock)
-         *   2. Verifies the share link token signature (publisher-signed)
-         *   3. Validates token claims (type, domain, resourceId, expiry)
-         *   4. Grants access to the content names specified in the token
+         * Requires `resourceJWT` — the share token is verified against the
+         * publisher's signing key and bound to the resource.
          *
-         * DCA-compatible: no periodSecret required. Key material flows
-         * through the normal seal/unseal channel.
-         *
-         * @param request - The unlock request from the client (must include shareToken)
+         * @param request - The unlock request (must include resourceJWT and shareToken)
          * @param options - Optional overrides (deliveryMode, onShareToken callback)
          * @returns Unlock response with decrypted key material
          */
@@ -242,8 +239,14 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
         },
 
         /**
-         * Verify the request JWTs without unsealing.
-         * Useful for pre-flight checks before making access decisions.
+         * Verify the publisher's resourceJWT without unsealing.
+         *
+         * Requires `resourceJWT` — use this for pre-flight publisher trust
+         * verification, extracting resource metadata, or checking domain/resourceId
+         * constraints before making an access decision.
+         *
+         * Not needed for the core unseal flow (keyName AAD binding handles integrity),
+         * but useful when you need the verified resource payload.
          */
         verify: async (request: DcaUnlockRequest): Promise<DcaVerifiedRequest> => {
             return verifyRequest(publisherMap, request);
@@ -266,9 +269,8 @@ export interface DcaAccessDecision {
     grantedContentNames?: string[];
     /**
      * Which key domains to grant access to (keyName-based).
-     * The issuer resolves keyNames → contentNames using the request's
-     * `contentKeyMap`. If no contentKeyMap is present, keyNames are
-     * treated as contentNames (backward compatible).
+     * The issuer resolves keyNames → contentNames using the keyName
+     * field on each contentEncryptionKeys entry.
      *
      * Mutually exclusive with `grantedContentNames`.
      */
@@ -343,7 +345,12 @@ async function verifyRequest(
             throw new Error("contentEncryptionKeys entry contentName must be a string");
         }
 
-        const effectiveName = (entry as DcaSealedContentEncryptionKey).contentName ?? "default";
+        const entryObj = entry as DcaSealedContentEncryptionKey;
+        if (typeof entryObj.keyName !== "string" || entryObj.keyName === "") {
+            throw new Error("contentEncryptionKeys entry must have a non-empty keyName string");
+        }
+
+        const effectiveName = entryObj.contentName ?? "default";
         if (effectiveName === "") {
             throw new Error("contentEncryptionKeys entry contentName must not be empty");
         }
@@ -357,6 +364,9 @@ async function verifyRequest(
     }
 
     // 1. Decode (unverified) resourceJWT to get domain for publisher key lookup.
+    if (!request.resourceJWT) {
+        throw new Error("resourceJWT is required for publisher trust verification");
+    }
     const decoded = decodeJwtPayload<DcaResourceJwtPayload>(request.resourceJWT);
     const rawDomain = decoded.iss;
 
@@ -380,8 +390,8 @@ async function verifyRequest(
     // 4. Per-publisher resource constraints (optional allowedResourceIds).
     checkResourceConstraints(publisher, rawDomain, resource.resourceId);
 
-    // Sealed blobs are bound to this render via AAD (renderId).
-    // Cross-resource key substitution fails at unseal time.
+    // Sealed blobs are AAD-bound to the keyName on each entry.
+    // Cross-tier key substitution fails at unseal time.
     return { resource };
 }
 
@@ -393,7 +403,6 @@ async function verifyRequest(
 async function unsealAndRespond(
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
     request: DcaUnlockRequest,
-    resource: DcaResource,
     grantedContentNames: string[],
     deliveryMode: "contentKey" | "periodKey",
 ): Promise<DcaUnlockResponse> {
@@ -414,9 +423,6 @@ async function unsealAndRespond(
         keysByName.set(entry.contentName ?? "default", entry);
     }
 
-    // AAD binds sealed blobs to this render — prevents cross-resource key substitution.
-    const sealAad = encodeUtf8(resource.renderId);
-
     // Unseal granted content items
     const contentEncryptionKeys: DcaContentEncryptionKey[] = [];
 
@@ -426,6 +432,9 @@ async function unsealAndRespond(
             throw new Error(`No contentEncryptionKeys data for content item "${contentName}"`);
         }
 
+        // AAD is bound to the access tier — tampering with keyName causes unseal failure
+        const sealAad = encodeUtf8(keysEntry.keyName);
+
         if (deliveryMode === "contentKey") {
             // Direct path: unseal and return contentKey
             if (typeof keysEntry.contentKey !== "string" || !keysEntry.contentKey) {
@@ -434,6 +443,7 @@ async function unsealAndRespond(
             const contentKeyBytes = await unseal(keysEntry.contentKey, privateKey, algorithm, sealAad);
             contentEncryptionKeys.push({
                 contentName,
+                keyName: keysEntry.keyName,
                 contentKey: clientBound
                     ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, contentKeyBytes))
                     : toBase64Url(contentKeyBytes),
@@ -462,7 +472,7 @@ async function unsealAndRespond(
                         : toBase64Url(periodKeyBytes),
                 });
             }
-            contentEncryptionKeys.push({ contentName, periodKeys });
+            contentEncryptionKeys.push({ contentName, keyName: keysEntry.keyName, periodKeys });
         }
     }
 
@@ -478,8 +488,10 @@ async function processUnlock(
     request: DcaUnlockRequest,
     accessDecision: DcaAccessDecision,
 ): Promise<DcaUnlockResponse> {
-    // Verify everything first
-    const { resource } = await verifyRequest(publisherMap, request);
+    // Verify resourceJWT if present (publisher trust verification)
+    if (request.resourceJWT) {
+        await verifyRequest(publisherMap, request);
+    }
 
     // Resolve grantedContentNames from the access decision
     const grantedContentNames = resolveGrantedContentNames(accessDecision, request);
@@ -487,7 +499,6 @@ async function processUnlock(
     return unsealAndRespond(
         getPrivateKey,
         request,
-        resource,
         grantedContentNames,
         accessDecision.deliveryMode,
     );
@@ -497,36 +508,24 @@ async function processUnlock(
  * Resolve the final list of contentNames to grant from an access decision.
  *
  * - If `grantedContentNames` is provided, use those directly.
- * - If `grantedKeyNames` is provided, resolve via contentKeyMap → contentNames.
+ * - If `grantedKeyNames` is provided, resolve via each entry's keyName → contentNames.
  * - If neither is provided, throws.
  */
 function resolveGrantedContentNames(
     accessDecision: DcaAccessDecision,
     request: DcaUnlockRequest,
 ): string[] {
-    // Build a set of available content names from the flat array
-    const availableNames = new Set(
-        request.contentEncryptionKeys.map(k => k.contentName ?? "default"),
-    );
-
     if (accessDecision.grantedContentNames && accessDecision.grantedContentNames.length > 0) {
         return accessDecision.grantedContentNames;
     }
 
     if (accessDecision.grantedKeyNames && accessDecision.grantedKeyNames.length > 0) {
         const keyNameSet = new Set(accessDecision.grantedKeyNames);
-        const contentKeyMap = request.contentKeyMap;
 
-        if (contentKeyMap && Object.keys(contentKeyMap).length > 0) {
-            // Resolve keyNames → contentNames via the contentKeyMap
-            return Object.entries(contentKeyMap)
-                .filter(([, keyName]) => keyNameSet.has(keyName))
-                .map(([contentName]) => contentName)
-                .filter(contentName => availableNames.has(contentName));
-        }
-
-        // No contentKeyMap: treat keyNames as contentNames (backward compat)
-        return accessDecision.grantedKeyNames.filter(name => availableNames.has(name));
+        // Resolve keyNames → contentNames directly from each entry's keyName field
+        return request.contentEncryptionKeys
+            .filter(entry => keyNameSet.has(entry.keyName))
+            .map(entry => entry.contentName ?? "default");
     }
 
     throw new Error("Access decision must specify grantedContentNames or grantedKeyNames");
@@ -648,21 +647,12 @@ async function processShareLinkUnlock(
     let grantedContentNames: string[];
 
     if (sharePayload.keyNames && sharePayload.keyNames.length > 0) {
-        // keyName-based share token: resolve keyNames → contentNames
+        // keyName-based share token: resolve keyNames → contentNames from entries
         const keyNameSet = new Set(sharePayload.keyNames);
-        const contentKeyMap = request.contentKeyMap;
-
-        if (contentKeyMap && Object.keys(contentKeyMap).length > 0) {
-            grantedContentNames = Object.entries(contentKeyMap)
-                .filter(([, keyName]) => keyNameSet.has(keyName))
-                .map(([contentName]) => contentName)
-                .filter(name => availableContentNames.has(name));
-        } else {
-            // No contentKeyMap: treat keyNames as contentNames
-            grantedContentNames = sharePayload.keyNames.filter(
-                name => availableContentNames.has(name),
-            );
-        }
+        grantedContentNames = request.contentEncryptionKeys
+            .filter(entry => keyNameSet.has(entry.keyName))
+            .map(entry => entry.contentName ?? "default")
+            .filter(name => availableContentNames.has(name));
     } else {
         grantedContentNames = sharePayload.contentNames.filter(
             (name) => availableContentNames.has(name),
@@ -686,7 +676,6 @@ async function processShareLinkUnlock(
     return unsealAndRespond(
         getPrivateKey,
         request,
-        resource,
         grantedContentNames,
         deliveryMode,
     );

@@ -66,9 +66,9 @@ export const POST: APIRoute = async ({ request }) => {
 
     // ── Access decision ────────────────────────────────────────────────
     // IMPORTANT: Derive scope from the *verified* resource (server-side),
-    // NOT from untrusted client fields (body.contentEncryptionKeys / body.contentKeyMap).
-    // In v2 there is no issuerJWT integrity proof, so the client could
-    // inflate contentKeyMap/contentKeys to widen the scope the issuer unseals.
+    // NOT from untrusted client fields. keyName on each entry is AAD-bound
+    // (tampering causes unseal failure), but the issuer should still
+    // determine the granted scope from its own data.
     //
     // 1. Verify the request JWTs to get the trusted resource.
     // 2. Look up the article server-side to determine the entitled tier.

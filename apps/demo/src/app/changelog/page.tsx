@@ -271,49 +271,48 @@ interface DcaPeriodKeyEntry {
           <h4>What Changed</h4>
           <p>
             Sealed key blobs (<code>contentKeys</code> and <code>periodKeys</code>) are now
-            cryptographically bound to the render via <code>renderId</code> as AES-GCM AAD /
+            cryptographically bound to the access tier via <code>keyName</code> as AES-GCM AAD /
             RSA-OAEP label.
           </p>
 
           <h4>Why</h4>
           <p>
-            Prevents a <strong>cross-resource key substitution attack</strong> where an attacker
-            could swap <code>contentKeys</code> from resource B into a request authorized for
-            resource A, gaining unauthorized access to B&apos;s content.
+            Prevents a <strong>cross-tier key substitution attack</strong> where an attacker
+            could change <code>keyName</code> on a sealed entry to a tier they have access to,
+            tricking the issuer into unsealing keys for a different tier.
           </p>
 
           <h4>How It Works</h4>
           <ol>
             <li>
-              The <strong>publisher</strong> passes <code>renderId</code> as AAD when sealing keys
-              for issuers.
+              The <strong>publisher</strong> passes <code>keyName</code> as AAD when sealing keys
+              for issuers. Each entry carries its own <code>keyName</code>.
             </li>
             <li>
-              The <strong>issuer</strong> passes the same <code>renderId</code> (from the verified{" "}
-              <code>resourceJWT</code>) when unsealing.
+              The <strong>issuer</strong> reads <code>keyName</code> from each entry when unsealing.
             </li>
             <li>
-              Mismatched AAD causes decryption to <strong>fail</strong> — a blob sealed for render X
-              cannot be unsealed in a request for render Y.
+              Mismatched AAD causes decryption to <strong>fail</strong> — a blob sealed for tier
+              &quot;free&quot; cannot be unsealed with AAD &quot;premium&quot;.
             </li>
           </ol>
 
-          <CodeBlock>{`// Publisher side — renderId bound as AAD during seal
+          <CodeBlock>{`// Publisher side — keyName bound as AAD during seal
 const result = await publisher.render({
   resourceId: "article-123",
   contentItems: [
-    { contentName: "bodytext", content: body, contentType: "text/html" },
+    { contentName: "bodytext", keyName: "premium", content: body, contentType: "text/html" },
   ],
-  issuers: [{ issuerName: "sesamy", publicKeyPem, keyId, unlockUrl, keyNames: ["bodytext"] }],
+  issuers: [{ issuerName: "sesamy", publicKeyPem, keyId, unlockUrl, keyNames: ["premium"] }],
 });
-// renderId is automatically included as AES-GCM AAD in the sealed blobs
+// keyName is automatically included as AES-GCM AAD in the sealed blobs
 
-// Issuer side — renderId from verified resourceJWT used as AAD during unseal
+// Issuer side — keyName from each entry used as AAD during unseal
 const result = await issuer.unlock(request, {
-  grantedKeyNames: ["bodytext"],
+  grantedKeyNames: ["premium"],
   deliveryMode: "contentKey",
 });
-// If contentKeys were swapped from a different render, unseal fails`}</CodeBlock>
+// If keyName was tampered with, unseal fails`}</CodeBlock>
         </SectionCard>
 
         {/* ---- Change 2: v1 Legacy Removed ---- */}
@@ -634,7 +633,7 @@ POST /api/unlock
               <tr>
                 <td style={td}>Access control scope</td>
                 <td style={td}><code>grantedContentNames</code></td>
-                <td style={td}><code>grantedKeyNames</code> (resolves via contentKeyMap)</td>
+                <td style={td}><code>grantedKeyNames</code> (resolves via entry keyName)</td>
               </tr>
             </tbody>
           </table>
@@ -667,26 +666,22 @@ const result = await publisher.render({
   }],
 });`}</CodeBlock>
 
-          <p><strong>Wire format — contentKeyMap:</strong></p>
+          <p><strong>Wire format — keyName on entries:</strong></p>
           <p>
-            When any content item has an explicit <code>keyName</code>, the publisher
-            includes a <code>contentKeyMap</code> in the DCA data — a lightweight mapping
-            from contentName to keyName:
+            Each <code>contentEncryptionKeys</code> entry carries its own <code>keyName</code>,
+            making it self-describing. The <code>keyName</code> is cryptographically bound
+            via seal AAD — tampering causes unseal failure:
           </p>
-          <CodeBlock>{`// DcaData (embedded in page)
+          <CodeBlock>{`// issuerData entry (embedded in page)
 {
-  "resource": { "resourceId": "article-123", "domain": "news.example.com", … },
-  "contentKeyMap": {
-    "bodytext": "premium",
-    "sidebar": "premium"
-  },
-  "contentSealData": { "bodytext": { … }, "sidebar": { … } },
-  "sealedContentKeys": { "bodytext": [ … ], "sidebar": [ … ] },
-  …
+  "contentEncryptionKeys": [
+    { "contentName": "bodytext", "keyName": "premium", "contentKey": "sealed...", "periodKeys": [...] },
+    { "contentName": "sidebar",  "keyName": "premium", "contentKey": "sealed...", "periodKeys": [...] }
+  ]
 }`}</CodeBlock>
           <p>
-            The <code>contentKeyMap</code> is omitted when all keyNames equal their contentNames
-            (the backwards-compatible case), keeping zero overhead for publishers that don&apos;t use this feature.
+            When <code>keyName</code> is not explicitly set on a content item, it defaults
+            to <code>contentName</code>, so the simplest case requires no extra configuration.
           </p>
 
           <p><strong>Issuer — grantedKeyNames:</strong></p>
@@ -715,21 +710,23 @@ const result = await issuer.unlock(request, {
           <CodeBlock>{`const client = new DcaClient();
 const page = client.parsePage();
 
-// contentKeyMap is included automatically in the unlock request
+// keyName is carried on each entry — no separate mapping needed
 const keys = await client.unlock(page, "sesamy");
 
-// Decrypt by contentName — keyName is resolved internally
+// Decrypt by contentName — keyName is resolved from the entries
 const body = await client.decrypt(page, "bodytext", keys);
 const side = await client.decrypt(page, "sidebar", keys);
 
 // Period key cache is keyed by "premium" (the keyName),
 // so navigating to another "premium" article skips the unlock call`}</CodeBlock>
 
-          <h4>Backwards Compatibility</h4>
+          <h4>Breaking Change</h4>
           <p>
-            Fully backwards compatible. When <code>keyName</code> is omitted it defaults
-            to <code>contentName</code>, so existing pages and unlock requests work
-            unchanged. The <code>contentKeyMap</code> is only included when explicitly needed.
+            This is a breaking change — the seal AAD now includes <code>keyName</code>,
+            so existing encrypted content must be re-rendered. When <code>keyName</code> is
+            omitted on a content item, it defaults to <code>contentName</code>.
+            The <code>contentKeyMap</code> field has been removed from the wire format.
+            The <code>resourceJWT</code> is now optional in unlock requests.
           </p>
         </SectionCard>
 

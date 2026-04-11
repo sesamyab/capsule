@@ -206,22 +206,21 @@ wrappedKey = AES-GCM(periodKey, contentKey, wrapIv)`}
           </p>
           <p>
             <strong>Seal AAD</strong> binds sealed key material (content keys
-            and period keys) to the specific render via the{" "}
-            <code>renderId</code>. This prevents an attacker from substituting
-            sealed keys from one resource into another &mdash; unsealing will
-            fail because the <code>renderId</code> AAD won&apos;t match.
+            and period keys) to the access tier via the{" "}
+            <code>keyName</code>. This prevents an attacker from substituting
+            sealed keys between tiers &mdash; unsealing will
+            fail because the <code>keyName</code> AAD won&apos;t match.
           </p>
           <div className="properties">
             <span className="property">
-              Content AAD: <code>domain|resourceId|contentName|[keyName]|version</code>
+              Content AAD: <code>domain|resourceId|contentName|keyName</code>
             </span>
             <span className="property">
-              Seal AAD: <code>renderId</code>
+              Seal AAD: <code>keyName</code>
             </span>
             <span className="property">Encoding: UTF-8 bytes</span>
             <span className="property">
-              Storage: Content AAD in contentSealData.aad, Seal AAD implicit
-              from renderId
+              Storage: Content AAD in contentSealData.aad, Seal AAD from entry keyName
             </span>
           </div>
           <pre className="code-example">
@@ -235,10 +234,10 @@ ciphertext = AES-GCM(contentKey, plaintext, iv, contentAad)
 plaintext = AES-GCM-Decrypt(contentKey, ciphertext, iv, contentAad)
 // Fails if AAD doesn't match → prevents content relocation
 
-// Seal AAD — binds sealed key material to the render
-sealedContentKey = seal(contentKey, issuerPubKey, algorithm, encodeUtf8(renderId))
-sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(renderId))
-// Unsealing fails if renderId doesn't match → prevents key substitution`}
+// Seal AAD — binds sealed key material to the access tier
+sealedContentKey = seal(contentKey, issuerPubKey, algorithm, encodeUtf8(keyName))
+sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(keyName))
+// Unsealing fails if keyName doesn't match → prevents cross-tier key substitution`}
           </pre>
           <p>
             <strong>Why two layers?</strong> Content AAD protects the
@@ -397,15 +396,15 @@ sealedContentKeys: {
             with the issuer&apos;s public key. Only the issuer holding the
             matching private key can unseal them. Each issuer gets its own
             sealed copies, enabling multi-issuer support. Sealed blobs include
-            AAD binding via the <code>renderId</code>, which ties the sealed
-            key material to a specific render and prevents cross-resource key
+            AAD binding via the <code>keyName</code>, which ties the sealed
+            key material to a specific access tier and prevents cross-tier key
             substitution.
           </p>
           <div className="properties">
             <span className="property">ECDH P-256: Ephemeral key per seal</span>
             <span className="property">RSA-OAEP: Standard ciphertext</span>
             <span className="property">Auto-detection: From PEM key type</span>
-            <span className="property">AAD: renderId (UTF-8 encoded)</span>
+            <span className="property">AAD: keyName (UTF-8 encoded)</span>
           </div>
           <pre className="code-example">
             {`// Issuer sealed structure
@@ -413,7 +412,7 @@ issuerData: {
   "sesamy": {
     sealed: {
       "bodytext": {
-        contentKey: "base64url...",   // sealed with issuer pubkey + renderId AAD
+        contentKey: "base64url...",   // sealed with issuer pubkey + keyName AAD
         periodKeys: {
           "251023T13": "base64url...",
           "251023T14": "base64url..."

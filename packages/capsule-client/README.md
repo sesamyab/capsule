@@ -240,7 +240,7 @@ const client = new DcaClient({
 
 ## Request Format
 
-The unlock request sends `resourceJWT` and `contentKeys`. When `contentKeyMap` is present in the page data, it is included automatically for keyName-based access resolution.
+The unlock request sends `resourceJWT` and `contentEncryptionKeys`. Each entry carries a `keyName` field that is AAD-bound — the issuer uses it directly for access tier resolution.
 
 ## Types
 

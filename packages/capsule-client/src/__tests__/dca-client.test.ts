@@ -17,7 +17,7 @@ function setupDom(publisherContentId: string) {
         sealedContentKeys: {},
         issuerData: {
           testIssuer: {
-            contentEncryptionKeys: [{ contentName: "bodytext", contentKey: "ck", periodKeys: [] }],
+            contentEncryptionKeys: [{ contentName: "bodytext", keyName: "bodytext", contentKey: "ck", periodKeys: [] }],
             unlockUrl: "https://example.com/unlock",
             keyId: "k1",
           },
