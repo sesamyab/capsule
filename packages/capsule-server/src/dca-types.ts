@@ -24,16 +24,6 @@ export interface DcaData {
     sealedContentKeys: Record<string, DcaSealedContentKey[]>;
     /** Per issuer: sealed keys, unlock URL, and key ID */
     issuerData: Record<string, DcaIssuerEntry>;
-    /**
-     * Maps contentName → keyName when any content item's keyName differs
-     * from its contentName. Omitted when every keyName equals its contentName.
-     *
-     * The keyName determines which periodKey domain a content item belongs to.
-     * Content items sharing a keyName share the same periodKey, enabling
-     * role-based access: e.g. keyName "premium" covers both "bodytext" and
-     * "sidebar", and a single subscription grants access to all of them.
-     */
-    contentKeyMap?: Record<string, string>;
 }
 
 /**
@@ -135,6 +125,11 @@ export interface DcaIssuerEntry {
 export interface DcaSealedContentEncryptionKey {
     /** Content item name. Defaults to "default" when omitted. */
     contentName?: string;
+    /**
+     * Access tier for this entry. Sealed blobs are AAD-bound to this value —
+     * tampering with keyName causes unseal failure.
+     */
+    keyName: string;
     /** base64url-encoded sealed contentKey */
     contentKey: string;
     /** Sealed period keys for time-bucketed access (default: 1-hour buckets) */
@@ -147,6 +142,8 @@ export interface DcaSealedContentEncryptionKey {
 export interface DcaContentKeyDelivery {
     /** Content item name. Defaults to "default" when omitted. */
     contentName?: string;
+    /** Access tier for this entry (echoed from the sealed entry). */
+    keyName?: string;
     /** base64url-encoded contentKey */
     contentKey: string;
     periodKeys?: never;
@@ -158,6 +155,8 @@ export interface DcaContentKeyDelivery {
 export interface DcaPeriodKeyDelivery {
     /** Content item name. Defaults to "default" when omitted. */
     contentName?: string;
+    /** Access tier for this entry (echoed from the sealed entry). */
+    keyName?: string;
     /** Period keys for time-bucketed access */
     periodKeys: DcaPeriodKeyEntry[];
     contentKey?: never;
@@ -386,12 +385,17 @@ export interface DcaIssuerServerConfig {
  * Unlock request — what the client sends to the issuer.
  *
  * Contains `resourceJWT` + `contentEncryptionKeys` (sealed key material for one issuer).
- * Sealed blobs are bound to the render via AAD (renderId from resourceJWT),
+ * Sealed blobs are AAD-bound to the keyName on each entry,
  * preventing cross-resource key substitution.
  */
 export interface DcaUnlockRequest {
-    /** Signed resource JWT (publisher-signed, ES256) */
-    resourceJWT: string;
+    /**
+     * Signed resource JWT (publisher-signed, ES256).
+     * Optional — the issuer no longer needs it for AAD reconstruction
+     * (AAD is bound to keyName on each entry). Issuers that want publisher
+     * trust verification can still require it.
+     */
+    resourceJWT?: string;
     /** This issuer's sealed content keys (wire format — both contentKey and periodKeys present) */
     contentEncryptionKeys: DcaSealedContentEncryptionKey[];
     /**
@@ -407,12 +411,6 @@ export interface DcaUnlockRequest {
      * instead of requiring a subscription check.
      */
     shareToken?: string;
-    /**
-     * Maps contentName → keyName for keyName-based access decisions.
-     * Included by the client when the page's DcaData contains a contentKeyMap.
-     * The issuer uses this to resolve `grantedKeyNames` → contentNames.
-     */
-    contentKeyMap?: Record<string, string>;
 }
 
 /**
@@ -462,7 +460,7 @@ export interface DcaShareLinkTokenPayload {
     /**
      * Key domains this token grants access to (keyName-based).
      * When present, the issuer resolves keyNames → contentNames
-     * via the request's contentKeyMap and grants all matching items.
+     * using the keyName field on each contentEncryptionKeys entry.
      * Takes precedence over `contentNames` when present.
      */
     keyNames?: string[];

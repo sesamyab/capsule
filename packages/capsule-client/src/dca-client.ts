@@ -50,18 +50,13 @@ export interface DcaData {
     issuerData: Record<string, {
         contentEncryptionKeys: Array<{
             contentName?: string;
+            keyName?: string;
             contentKey: string;
-            periodKeys: Array<{ bucket: string; key: string }>;
+            periodKeys: Array<{ bucket: string; sealedKey: string }>;
         }>;
         unlockUrl: string;
         keyId: string;
     }>;
-    /**
-     * Maps contentName → keyName. Present when any content item's keyName
-     * differs from its contentName (keyName-based access).
-     * When absent, each contentName IS its own keyName.
-     */
-    contentKeyMap?: Record<string, string>;
 }
 
 /** Parsed page data */
@@ -73,8 +68,8 @@ export interface DcaParsedPage {
 /** Unlock response from issuer — each entry has exactly one delivery form */
 export interface DcaUnlockResponse {
     contentEncryptionKeys: Array<
-        | { contentName?: string; contentKey: string; periodKeys?: never }
-        | { contentName?: string; periodKeys: Array<{ bucket: string; key: string }>; contentKey?: never }
+        | { contentName?: string; keyName?: string; contentKey: string; periodKeys?: never }
+        | { contentName?: string; keyName?: string; periodKeys: Array<{ bucket: string; key: string }>; contentKey?: never }
     >;
     /**
      * Transport mode used by the issuer:
@@ -316,7 +311,6 @@ export class DcaClient {
         const body: Record<string, unknown> = {
             resourceJWT: page.dcaData.resourceJWT,
             contentEncryptionKeys: issuerEntry.contentEncryptionKeys,
-            ...(page.dcaData.contentKeyMap ? { contentKeyMap: page.dcaData.contentKeyMap } : {}),
             ...additionalBody,
         };
 
@@ -448,7 +442,7 @@ export class DcaClient {
                     ? await this.unwrapPeriodKeyMap(periodKeysRecord)
                     : periodKeysRecord;
                 // Cache by keyName (not contentName) for cross-content sharing
-                const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+                const keyName = keyEntry.keyName ?? contentName;
                 await this.cachePeriodKeys(keyName, rawPeriodKeys);
             }
         } else if (periodKeysRecord) {
@@ -464,12 +458,13 @@ export class DcaClient {
 
             // Cache by keyName for cross-content sharing
             if (this.periodKeyCache) {
-                const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+                const keyName = keyEntry.keyName ?? contentName;
                 await this.cachePeriodKeys(keyName, rawPeriodKeys);
             }
         } else {
-            // Try cached periodKeys (by keyName)
-            const keyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+            // Try cached periodKeys (by keyName from issuerData entries)
+            const issuerEntries = Object.values(page.dcaData.issuerData).flatMap(i => i.contentEncryptionKeys);
+            const keyName = issuerEntries.find(e => (e.contentName ?? "default") === contentName)?.keyName ?? contentName;
             const cached = await this.getCachedPeriodKeys(keyName, page.dcaData.sealedContentKeys[contentName] ?? []);
             if (cached) {
                 contentKeyBytes = await this.unwrapWithPeriodKeys(

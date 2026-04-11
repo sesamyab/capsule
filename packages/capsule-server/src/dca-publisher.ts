@@ -123,8 +123,7 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
             const now = Math.floor(Date.now() / 1000);
 
             // Require at least one of contentNames or keyNames
-            const contentNames = options.contentNames ?? options.keyNames ?? [];
-            if (contentNames.length === 0 && !options.keyNames?.length) {
+            if (!options.contentNames?.length && !options.keyNames?.length) {
                 throw new Error("createShareLinkToken requires contentNames or keyNames");
             }
 
@@ -132,7 +131,7 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
                 type: "dca-share",
                 domain: config.domain,
                 resourceId: options.resourceId,
-                contentNames,
+                contentNames: options.contentNames ?? [],
                 iat: now,
                 exp: now + (options.expiresIn ?? 7 * 24 * 3600), // default: 7 days
                 ...(options.maxUses !== undefined ? { maxUses: options.maxUses } : {}),
@@ -168,13 +167,8 @@ async function render(
 
     // 2b. Resolve keyName for each content item (defaults to contentName)
     const resolvedKeyNames: Record<string, string> = {};
-    let hasExplicitKeyNames = false;
     for (const item of contentItems) {
-        const keyName = item.keyName ?? item.contentName;
-        resolvedKeyNames[item.contentName] = keyName;
-        if (item.keyName !== undefined && item.keyName !== item.contentName) {
-            hasExplicitKeyNames = true;
-        }
+        resolvedKeyNames[item.contentName] = item.keyName ?? item.contentName;
     }
 
     // 3. Per content item: generate contentKey, IV, encrypt
@@ -190,12 +184,9 @@ async function render(
         const contentKey = generateAesKeyBytes();
         const iv = generateIv();
 
-        // Build AAD string: domain|resourceId|contentName|version
-        // v2: when keyName differs from contentName, include it for cryptographic binding
+        // Build AAD string: domain|resourceId|contentName|keyName
         const keyName = resolvedKeyNames[contentName];
-        const aadString = keyName !== contentName
-            ? `${domain}|${resourceId}|${contentName}|${keyName}|2`
-            : `${domain}|${resourceId}|${contentName}|1`;
+        const aadString = `${domain}|${resourceId}|${contentName}|${keyName}`;
         const aadBytes = encodeUtf8(aadString);
 
         // Encrypt content with AAD
@@ -267,9 +258,6 @@ async function render(
             throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or keyNames`);
         }
 
-        // AAD binds sealed blobs to this render — prevents cross-resource key substitution
-        const sealAad = encodeUtf8(renderId);
-
         for (const contentName of contentNamesToSeal) {
             const contentKey = contentKeys[contentName];
             if (!contentKey) {
@@ -277,6 +265,9 @@ async function render(
             }
 
             const keyName = resolvedKeyNames[contentName];
+
+            // AAD binds sealed blobs to this access tier — tampering with keyName causes unseal failure
+            const sealAad = encodeUtf8(keyName);
 
             // Seal contentKey
             const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm, sealAad);
@@ -293,6 +284,7 @@ async function render(
 
             issuerContentEncryptionKeys.push({
                 contentName,
+                keyName,
                 contentKey: sealedContentKey,
                 periodKeys: sealedPeriodKeys,
             });
@@ -329,8 +321,6 @@ async function render(
         contentSealData,
         sealedContentKeys,
         issuerData,
-        // Include contentKeyMap only when keyNames differ from contentNames
-        ...(hasExplicitKeyNames ? { contentKeyMap: resolvedKeyNames } : {}),
     };
 
     // 10. Build HTML strings

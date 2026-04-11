@@ -95,7 +95,7 @@ describe("AAD in AES-GCM", () => {
     it("encrypts and decrypts with AAD", async () => {
         const key = generateContentKey();
         const plaintext = "Hello, DCA with AAD!";
-        const aad = encodeUtf8("example.com|article-1|bodytext|1");
+        const aad = encodeUtf8("example.com|article-1|bodytext|bodytext");
 
         const { encryptedContent, iv } = await encryptContent(plaintext, key, undefined, aad);
         const decrypted = await decryptContent(encryptedContent, key, iv, aad);
@@ -106,7 +106,7 @@ describe("AAD in AES-GCM", () => {
     it("decryption fails with wrong AAD", async () => {
         const key = generateContentKey();
         const plaintext = "Secret content";
-        const aad = encodeUtf8("example.com|article-1|bodytext|1");
+        const aad = encodeUtf8("example.com|article-1|bodytext|bodytext");
         const wrongAad = encodeUtf8("evil.com|article-1|bodytext|1");
 
         const { encryptedContent, iv } = await encryptContent(plaintext, key, undefined, aad);
@@ -117,7 +117,7 @@ describe("AAD in AES-GCM", () => {
     it("decryption fails without AAD when AAD was used", async () => {
         const key = generateContentKey();
         const plaintext = "Secret content";
-        const aad = encodeUtf8("example.com|article-1|bodytext|1");
+        const aad = encodeUtf8("example.com|article-1|bodytext|bodytext");
 
         const { encryptedContent, iv } = await encryptContent(plaintext, key, undefined, aad);
 
@@ -750,10 +750,10 @@ describe("DCA end-to-end", () => {
             ],
         });
 
-        expect(result.dcaData.contentSealData["bodytext"].aad).toBe("aad.example.com|aad-article|bodytext|1");
+        expect(result.dcaData.contentSealData["bodytext"].aad).toBe("aad.example.com|aad-article|bodytext|bodytext");
     });
 
-    it("rejects cross-resource key substitution (seal AAD binding)", async () => {
+    it("cross-resource substitution with same keyName unseals but returns wrong key (harmless)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -762,7 +762,7 @@ describe("DCA end-to-end", () => {
             periodSecret: keys.periodSecret,
         });
 
-        // Render two different resources
+        // Render two different resources with the same keyName
         const resultA = await publisher.render({
             resourceId: "article-A",
             contentItems: [{ contentName: "bodytext", content: "Content A" }],
@@ -796,7 +796,7 @@ describe("DCA end-to-end", () => {
             },
         });
 
-        // Normal unlock works
+        // Normal unlock for A
         const responseA = await issuer.unlock(
             {
                 resourceJWT: resultA.dcaData.resourceJWT,
@@ -804,21 +804,24 @@ describe("DCA end-to-end", () => {
             },
             { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
         );
-        expect(findKey(responseA, "bodytext").contentKey).toBeDefined();
+        const keyA = findKey(responseA, "bodytext").contentKey!;
 
-        // Substitution attack: resourceJWT from A, contentEncryptionKeys from B
-        await expect(
-            issuer.unlock(
-                {
-                    resourceJWT: resultA.dcaData.resourceJWT,
-                    contentEncryptionKeys: resultB.dcaData.issuerData["aad-issuer"].contentEncryptionKeys,
-                },
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
-            ),
-        ).rejects.toThrow();
+        // Cross-resource substitution: resourceJWT from A, keys from B
+        // This now succeeds at unseal (same keyName = same AAD), but returns B's contentKey
+        const responseSubst = await issuer.unlock(
+            {
+                resourceJWT: resultA.dcaData.resourceJWT,
+                contentEncryptionKeys: resultB.dcaData.issuerData["aad-issuer"].contentEncryptionKeys,
+            },
+            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+        );
+        const keySubst = findKey(responseSubst, "bodytext").contentKey!;
+
+        // The substituted key is different (B's contentKey) and can't decrypt A's content
+        expect(keySubst).not.toBe(keyA);
     });
 
-    it("seal AAD: unseal with matching renderId succeeds", async () => {
+    it("seal AAD: unseal with matching keyName succeeds", async () => {
         const keyPair = await generateEcdhP256KeyPair();
         const pems = await exportP256KeyPairPem(keyPair.privateKey, keyPair.publicKey);
 
@@ -826,7 +829,7 @@ describe("DCA end-to-end", () => {
         const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
 
         const originalKey = generateAesKeyBytes();
-        const aad = encodeUtf8("test-render-id");
+        const aad = encodeUtf8("premium");
 
         const sealed = await sealEcdhP256(originalKey, pubKey, aad);
         const unsealed = await unsealEcdhP256(sealed, privKey, aad);
@@ -841,8 +844,8 @@ describe("DCA end-to-end", () => {
         const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
 
         const originalKey = generateAesKeyBytes();
-        const aad = encodeUtf8("render-A");
-        const wrongAad = encodeUtf8("render-B");
+        const aad = encodeUtf8("premium");
+        const wrongAad = encodeUtf8("free");
 
         const sealed = await sealEcdhP256(originalKey, pubKey, aad);
         await expect(unsealEcdhP256(sealed, privKey, wrongAad)).rejects.toThrow();
@@ -856,7 +859,7 @@ describe("DCA end-to-end", () => {
         const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
 
         const originalKey = generateAesKeyBytes();
-        const aad = encodeUtf8("some-render-id");
+        const aad = encodeUtf8("premium");
 
         const sealed = await sealEcdhP256(originalKey, pubKey, aad);
         await expect(unsealEcdhP256(sealed, privKey)).rejects.toThrow();
@@ -2411,23 +2414,23 @@ describe("keyName (role-based access)", () => {
             }],
         });
 
-        // contentKeyMap should be present since keyNames differ from contentNames
-        expect(result.dcaData.contentKeyMap).toBeDefined();
-        expect(result.dcaData.contentKeyMap!["bodytext"]).toBe("premium");
-        expect(result.dcaData.contentKeyMap!["sidebar"]).toBe("premium");
-        expect(result.dcaData.contentKeyMap!["teaser"]).toBe("teaser");
+        // Each entry carries its own keyName
+        const entries = result.dcaData.issuerData["kn-issuer"].contentEncryptionKeys;
+        expect(entries.find(e => e.contentName === "bodytext")?.keyName).toBe("premium");
+        expect(entries.find(e => e.contentName === "sidebar")?.keyName).toBe("premium");
+        expect(entries.find(e => e.contentName === "teaser")?.keyName).toBe("teaser");
 
         // All three items are sealed for the issuer
-        expect(result.dcaData.issuerData["kn-issuer"].contentEncryptionKeys.map(k => k.contentName)).toEqual(
+        expect(entries.map(k => k.contentName)).toEqual(
             expect.arrayContaining(["bodytext", "sidebar", "teaser"]),
         );
 
-        // Each item has its own contentSealData (AAD includes keyName when it differs from contentName)
+        // Each item has its own contentSealData with unified AAD: domain|resourceId|contentName|keyName
         expect(result.dcaData.contentSealData["bodytext"].aad).toBe(
-            "keyname.example.com|kn-article-1|bodytext|premium|2",
+            "keyname.example.com|kn-article-1|bodytext|premium",
         );
         expect(result.dcaData.contentSealData["sidebar"].aad).toBe(
-            "keyname.example.com|kn-article-1|sidebar|premium|2",
+            "keyname.example.com|kn-article-1|sidebar|premium",
         );
     });
 
@@ -2563,7 +2566,6 @@ describe("keyName (role-based access)", () => {
             {
                 resourceJWT: result.dcaData.resourceJWT,
                 contentEncryptionKeys: result.dcaData.issuerData["gkn-issuer"].contentEncryptionKeys,
-                contentKeyMap: result.dcaData.contentKeyMap,
             },
             { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
         );
@@ -2622,12 +2624,11 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // Unlock with contentKeyMap for keyName resolution
+        // keyName resolution uses the keyName field on each entry
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
                 contentEncryptionKeys: result.dcaData.issuerData["v2kn-issuer"].contentEncryptionKeys,
-                contentKeyMap: result.dcaData.contentKeyMap,
             },
             { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
         );
@@ -2645,7 +2646,7 @@ describe("keyName (role-based access)", () => {
         expect(decodeUtf8(decrypted)).toBe("v2 premium");
     });
 
-    it("contentKeyMap is omitted when all keyNames equal contentNames", async () => {
+    it("keyName defaults to contentName when not explicitly set", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2668,8 +2669,9 @@ describe("keyName (role-based access)", () => {
             }],
         });
 
-        // No explicit keyNames → contentKeyMap should not be present
-        expect(result.dcaData.contentKeyMap).toBeUndefined();
+        // No explicit keyName → defaults to contentName
+        const entry = result.dcaData.issuerData["nokm-issuer"].contentEncryptionKeys[0];
+        expect(entry.keyName).toBe("bodytext");
     });
 
     it("share link token with keyNames grants all matching content items", async () => {
@@ -2716,7 +2718,6 @@ describe("keyName (role-based access)", () => {
             resourceJWT: result.dcaData.resourceJWT,
             contentEncryptionKeys: result.dcaData.issuerData["skn-issuer"].contentEncryptionKeys,
             shareToken,
-            contentKeyMap: result.dcaData.contentKeyMap,
         });
 
         // Should grant body + sidebar (keyName "premium"), but not teaser
@@ -2756,7 +2757,7 @@ describe("keyName (role-based access)", () => {
         expect(result.dcaData.issuerData["premium-issuer"].contentEncryptionKeys.find(k => k.contentName === "teaser")).toBeUndefined();
     });
 
-    it("grantedKeyNames without contentKeyMap falls back to treating keyNames as contentNames", async () => {
+    it("grantedKeyNames resolves via entry keyName (defaults to contentName)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
@@ -2765,7 +2766,7 @@ describe("keyName (role-based access)", () => {
             periodSecret: keys.periodSecret,
         });
 
-        // No keyName on content items → no contentKeyMap
+        // No explicit keyName → defaults to contentName "bodytext"
         const result = await publisher.render({
             resourceId: "fb-article",
             contentItems: [
@@ -2780,6 +2781,10 @@ describe("keyName (role-based access)", () => {
             }],
         });
 
+        // Verify entry has keyName defaulted to contentName
+        const entry = result.dcaData.issuerData["fb-issuer"].contentEncryptionKeys[0];
+        expect(entry.keyName).toBe("bodytext");
+
         const issuer = createDcaIssuer({
             issuerName: "fb-issuer",
             privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
@@ -2789,12 +2794,11 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // Use grantedKeyNames with no contentKeyMap — should treat "bodytext" as keyName
+        // grantedKeyNames resolves via entry.keyName
         const response = await issuer.unlock(
             {
                 resourceJWT: result.dcaData.resourceJWT,
                 contentEncryptionKeys: result.dcaData.issuerData["fb-issuer"].contentEncryptionKeys,
-                // no contentKeyMap
             },
             { grantedKeyNames: ["bodytext"], deliveryMode: "contentKey" },
         );
@@ -2810,5 +2814,56 @@ describe("keyName (role-based access)", () => {
             encodeUtf8(seal.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("Fallback content");
+    });
+
+    it("rejects cross-tier key substitution (keyName AAD binding)", async () => {
+        const keys = await generateTestKeys();
+
+        const publisher = createDcaPublisher({
+            domain: "aad.example.com",
+            signingKeyPem: keys.signingPems.privateKeyPem,
+            periodSecret: keys.periodSecret,
+        });
+
+        const result = await publisher.render({
+            resourceId: "aad-article",
+            contentItems: [
+                { contentName: "body", keyName: "premium", content: "Premium body" },
+                { contentName: "teaser", keyName: "free", content: "Free teaser" },
+            ],
+            issuers: [{
+                issuerName: "aad-issuer",
+                publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
+                keyId: "aad-1",
+                unlockUrl: "https://aad.test/unlock",
+                keyNames: ["premium", "free"],
+            }],
+        });
+
+        const issuer = createDcaIssuer({
+            issuerName: "aad-issuer",
+            privateKeyPem: keys.issuerEcdhPems.privateKeyPem,
+            keyId: "aad-1",
+            trustedPublisherKeys: {
+                "aad.example.com": keys.signingPems.publicKeyPem,
+            },
+        });
+
+        // Tamper: swap the "free" entry's keyName to "premium" to try to get it unsealed
+        const entries = result.dcaData.issuerData["aad-issuer"].contentEncryptionKeys;
+        const tamperedEntries = entries.map(e =>
+            e.contentName === "teaser" ? { ...e, keyName: "premium" } : e,
+        );
+
+        // Unseal should fail — the sealed bytes were AAD-bound to "free", not "premium"
+        await expect(
+            issuer.unlock(
+                {
+                    resourceJWT: result.dcaData.resourceJWT,
+                    contentEncryptionKeys: tamperedEntries,
+                },
+                { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
+            ),
+        ).rejects.toThrow();
     });
 });

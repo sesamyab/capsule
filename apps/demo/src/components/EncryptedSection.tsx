@@ -100,8 +100,10 @@ export function EncryptedSection({
           const page = client.parsePage();
           pageRef.current = page;
 
-          // Resolve keyName from DCA contentKeyMap (falls back to contentName)
-          const resolvedKeyName = page.dcaData.contentKeyMap?.[contentName] ?? contentName;
+          // Resolve keyName from the current issuer's entries (falls back to contentName)
+          const issuerRecord = page.dcaData.issuerData[issuerName];
+          const issuerEntries = issuerRecord?.contentEncryptionKeys ?? [];
+          const resolvedKeyName = issuerEntries.find(e => (e.contentName ?? "default") === contentName)?.keyName ?? contentName;
           keyNameRef.current = resolvedKeyName;
 
           const contentNames = Object.keys(page.dcaData.contentSealData);
