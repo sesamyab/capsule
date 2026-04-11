@@ -1,5 +1,17 @@
 # @sesamy/demo-astro
 
+## 0.6.0
+
+### Minor Changes
+
+- [#28](https://github.com/sesamyab/capsule/pull/28) [`21315f2`](https://github.com/sesamyab/capsule/commit/21315f22c95a3db88ff43a20a502ca8eb3ad74fa) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Remove the renderId from keys
+
+### Patch Changes
+
+- Updated dependencies [[`21315f2`](https://github.com/sesamyab/capsule/commit/21315f22c95a3db88ff43a20a502ca8eb3ad74fa)]:
+  - @sesamy/capsule@0.11.0
+  - @sesamy/capsule-server@0.10.0
+
 ## 0.5.0
 
 ### Minor Changes
