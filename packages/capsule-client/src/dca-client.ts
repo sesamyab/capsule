@@ -52,7 +52,7 @@ export interface DcaData {
             contentName?: string;
             keyName?: string;
             contentKey: string;
-            periodKeys: Array<{ bucket: string; key: string }>;
+            periodKeys: Array<{ bucket: string; sealedKey: string }>;
         }>;
         unlockUrl: string;
         keyId: string;

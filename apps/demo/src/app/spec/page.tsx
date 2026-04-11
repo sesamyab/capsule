@@ -133,7 +133,7 @@ const result = await publisher.render({
         <p>
           In v2, integrity of sealed key blobs is guaranteed by{" "}
           <strong>seal AAD</strong> rather than a separate <code>issuerJWT</code>.
-          The <code>renderId</code> (from the signed <code>resourceJWT</code>) is
+          The <code>keyName</code> (from each sealed-key entry) is
           used as AAD during AES-GCM sealing, so any substitution or tampering of
           sealed blobs causes a GCM authentication failure at unseal time. This
           replaces the v1 approach of signing per-issuer SHA-256 hash proofs in a
