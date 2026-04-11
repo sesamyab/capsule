@@ -1,6 +1,6 @@
 {
   "name": "@sesamy/capsule",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Client-side decryption library for Capsule - Secure article unlocking using Web Crypto API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
