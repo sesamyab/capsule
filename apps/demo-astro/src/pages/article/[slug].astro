@@ -1,13 +1,12 @@
 ---
 /**
  * Article Page - DCA Encrypted Content
- * 
+ *
  * Uses the DCA publisher for server-side encryption and DcaClient for
  * client-side decryption.
- * 
+ *
  * View Page Source to see:
- * - script.dca-data with signed JWTs and sealed keys
- * - template.dca-sealed-content with AES-256-GCM ciphertext
+ * - script.dca-manifest with signed JWT, wrapped keys, and AES-256-GCM ciphertext
  */
 
 import Layout from "../../layouts/Layout.astro";
@@ -35,17 +34,17 @@ const contentName = "bodytext";
   This page demonstrates the DCA (Delegated Content Access) standard.
   
   Uses @sesamy/capsule DcaClient:
-  - Parses dca-data script and sealed content from DOM
-  - Calls issuer /api/unlock endpoint to get period keys
+  - Parses the dca-manifest script from the DOM
+  - Calls issuer /api/unlock endpoint to get wrapKeys
   - Decrypts content locally with AES-256-GCM + AAD
   
   View source to see the clean DCA HTML structure!
   ============================================================
   -->
 
-  <!-- DCA data and sealed content embedded by publisher -->
+  <!-- DCA manifest embedded by publisher -->
   {dcaResult && (
-    <Fragment set:html={dcaResult.result.html.dcaDataScript + dcaResult.result.html.sealedContentTemplate} />
+    <Fragment set:html={dcaResult.result.html.manifestScript} />
   )}
 
   <main class="article-page">
@@ -116,15 +115,14 @@ const contentName = "bodytext";
 
     log('DCA client initialized', 'info');
 
-    // Parse DCA data from the page
+    // Parse the DCA manifest from the page
     let page: ReturnType<typeof client.parsePage> | null = null;
     try {
       page = client.parsePage();
-      const contentNames = Object.keys(page.dcaData.contentSealData);
-      log(`Found DCA data: ${contentNames.length} content item(s)`, 'info');
-      log(`Resource: ${page.dcaData.resource.resourceId}`, 'info');
+      const contentNames = Object.keys(page.manifest.content);
+      log(`Found DCA manifest: ${contentNames.length} content item(s)`, 'info');
     } catch (e) {
-      log('No DCA data found on page', 'error');
+      log('No DCA manifest found on page', 'error');
     }
 
     const unlockBtn = document.getElementById('unlock-btn');

@@ -81,10 +81,139 @@ export default function ChangelogPage() {
         </p>
 
         {/* ================================================================
+            v0.10
+            ================================================================ */}
+
+        <h2>v0.10 <VersionBadge version="Latest" /></h2>
+        <p>
+          v0.10 is a pre-release terminology and structure migration. Crypto vocabulary is
+          aligned with WebCrypto, time-based naming is removed, access control is aligned
+          with OAuth scopes, and the three top-level key/ciphertext maps are merged into a
+          single <code>content</code> map. The wire format version is <code>&quot;0.10&quot;</code>.
+        </p>
+
+        {/* ---- Terminology & structure migration ---- */}
+
+        <h3>Terminology &amp; Structure Migration</h3>
+        <SectionCard color="rose">
+          <CompatBadge breaking />
+
+          <h4>What Changed</h4>
+          <p>
+            The protocol is renamed and restructured end-to-end. The wire format version
+            is reset to <code>&quot;1&quot;</code> for the pre-release.
+          </p>
+          <ul>
+            <li><strong>Crypto vocabulary</strong> — aligned with WebCrypto: <code>seal</code>/<code>sealed</code>/<code>sealing</code> → <code>wrap</code>/<code>wrapped</code>/<code>wrapping</code>, and <code>nonce</code> → <code>iv</code> on content items.</li>
+            <li><strong>Time-based naming removed</strong> — <code>periodKey</code> → <code>wrapKey</code>, <code>periodSecret</code> → <code>rotationSecret</code>, <code>bucket</code>/<code>t</code> → <code>kid</code>.</li>
+            <li><strong>OAuth-aligned access control</strong> — <code>keyName</code>/<code>keyNames</code> → <code>scope</code>/<code>scopes</code>.</li>
+            <li><strong>Manifest rename</strong> — <code>DcaData</code> → <code>DcaManifest</code>, and the embedded <code>&lt;template class=&quot;dca-data&quot;&gt;</code> → <code>&lt;template class=&quot;dca-manifest&quot;&gt;</code>.</li>
+            <li><strong>Top-level map merge</strong> — <code>contentSealData</code>, <code>sealedContentKeys</code>, and <code>sealedContent</code> are merged into a single <code>content</code> map keyed by <code>contentName</code>. The separate <code>&lt;template class=&quot;dca-sealed-content&quot;&gt;</code> is eliminated — the manifest now carries ciphertext inline.</li>
+            <li><strong>Field renames</strong> — <code>issuerData</code> → <code>issuers</code>, <code>contentEncryptionKeys</code> → <code>keys</code>.</li>
+            <li><strong>Delivery modes</strong> — <code>deliveryMode: &quot;contentKey&quot;</code> → <code>deliveryMode: &quot;direct&quot;</code>, and <code>deliveryMode: &quot;periodKey&quot;</code> → <code>deliveryMode: &quot;wrapKey&quot;</code>.</li>
+            <li><strong>Version bump</strong> — <code>version: &quot;2&quot;</code> → <code>version: &quot;1&quot;</code> (reset for pre-release).</li>
+          </ul>
+
+          <h4>Why</h4>
+          <p>
+            The previous vocabulary mixed metaphors (&quot;seal&quot; vs WebCrypto&apos;s <code>wrapKey</code>),
+            encoded a rotation strategy into field names (&quot;period&quot;, &quot;bucket&quot;), and used
+            a project-specific access term (&quot;keyName&quot;) instead of the OAuth <code>scope</code>
+            that most consumers already understand. Splitting content across three parallel
+            top-level maps (seal data, sealed keys, sealed content) also made the manifest
+            harder to reason about than a single content-keyed map.
+          </p>
+
+          <h4>Current Wire Format</h4>
+          <CodeBlock>{`// DcaManifest — embedded as <script class="dca-manifest"> JSON
+{
+  "version": "0.10",
+  "resourceJWT": "eyJ…",
+  "issuers": {
+    "sesamy": {
+      "keys": [
+        {
+          "contentName": "bodytext",
+          "scope": "premium",
+          "contentKey": "wrapped…",        // wrapped content key (direct delivery)
+          "wrapKeys": [                    // wrapped rotation keys (cacheable)
+            { "kid": "260409T11", "key": "wrapped…" },
+            { "kid": "260409T12", "key": "wrapped…" }
+          ]
+        }
+      ]
+    }
+  },
+  "content": {
+    "bodytext": {
+      "contentType": "text/html",
+      "iv": "base64url…",
+      "ciphertext": "base64url…",
+      "kid": "260409T11"                   // wrap key id used for this ciphertext
+    }
+  }
+}
+
+// resourceJWT payload (decoded)
+{
+  "iss": "news.example.com",
+  "sub": "article-123",
+  "iat": 1735689600,
+  "jti": "abc123def456",
+  "scopes": ["premium"],                   // renamed from keyNames
+  "data": { "section": "politics" }
+}
+
+// Unlock request
+POST /api/unlock
+{
+  "resourceJWT": "eyJ…",
+  "keys": [
+    { "contentName": "bodytext", "scope": "premium", "contentKey": "wrapped…", "wrapKeys": [ … ] }
+  ],
+  "clientPublicKey": "…"                   // optional
+}
+
+// Issuer grant
+const result = await issuer.unlock(request, {
+  grantedScopes: ["premium"],              // renamed from grantedKeyNames
+  deliveryMode: "wrapKey",                 // or "direct" (was "periodKey" / "contentKey")
+});`}</CodeBlock>
+
+          <h4>Migration</h4>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem", marginBottom: "0.5rem" }}>
+            <thead>
+              <tr>
+                <th style={th}>Component</th>
+                <th style={th}>Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={td}><strong>Publisher</strong></td>
+                <td style={td}>Update to <code>@sesamy/capsule</code> v0.10 — <code>render()</code> emits the new manifest shape with inline ciphertext</td>
+              </tr>
+              <tr>
+                <td style={td}><strong>Client</strong></td>
+                <td style={td}>Update to <code>@sesamy/capsule-client</code> v0.10 — reads <code>content</code> and <code>issuers[name].keys</code>, uses <code>iv</code>/<code>kid</code></td>
+              </tr>
+              <tr>
+                <td style={td}><strong>Service</strong></td>
+                <td style={td}>Update to <code>@sesamy/capsule-server</code> v0.10 — <code>issuer.unlock()</code> accepts <code>keys</code> and <code>grantedScopes</code>, emits <code>direct</code>/<code>wrapKey</code> delivery</td>
+              </tr>
+              <tr>
+                <td style={td}><strong>Wire format</strong></td>
+                <td style={td}><code>version: &quot;1&quot;</code> (reset). Pre-release — no backwards compatibility shims for the old <code>&quot;2&quot;</code> shape</td>
+              </tr>
+            </tbody>
+          </table>
+        </SectionCard>
+
+        {/* ================================================================
             v0.9
             ================================================================ */}
 
-        <h2>v0.9 <VersionBadge version="Latest" /></h2>
+        <h2>v0.9</h2>
         <p>
           v0.9 introduces two changes: entitlement claims in the resourceJWT and a flattened
           wire format for content encryption keys.

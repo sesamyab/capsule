@@ -9,9 +9,9 @@ export default function ServersPage() {
         <p>
           Capsule implements <strong>Delegated Content Access (DCA)</strong> — a
           two-role delegation model. The <strong>Publisher</strong> encrypts
-          content and seals keys. The <strong>Issuer</strong> verifies access and
-          unseals keys. The <code>@sesamy/capsule-server</code> package provides
-          both roles.
+          content and wraps keys. The <strong>Issuer</strong> verifies access
+          and unwraps keys. The <code>@sesamy/capsule-server</code> package
+          provides both roles.
         </p>
 
         <h2>Quick Start</h2>
@@ -20,15 +20,15 @@ export default function ServersPage() {
         <h3>Publisher: Encrypting Content</h3>
         <p>
           The publisher encrypts content at render time. No network calls — all
-          key derivation is local from a <code>periodSecret</code>:
+          key derivation is local from a <code>rotationSecret</code>:
         </p>
         <CodeBlock>{`import { createDcaPublisher } from '@sesamy/capsule-server';
 
 const publisher = createDcaPublisher({
   domain: "news.example.com",
   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
-  periodSecret: process.env.PERIOD_SECRET!,
-  periodDurationHours: 1, // default: 1-hour rotation
+  rotationSecret: process.env.ROTATION_SECRET!,
+  rotationIntervalHours: 1, // default: 1-hour rotation
 });
 
 const result = await publisher.render({
@@ -48,13 +48,12 @@ const result = await publisher.render({
   resourceData: { title: "My Article", author: "Jane Doe" },
 });
 
-// result.html.dcaDataScript   → <script> tag to embed in <head>
-// result.html.sealedContentTemplate → <template> with encrypted content
-// result.json                 → JSON API variant (for SPAs/mobile)`}</CodeBlock>
+// result.html.manifestScript → <script> tag to embed in <head>
+// result.json                → JSON API variant (for SPAs/mobile)`}</CodeBlock>
 
         <h3>Issuer: Unlock Endpoint</h3>
         <p>
-          The issuer verifies JWTs, checks access, and unseals keys:
+          The issuer verifies JWTs, checks access, and unwraps keys:
         </p>
         <CodeBlock>{`import { createDcaIssuer } from '@sesamy/capsule-server';
 
@@ -71,7 +70,7 @@ const issuer = createDcaIssuer({
 app.post('/api/unlock', async (req, res) => {
   const result = await issuer.unlock(req.body, {
     grantedContentNames: ["bodytext"], // Your access decision
-    deliveryMode: "contentKey",        // or "periodKey" for caching
+    deliveryMode: "direct",            // or "wrapKey" for caching
   });
   res.json(result);
 });`}</CodeBlock>
@@ -81,21 +80,21 @@ app.post('/api/unlock', async (req, res) => {
         <h3>Publisher (CMS/Build Side)</h3>
         <ul>
           <li>✅ Encrypts content with AES-256-GCM + AAD</li>
-          <li>✅ Derives periodKeys locally via HKDF (from <code>periodSecret</code>)</li>
-          <li>✅ Seals contentKeys and periodKeys for each issuer (ECDH P-256)</li>
-          <li>✅ Signs <code>resourceJWT</code> and <code>issuerJWT</code> (ES256)</li>
-          <li>✅ Embeds DCA data and sealed content in HTML</li>
+          <li>✅ Derives wrapKeys locally via HKDF (from <code>rotationSecret</code>)</li>
+          <li>✅ Wraps contentKeys and wrapKeys for each issuer (ECDH P-256)</li>
+          <li>✅ Signs <code>resourceJWT</code> (ES256)</li>
+          <li>✅ Embeds the DCA manifest and wrapped content in HTML</li>
           <li>❌ Never has user keys or subscription data</li>
         </ul>
 
         <h3>Issuer (Unlock Server)</h3>
         <ul>
           <li>✅ Verifies publisher JWT signatures (trusted-publisher allowlist)</li>
-          <li>✅ Verifies integrity proofs for sealed blobs</li>
+          <li>✅ Verifies integrity proofs for wrapped blobs</li>
           <li>✅ Makes access decisions (subscription check, share token, etc.)</li>
-          <li>✅ Unseals keys with its ECDH private key</li>
+          <li>✅ Unwraps keys with its ECDH private key</li>
           <li>✅ Optionally wraps keys with client&apos;s RSA public key (client-bound transport)</li>
-          <li>❌ Never sees article content or the publisher&apos;s <code>periodSecret</code></li>
+          <li>❌ Never sees article content or the publisher&apos;s <code>rotationSecret</code></li>
         </ul>
 
         <h3>Flow Diagram</h3>
@@ -104,19 +103,19 @@ app.post('/api/unlock', async (req, res) => {
 │       Publisher          │
 │  (Content + Encryption)  │
 │                          │
-│  periodSecret (local)    │
+│  rotationSecret (local)  │
 │  ES256 signing key       │
 └──────────┬───────────────┘
            │
-           │ 1. Render: encrypt content, seal keys,
-           │    sign JWTs, embed in HTML
+           │ 1. Render: encrypt content, wrap keys,
+           │    sign resourceJWT, embed in HTML
            ▼
 ┌─────────────────────────┐
 │     Static HTML / CDN   │
 │                          │
-│  dca-data (JSON)         │
-│  sealed content          │
-│  resourceJWT + issuerJWT │
+│  dca-manifest (JSON)     │
+│  wrapped content         │
+│  resourceJWT             │
 └──────────┬───────────────┘
            │
            │ 2. Browser loads page, finds DCA content
@@ -127,10 +126,10 @@ app.post('/api/unlock', async (req, res) => {
 │                 │◄────│                      │
 └─────────────────┘     │  Verifies JWTs       │
   3. Send unlock req    │  Checks access       │
-     (sealed keys,      │  Unseals with ECDH   │
-      JWTs, keyId)      │  private key         │
+     (wrapped keys,     │  Unwraps with ECDH   │
+      JWT, kid)         │  private key         │
                         └──────────────────────┘
-  4. Receive unsealed
+  4. Receive unwrapped
      keys, decrypt
      content locally
       `}</pre>
@@ -144,10 +143,10 @@ app.post('/api/unlock', async (req, res) => {
         <ol>
           <li>
             <strong>ES256 signing key</strong> (ECDSA P-256): for signing{" "}
-            <code>resourceJWT</code>, <code>issuerJWT</code>, and share link tokens
+            <code>resourceJWT</code> and share link tokens
           </li>
           <li>
-            <strong>Period secret</strong>: for HKDF-based periodKey derivation
+            <strong>Rotation secret</strong>: for HKDF-based wrapKey derivation
             (never shared with the issuer)
           </li>
         </ol>
@@ -160,16 +159,16 @@ const pem = await exportP256KeyPairPem(keyPair);
 // pem.privateKeyPem → store in KMS / env var
 // pem.publicKeyPem  → share with issuers
 
-// Generate a period secret (do this once, store securely)
+// Generate a rotation secret (do this once, store securely)
 import crypto from 'crypto';
-const periodSecret = crypto.randomBytes(32).toString('base64');`}</CodeBlock>
+const rotationSecret = crypto.randomBytes(32).toString('base64');`}</CodeBlock>
 
         <h3>DcaPublisherConfig</h3>
         <CodeBlock>{`interface DcaPublisherConfig {
-  domain: string;              // Publisher domain (e.g., "news.example.com")
-  signingKeyPem: string;       // ES256 private key PEM
-  periodSecret: string | Uint8Array; // Period secret (base64 or raw bytes)
-  periodDurationHours?: number; // Period rotation interval (default: 1 hour)
+  domain: string;                    // Publisher domain (e.g., "news.example.com")
+  signingKeyPem: string;             // ES256 private key PEM
+  rotationSecret: string | Uint8Array; // Rotation secret (base64 or raw bytes)
+  rotationIntervalHours?: number;    // WrapKey rotation interval (default: 1 hour)
 }`}</CodeBlock>
 
         <h3>Render Options</h3>
@@ -177,6 +176,8 @@ const periodSecret = crypto.randomBytes(32).toString('base64');`}</CodeBlock>
   resourceId: string;          // Unique article/resource identifier
   contentItems: Array<{
     contentName: string;       // e.g., "bodytext", "sidebar"
+    scope?: string;            // Access scope (defaults to contentName).
+                               // Items sharing a scope share a wrapKey.
     content: string;           // Plaintext content to encrypt
     contentType?: string;      // MIME type (default: "text/html")
   }>;
@@ -185,38 +186,77 @@ const periodSecret = crypto.randomBytes(32).toString('base64');`}</CodeBlock>
     publicKeyPem: string;      // Issuer's ECDH P-256 public key PEM
     keyId: string;             // Identifies which issuer private key matches
     unlockUrl: string;         // Issuer's unlock endpoint URL
-    contentNames: string[];    // Which content items this issuer gets keys for
+    contentNames?: string[];   // Which content items this issuer gets keys for
+    scopes?: string[];         // Or: which scopes this issuer gets keys for
   }>;
   resourceData?: Record<string, unknown>; // Publisher metadata for access decisions
 }`}</CodeBlock>
 
         <h3>Render Result</h3>
         <p>
-          The publisher returns HTML strings ready to embed, plus a JSON variant
-          for headless/SPA use:
+          The publisher returns a single HTML string ready to embed, plus a JSON
+          variant for headless/SPA use. The manifest is self-contained — per
+          v1, ciphertext lives inside the manifest, so there is no separate
+          content template:
         </p>
         <CodeBlock>{`const result = await publisher.render({ ... });
 
 // HTML embedding (SSR / static site):
-// Embed in <head>:
-result.html.dcaDataScript;
-// → <script type="application/json" class="dca-data">{...}</script>
+// Embed in <head> (or anywhere in the document):
+result.html.manifestScript;
+// → <script type="application/json" class="dca-manifest">{...}</script>
 
-// Embed in <body> where premium content goes:
-result.html.sealedContentTemplate;
-// → <template class="dca-sealed-content">
-//     <div data-dca-content-name="bodytext">base64url_ciphertext</div>
-//   </template>
+// Target elements for decrypted content use data-dca-content-name:
+// <div data-dca-content-name="bodytext"></div>
 
-// JSON API (headless CMS / mobile):
+// JSON API (headless CMS / mobile) — this IS the manifest:
 result.json;
-// → { version, resource, resourceJWT, issuerJWT, ..., sealedContent }`}</CodeBlock>
+// → { version: "0.10", resourceJWT, content: { ... }, issuers: { ... } }`}</CodeBlock>
+
+        <h3>Manifest Shape</h3>
+        <p>
+          For reference, the manifest embedded in the{" "}
+          <code>dca-manifest</code> script has this shape:
+        </p>
+        <CodeBlock language="json">{`{
+  "version": "0.10",
+  "resourceJWT": "eyJhbGciOi...",
+  "content": {
+    "bodytext": {
+      "contentType": "text/html",
+      "iv": "base64url_12_bytes",
+      "aad": "...",
+      "ciphertext": "base64url_gcm_output",
+      "wrappedContentKey": [
+        { "kid": "251023T13", "iv": "...", "ciphertext": "..." },
+        { "kid": "251023T14", "iv": "...", "ciphertext": "..." }
+      ]
+    }
+  },
+  "issuers": {
+    "sesamy": {
+      "unlockUrl": "https://api.sesamy.com/unlock",
+      "keyId": "2025-10",
+      "keys": [
+        {
+          "contentName": "bodytext",
+          "scope": "bodytext",
+          "contentKey": "base64url_wrapped_for_issuer",
+          "wrapKeys": [
+            { "kid": "251023T13", "key": "base64url_wrapped_for_issuer" },
+            { "kid": "251023T14", "key": "base64url_wrapped_for_issuer" }
+          ]
+        }
+      ]
+    }
+  }
+}`}</CodeBlock>
 
         <h2>Issuer Configuration</h2>
 
         <h3>Key Setup</h3>
         <p>
-          The issuer needs an ECDH P-256 key pair for unsealing:
+          The issuer needs an ECDH P-256 key pair for unwrapping:
         </p>
         <CodeBlock>{`import { generateEcdhP256KeyPair, exportP256KeyPairPem } from '@sesamy/capsule-server';
 
@@ -224,7 +264,7 @@ result.json;
 const keyPair = await generateEcdhP256KeyPair();
 const pem = await exportP256KeyPairPem(keyPair);
 // pem.privateKeyPem → store in KMS / env var (issuer keeps this)
-// pem.publicKeyPem  → share with publishers (they seal keys with it)`}</CodeBlock>
+// pem.publicKeyPem  → share with publishers (they wrap keys with it)`}</CodeBlock>
 
         <h3>DcaIssuerServerConfig</h3>
         <CodeBlock>{`interface DcaIssuerServerConfig {
@@ -266,17 +306,19 @@ const pem = await exportP256KeyPairPem(keyPair);
 
         <h3>Access Decision</h3>
         <p>
-          The issuer decides which content names to grant and how to deliver
-          keys:
+          The issuer decides which content items (or scopes) to grant and how
+          to deliver keys:
         </p>
         <CodeBlock>{`const result = await issuer.unlock(request, {
-  // Which content items to grant access to
+  // Which content items to grant access to (by contentName)…
   grantedContentNames: ["bodytext"],
+  // …or which scopes to grant (mutually exclusive with grantedContentNames)
+  // grantedScopes: ["premium"],
 
   // Key delivery mode:
-  //   "contentKey" — return the contentKey directly (most common)
-  //   "periodKey"  — return periodKeys (client caches and unwraps locally)
-  deliveryMode: "contentKey",
+  //   "direct"  — return the contentKey directly (most common)
+  //   "wrapKey" — return wrapKeys (client caches and unwraps locally)
+  deliveryMode: "direct",
 });`}</CodeBlock>
 
         <h3>Full Unlock Handler (Next.js)</h3>
@@ -291,7 +333,7 @@ export async function POST(request: Request) {
   // Share link token flow
   if (body.shareToken) {
     const result = await issuer.unlockWithShareToken(body, {
-      deliveryMode: "contentKey",
+      deliveryMode: "direct",
       onShareToken: async (payload) => {
         console.log(\`Share: \${payload.resourceId}, jti=\${payload.jti}\`);
         // Throw to reject: throw new Error("Usage limit exceeded");
@@ -308,7 +350,7 @@ export async function POST(request: Request) {
 
   const result = await issuer.unlock(body, {
     grantedContentNames: ["bodytext"],
-    deliveryMode: "contentKey",
+    deliveryMode: "direct",
   });
 
   return Response.json(result);
@@ -316,39 +358,38 @@ export async function POST(request: Request) {
 
         <h3>Pre-Flight Verification</h3>
         <p>
-          Verify request JWTs without unsealing, useful for access checks before
-          committing:
+          Verify request JWTs without unwrapping, useful for access checks
+          before committing:
         </p>
         <CodeBlock>{`const verified = await issuer.verify(request);
 // verified.resource  — the verified DcaResource (publisher domain, resourceId, etc.)
-// verified.sealed    — the sealed keys (authenticated via issuerJWT integrity proofs)
 // verified.domain    — normalised publisher domain`}</CodeBlock>
 
-        <h2>Time-Period Keys</h2>
+        <h2>WrapKeys and Rotation</h2>
         <p>
-          The publisher derives <strong>periodKeys</strong> locally using HKDF
-          from the <code>periodSecret</code>. These rotate automatically based
-          on <code>periodDurationHours</code>, enabling subscription revocation
-          without re-encrypting content.
+          The publisher derives <strong>wrapKeys</strong> locally using HKDF
+          from the <code>rotationSecret</code>. These rotate automatically
+          based on <code>rotationIntervalHours</code>, enabling subscription
+          revocation without re-encrypting content.
         </p>
 
         <h3>How It Works</h3>
-        <CodeBlock>{`// Period key derivation (internal to the publisher):
-//   IKM  = periodSecret
-//   salt = contentName (makes keys content-specific)
-//   info = "dca|" + timeBucket (e.g., "dca|251023T13")
+        <CodeBlock>{`// WrapKey derivation (internal to the publisher):
+//   IKM  = rotationSecret
+//   salt = scope (items sharing a scope share a wrapKey)
+//   info = "dca|" + kid (e.g., "dca|251023T13")
 //   len  = 32 bytes (AES-256)
 //
-// The publisher wraps each contentKey with the current and next periodKeys
-// (for rotation overlap). Both are sealed with the issuer's ECDH key.
+// The publisher wraps each contentKey with the current and next wrapKeys
+// (for rotation overlap). Both are wrapped with the issuer's ECDH key.
 //
 // Revocation flow:
 //   1. User subscription lapses
-//   2. Issuer refuses to unseal keys for that user
-//   3. When the period rotates, the browser no longer has a valid periodKey
-//   4. Even cached periodKeys expire — no need to re-encrypt content`}</CodeBlock>
+//   2. Issuer refuses to unwrap keys for that user
+//   3. When the kid rotates, the browser no longer has a valid wrapKey
+//   4. Even cached wrapKeys expire — no need to re-encrypt content`}</CodeBlock>
 
-        <h3>Period Rotation Table</h3>
+        <h3>Rotation Table</h3>
         <table
           style={{
             width: "100%",
@@ -375,7 +416,7 @@ export async function POST(request: Request) {
                   borderBottom: "2px solid #333",
                 }}
               >
-                Bucket Format
+                kid Format
               </th>
               <th
                 style={{
@@ -391,7 +432,7 @@ export async function POST(request: Request) {
           <tbody>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>periodDurationHours: 1</code> (default)
+                <code>rotationIntervalHours: 1</code> (default)
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 <code>251023T13</code>
@@ -402,7 +443,7 @@ export async function POST(request: Request) {
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                <code>periodDurationHours: 24</code>
+                <code>rotationIntervalHours: 24</code>
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 <code>251023T00</code>
@@ -447,8 +488,8 @@ export async function POST(request: Request) {
             share the public key PEM with each publisher
           </li>
           <li>
-            <strong>Period secret</strong> — publisher-only; never shared with
-            the issuer (DCA boundary)
+            <strong>Rotation secret</strong> — publisher-only; never shared
+            with the issuer (DCA boundary)
           </li>
           <li>
             <strong>One key pair per role</strong> — do not reuse keys across
@@ -467,14 +508,14 @@ export async function POST(request: Request) {
         <h3>Token Generation (Publisher)</h3>
         <p>
           The publisher creates share tokens using the same signing key that
-          signs <code>resourceJWT</code> and <code>issuerJWT</code>:
+          signs <code>resourceJWT</code>:
         </p>
         <CodeBlock>{`import { createDcaPublisher } from '@sesamy/capsule-server';
 
 const publisher = createDcaPublisher({
   domain: "news.example.com",
   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
-  periodSecret: process.env.PERIOD_SECRET!,
+  rotationSecret: process.env.ROTATION_SECRET!,
 });
 
 const token = await publisher.createShareLinkToken({
@@ -508,7 +549,7 @@ const issuer = createDcaIssuer({
 // In /api/unlock handler:
 if (body.shareToken) {
   const result = await issuer.unlockWithShareToken(body, {
-    deliveryMode: "contentKey",
+    deliveryMode: "direct",
     onShareToken: async (payload) => {
       // Optional: track usage, enforce maxUses, audit
       console.log(\`Share token used: \${payload.jti}\`);
@@ -520,14 +561,14 @@ if (body.shareToken) {
 // Standalone verification (for pre-flight checks):
 const payload = await issuer.verifyShareToken(token, "news.example.com");`}</CodeBlock>
 
-        <h3>Why No <code>periodSecret</code> Is Needed</h3>
+        <h3>Why No <code>rotationSecret</code> Is Needed</h3>
         <p>
           The share token is purely an authorization grant — it replaces the
           subscription check. The key material already flows through the normal
-          DCA channel: the publisher seals keys with the issuer&apos;s ECDH
-          public key at render time, and the issuer unseals them with its
-          private key at unlock time. The <code>periodSecret</code> never leaves
-          the publisher.
+          DCA channel: the publisher wraps keys with the issuer&apos;s ECDH
+          public key at render time, and the issuer unwraps them with its
+          private key at unlock time. The <code>rotationSecret</code> never
+          leaves the publisher.
         </p>
 
         <h2>Node.js</h2>
@@ -545,7 +586,7 @@ const payload = await issuer.verifyShareToken(token, "news.example.com");`}</Cod
 const publisher = createDcaPublisher({
   domain: "news.example.com",
   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
-  periodSecret: process.env.PERIOD_SECRET!,
+  rotationSecret: process.env.ROTATION_SECRET!,
 });
 
 // Render encrypted article
@@ -566,8 +607,7 @@ const result = await publisher.render({
 });
 
 // Embed in HTML template:
-// <head>  \${result.html.dcaDataScript}  </head>
-// <body>  \${result.html.sealedContentTemplate}  </body>`}</CodeBlock>
+// <head>  \${result.html.manifestScript}  </head>`}</CodeBlock>
 
         <h3>Complete Issuer Example (Next.js)</h3>
         <CodeBlock>{`// app/api/unlock/route.ts
@@ -589,7 +629,7 @@ export async function POST(request: Request) {
   // Share link token flow
   if (body.shareToken) {
     return Response.json(
-      await issuer.unlockWithShareToken(body, { deliveryMode: "contentKey" })
+      await issuer.unlockWithShareToken(body, { deliveryMode: "direct" })
     );
   }
 
@@ -597,7 +637,7 @@ export async function POST(request: Request) {
   return Response.json(
     await issuer.unlock(body, {
       grantedContentNames: ["bodytext"],
-      deliveryMode: "contentKey",
+      deliveryMode: "direct",
     })
   );
 }`}</CodeBlock>
@@ -610,7 +650,7 @@ export async function POST(request: Request) {
         <CodeBlock>{`import {
   // Key generation
   generateEcdsaP256KeyPair,   // ES256 signing key pair
-  generateEcdhP256KeyPair,    // ECDH P-256 sealing key pair
+  generateEcdhP256KeyPair,    // ECDH P-256 wrapping key pair
   exportP256KeyPairPem,       // Export key pair as PEM strings
   generateAesKeyBytes,        // Random 32-byte AES key
 
@@ -625,14 +665,16 @@ export async function POST(request: Request) {
   verifyJwt,                  // Verify ES256 JWT
   decodeJwtPayload,           // Decode without verification
 
-  // Sealing (ECDH P-256 / RSA-OAEP)
-  seal,                       // Seal key material for an issuer
-  unseal,                     // Unseal key material
+  // Wrapping (ECDH P-256 / RSA-OAEP)
+  wrap,                       // Wrap key material for an issuer
+  unwrap,                     // Unwrap key material
+  wrapEcdhP256,               // ECDH P-256 wrap
+  unwrapEcdhP256,             // ECDH P-256 unwrap
 
-  // Time buckets
-  formatTimeBucket,           // Format Date → "251023T13"
-  getCurrentTimeBuckets,      // Get current + next bucket
-  deriveDcaPeriodKey,         // HKDF period key derivation
+  // Rotation (kid derivation)
+  formatTimeKid,              // Format Date → "251023T13"
+  getCurrentRotationVersions, // Get current + next kid
+  deriveWrapKey,              // HKDF wrapKey derivation
 
   // Encoding
   toBase64Url, fromBase64Url, toBase64, fromBase64,
@@ -644,7 +686,7 @@ export async function POST(request: Request) {
           ECDH P-256, ES256, HKDF) available in all major languages. Below are
           low-level reference examples for the raw encryption and key-wrapping
           operations. A full DCA implementation would also need JWT signing,
-          ECDH sealing, and the DCA data format — see the{" "}
+          ECDH wrapping, and the DCA manifest format — see the{" "}
           <a href="/spec">specification</a> for details.
         </p>
 
@@ -729,7 +771,7 @@ def encrypt_article(content: str, contentKey: bytes) -> dict:
     iv = os.urandom(12)
     aesgcm = AESGCM(contentKey)
     ciphertext = aesgcm.encrypt(iv, content.encode(), None)
-    
+
     return {
         'encryptedContent': base64.b64encode(ciphertext).decode(),
         'iv': base64.b64encode(iv).decode(),
@@ -742,7 +784,7 @@ def wrap_content_key(content_key: bytes, public_key_spki: str) -> str:
     public_key = serialization.load_der_public_key(
         base64.b64decode(public_key_spki)
     )
-    
+
     # Wrap with RSA-OAEP
     encrypted = public_key.encrypt(
         content_key,
@@ -752,7 +794,7 @@ def wrap_content_key(content_key: bytes, public_key_spki: str) -> str:
             label=None
         )
     )
-    
+
     return base64.b64encode(encrypted).decode()`}</CodeBlock>
 
         <h2>Coming Soon</h2>

@@ -8,11 +8,11 @@
  *   4. Re-verifies the signed domain against the allowlist (defence-in-depth)
  *   5. Checks optional per-publisher resource constraints (allowedResourceIds)
  *   6. Makes an access decision (application-specific)
- *   7. Unseals and returns contentKeys or periodKeys to the client
+ *   7. Unwraps and returns contentKeys or wrapKeys to the client
  */
 
 import { verifyJwt, decodeJwtPayload, resourceJwtPayloadToResource } from "./dca-jwt";
-import { unseal, importIssuerPrivateKey, type DcaSealAlgorithm } from "./dca-seal";
+import { unwrap, importIssuerPrivateKey, type DcaWrapAlgorithm } from "./dca-wrap";
 import {
     toBase64Url,
     fromBase64Url,
@@ -29,8 +29,8 @@ import type {
     DcaTrustedPublisher,
     DcaUnlockRequest,
     DcaUnlockResponse,
-    DcaContentEncryptionKey,
-    DcaSealedContentEncryptionKey,
+    DcaUnlockedKey,
+    DcaIssuerKey,
     DcaShareLinkTokenPayload,
 } from "./dca-types";
 
@@ -49,7 +49,6 @@ function normalizeDomain(raw: string): string {
     if (!raw || typeof raw !== "string") {
         throw new Error("Domain must be a non-empty string");
     }
-    // Lowercase and strip trailing dots (DNS root label)
     const d = raw.toLowerCase().replace(/\.+$/, "");
     if (!DOMAIN_RE.test(d)) {
         throw new Error(`Invalid domain: "${raw}"`);
@@ -73,16 +72,10 @@ function resolvePublisherEntry(entry: string | DcaTrustedPublisher): DcaTrustedP
 // ============================================================================
 
 interface NormalisedPublisherMap {
-    /** Normalised domain → resolved publisher config */
     entries: Map<string, DcaTrustedPublisher>;
-    /** Look up a publisher by (potentially un-normalised) domain. */
     lookup(domain: string): DcaTrustedPublisher | undefined;
 }
 
-/**
- * Build a validated, normalised publisher map from config.
- * Throws eagerly on invalid domains or missing signing keys.
- */
 function buildPublisherMap(
     raw: Record<string, string | DcaTrustedPublisher>,
 ): NormalisedPublisherMap {
@@ -117,23 +110,19 @@ function buildPublisherMap(
             try {
                 return entries.get(normalizeDomain(domain));
             } catch {
-                // Malformed domain from the request → no match
                 return undefined;
             }
         },
     };
 }
 
-/**
- * Check per-publisher resource constraints (if configured).
- */
 function checkResourceConstraints(
     publisher: DcaTrustedPublisher,
     domain: string,
     resourceId: string,
 ): void {
     if (!publisher.allowedResourceIds || publisher.allowedResourceIds.length === 0) {
-        return; // no constraint configured — allow all
+        return;
     }
 
     const allowed = publisher.allowedResourceIds.some((pattern) => {
@@ -166,19 +155,16 @@ function checkResourceConstraints(
  *   },
  * });
  *
- * // In your unlock endpoint handler:
  * const response = await issuer.unlock(request, {
  *   grantedContentNames: ["bodytext"],
- *   deliveryMode: "periodKey",
+ *   deliveryMode: "wrapKey",
  * });
  * ```
  */
 export function createDcaIssuer(config: DcaIssuerServerConfig) {
-    // Validate and normalise the trusted-publisher allowlist eagerly.
-    // This surfaces configuration errors at startup rather than at request time.
     const publisherMap = buildPublisherMap(config.trustedPublisherKeys);
 
-    let privateKeyPromise: Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }> | null = null;
+    let privateKeyPromise: Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }> | null = null;
 
     function getPrivateKey() {
         if (!privateKeyPromise) {
@@ -192,12 +178,12 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
          * Process an unlock request.
          *
          * If `resourceJWT` is present, verifies the publisher's signature
-         * and trust chain before unsealing. If absent, proceeds directly
-         * to unsealing — the keyName AAD binding provides integrity.
+         * and trust chain before unwrapping. If absent, proceeds directly
+         * to unwrapping — the scope AAD binding provides integrity.
          *
          * @param request - The unlock request from the client
          * @param accessDecision - Which content to grant and how to deliver keys
-         * @returns Unlock response with decrypted key material
+         * @returns Unlock response with unwrapped key material
          */
         unlock: async (
             request: DcaUnlockRequest,
@@ -211,10 +197,6 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
          *
          * Requires `resourceJWT` — the share token is verified against the
          * publisher's signing key and bound to the resource.
-         *
-         * @param request - The unlock request (must include resourceJWT and shareToken)
-         * @param options - Optional overrides (deliveryMode, onShareToken callback)
-         * @returns Unlock response with decrypted key material
          */
         unlockWithShareToken: async (
             request: DcaUnlockRequest,
@@ -225,11 +207,6 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
 
         /**
          * Verify a share link token and return its payload.
-         * Useful for pre-flight checks or custom access logic.
-         *
-         * @param shareToken - The share link token JWT
-         * @param expectedDomain - Expected publisher domain (from the request)
-         * @returns Verified share link token payload
          */
         verifyShareToken: async (
             shareToken: string,
@@ -239,13 +216,9 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
         },
 
         /**
-         * Verify the publisher's resourceJWT without unsealing.
+         * Verify the publisher's resourceJWT without unwrapping.
          *
-         * Requires `resourceJWT` — use this for pre-flight publisher trust
-         * verification, extracting resource metadata, or checking domain/resourceId
-         * constraints before making an access decision.
-         *
-         * Not needed for the core unseal flow (keyName AAD binding handles integrity),
+         * Not needed for the core unwrap flow (scope AAD binding handles integrity),
          * but useful when you need the verified resource payload.
          */
         verify: async (request: DcaUnlockRequest): Promise<DcaVerifiedRequest> => {
@@ -264,46 +237,38 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
 export interface DcaAccessDecision {
     /**
      * Which content items to grant access to (by contentName).
-     * Mutually exclusive with `grantedKeyNames`.
+     * Mutually exclusive with `grantedScopes`.
      */
     grantedContentNames?: string[];
     /**
-     * Which key domains to grant access to (keyName-based).
-     * The issuer resolves keyNames → contentNames using the keyName
-     * field on each contentEncryptionKeys entry.
+     * Which scopes to grant access to.
+     * The issuer resolves scopes → contentNames using the scope
+     * field on each key entry.
      *
      * Mutually exclusive with `grantedContentNames`.
      */
-    grantedKeyNames?: string[];
+    grantedScopes?: string[];
     /**
      * Key delivery mode:
-     *   - "contentKey": return raw contentKeys (client decrypts directly)
-     *   - "periodKey": return periodKeys (client unwraps contentKey from sealedContentKeys, enables caching)
+     *   - "direct": return raw contentKeys (client decrypts directly, no caching)
+     *   - "wrapKey": return wrapKeys (client unwraps contentKeys from the manifest, enables caching)
      */
-    deliveryMode: "contentKey" | "periodKey";
+    deliveryMode: "direct" | "wrapKey";
 }
 
-/**
- * Options for share-link-token-authorized unlock.
- */
 export interface DcaShareLinkUnlockOptions {
     /**
-     * Key delivery mode (default: "contentKey").
-     * Share link unlocks default to contentKey for simplicity,
-     * but periodKey is also supported for cache-friendly flows.
+     * Key delivery mode (default: "direct").
+     * Share link unlocks default to direct for simplicity,
+     * but wrapKey is also supported for cache-friendly flows.
      */
-    deliveryMode?: "contentKey" | "periodKey";
+    deliveryMode?: "direct" | "wrapKey";
     /**
      * Optional callback invoked after the share token is verified
-     * but before keys are unsealed. Use for:
-     *   - Use-count tracking (increment a counter, reject if maxUses exceeded)
-     *   - Audit logging
-     *   - Custom authorization checks
+     * but before keys are unwrapped. Use for use-count tracking,
+     * audit logging, or custom authorization checks.
      *
      * Throw an error to reject the request.
-     *
-     * @param payload - The verified share link token payload
-     * @param resource - The verified resource from the request
      */
     onShareToken?: (
         payload: DcaShareLinkTokenPayload,
@@ -311,9 +276,6 @@ export interface DcaShareLinkUnlockOptions {
     ) => Promise<void> | void;
 }
 
-/**
- * Verified request — result of JWT verification (before unsealing).
- */
 export interface DcaVerifiedRequest {
     /** Verified resource payload from resourceJWT */
     resource: DcaResource;
@@ -327,43 +289,42 @@ async function verifyRequest(
     publisherMap: NormalisedPublisherMap,
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
-    if (!Array.isArray(request.contentEncryptionKeys)) {
-        throw new Error("contentEncryptionKeys must be an array");
+    if (!Array.isArray(request.keys)) {
+        throw new Error("keys must be an array");
     }
 
-    if (request.contentEncryptionKeys.length === 0) {
-        throw new Error("contentEncryptionKeys must not be empty");
+    if (request.keys.length === 0) {
+        throw new Error("keys must not be empty");
     }
 
     const seenContentNames = new Set<string>();
-    for (const entry of request.contentEncryptionKeys) {
+    for (const entry of request.keys) {
         if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-            throw new Error("Each contentEncryptionKeys entry must be a plain object");
+            throw new Error("Each keys entry must be a plain object");
         }
 
         if ("contentName" in entry && typeof entry.contentName !== "string") {
-            throw new Error("contentEncryptionKeys entry contentName must be a string");
+            throw new Error("keys entry contentName must be a string");
         }
 
-        const entryObj = entry as DcaSealedContentEncryptionKey;
-        if (typeof entryObj.keyName !== "string" || entryObj.keyName === "") {
-            throw new Error("contentEncryptionKeys entry must have a non-empty keyName string");
+        const entryObj = entry as DcaIssuerKey;
+        if (typeof entryObj.scope !== "string" || entryObj.scope === "") {
+            throw new Error("keys entry must have a non-empty scope string");
         }
 
         const effectiveName = entryObj.contentName ?? "default";
         if (effectiveName === "") {
-            throw new Error("contentEncryptionKeys entry contentName must not be empty");
+            throw new Error("keys entry contentName must not be empty");
         }
 
         if (seenContentNames.has(effectiveName)) {
             throw new Error(
-                `Duplicate contentName "${effectiveName}" in contentEncryptionKeys`,
+                `Duplicate contentName "${effectiveName}" in keys`,
             );
         }
         seenContentNames.add(effectiveName);
     }
 
-    // 1. Decode (unverified) resourceJWT to get domain for publisher key lookup.
     if (!request.resourceJWT) {
         throw new Error("resourceJWT is required for publisher trust verification");
     }
@@ -375,11 +336,9 @@ async function verifyRequest(
         throw new Error(`Untrusted publisher domain: "${rawDomain}"`);
     }
 
-    // 2. Verify resourceJWT with the publisher's signing key.
     const jwtPayload = await verifyJwt<DcaResourceJwtPayload>(request.resourceJWT, publisher.signingKeyPem);
     const resource = resourceJwtPayloadToResource(jwtPayload);
 
-    // 3. Defence-in-depth: re-verify the *signed* domain against the allowlist.
     const signedPublisher = publisherMap.lookup(resource.domain);
     if (!signedPublisher || signedPublisher.signingKeyPem !== publisher.signingKeyPem) {
         throw new Error(
@@ -387,116 +346,104 @@ async function verifyRequest(
         );
     }
 
-    // 4. Per-publisher resource constraints (optional allowedResourceIds).
     checkResourceConstraints(publisher, rawDomain, resource.resourceId);
 
-    // Sealed blobs are AAD-bound to the keyName on each entry.
-    // Cross-tier key substitution fails at unseal time.
     return { resource };
 }
 
 /**
- * Shared unseal-and-respond helper used by both the normal unlock path and the
- * share-link unlock path.  Centralising this logic avoids drift when
- * transport/security behaviour changes.
+ * Shared unwrap-and-respond helper used by both the normal unlock path and the
+ * share-link unlock path.
  */
-async function unsealAndRespond(
-    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
+async function unwrapAndRespond(
+    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     grantedContentNames: string[],
-    deliveryMode: "contentKey" | "periodKey",
+    deliveryMode: "direct" | "wrapKey",
 ): Promise<DcaUnlockResponse> {
 
-    // Get private key
     const { key: privateKey, algorithm } = await getPrivateKey();
 
-    // Import client public key for client-bound transport (if provided)
     const clientBound = !!request.clientPublicKey;
     let clientRsaPubKey: WebCryptoKey | null = null;
     if (clientBound) {
         clientRsaPubKey = await importRsaPublicKey(fromBase64Url(request.clientPublicKey!));
     }
 
-    // Build lookup map from flat array
-    const keysByName = new Map<string, DcaSealedContentEncryptionKey>();
-    for (const entry of request.contentEncryptionKeys) {
+    const keysByName = new Map<string, DcaIssuerKey>();
+    for (const entry of request.keys) {
         keysByName.set(entry.contentName ?? "default", entry);
     }
 
-    // Unseal granted content items
-    const contentEncryptionKeys: DcaContentEncryptionKey[] = [];
+    const keys: DcaUnlockedKey[] = [];
 
     for (const contentName of grantedContentNames) {
         const keysEntry = keysByName.get(contentName);
         if (!keysEntry) {
-            throw new Error(`No contentEncryptionKeys data for content item "${contentName}"`);
+            throw new Error(`No keys data for content item "${contentName}"`);
         }
 
-        // AAD is bound to the access tier — tampering with keyName causes unseal failure
-        const sealAad = encodeUtf8(keysEntry.keyName);
+        // AAD is bound to the scope — tampering with scope causes unwrap failure
+        const wrapAad = encodeUtf8(keysEntry.scope);
 
-        if (deliveryMode === "contentKey") {
-            // Direct path: unseal and return contentKey
+        if (deliveryMode === "direct") {
             if (typeof keysEntry.contentKey !== "string" || !keysEntry.contentKey) {
                 throw new Error(`Missing or invalid contentKey for content item "${contentName}"`);
             }
-            const contentKeyBytes = await unseal(keysEntry.contentKey, privateKey, algorithm, sealAad);
-            contentEncryptionKeys.push({
+            const contentKeyBytes = await unwrap(keysEntry.contentKey, privateKey, algorithm, wrapAad);
+            keys.push({
                 contentName,
-                keyName: keysEntry.keyName,
+                scope: keysEntry.scope,
                 contentKey: clientBound
                     ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, contentKeyBytes))
                     : toBase64Url(contentKeyBytes),
             });
         } else {
-            // Cacheable path: unseal and return periodKeys
-            if (!keysEntry.periodKeys || !Array.isArray(keysEntry.periodKeys)) {
-                throw new Error(`Missing or invalid periodKeys for content item "${contentName}"`);
+            if (!keysEntry.wrapKeys || !Array.isArray(keysEntry.wrapKeys)) {
+                throw new Error(`Missing or invalid wrapKeys for content item "${contentName}"`);
             }
-            const periodKeys = [];
-            for (const pk of keysEntry.periodKeys) {
+            const wrapKeys = [];
+            for (const wk of keysEntry.wrapKeys) {
                 if (
-                    typeof pk !== "object" || pk === null ||
-                    typeof pk.sealedKey !== "string" || !pk.sealedKey ||
-                    typeof pk.bucket !== "string" || !pk.bucket
+                    typeof wk !== "object" || wk === null ||
+                    typeof wk.key !== "string" || !wk.key ||
+                    typeof wk.kid !== "string" || !wk.kid
                 ) {
                     throw new Error(
-                        `Invalid periodKeys: missing sealedKey/bucket for contentName "${contentName}"`,
+                        `Invalid wrapKeys: missing key/kid for contentName "${contentName}"`,
                     );
                 }
-                const periodKeyBytes = await unseal(pk.sealedKey, privateKey, algorithm, sealAad);
-                periodKeys.push({
-                    bucket: pk.bucket,
+                const wrapKeyBytes = await unwrap(wk.key, privateKey, algorithm, wrapAad);
+                wrapKeys.push({
+                    kid: wk.kid,
                     key: clientBound
-                        ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, periodKeyBytes))
-                        : toBase64Url(periodKeyBytes),
+                        ? toBase64Url(await rsaOaepEncrypt(clientRsaPubKey!, wrapKeyBytes))
+                        : toBase64Url(wrapKeyBytes),
                 });
             }
-            contentEncryptionKeys.push({ contentName, keyName: keysEntry.keyName, periodKeys });
+            keys.push({ contentName, scope: keysEntry.scope, wrapKeys });
         }
     }
 
     return {
-        contentEncryptionKeys,
+        keys,
         ...(clientBound ? { transport: "client-bound" as const } : {}),
     };
 }
 
 async function processUnlock(
     publisherMap: NormalisedPublisherMap,
-    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
+    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     accessDecision: DcaAccessDecision,
 ): Promise<DcaUnlockResponse> {
-    // Verify resourceJWT if present (publisher trust verification)
     if (request.resourceJWT) {
         await verifyRequest(publisherMap, request);
     }
 
-    // Resolve grantedContentNames from the access decision
     const grantedContentNames = resolveGrantedContentNames(accessDecision, request);
 
-    return unsealAndRespond(
+    return unwrapAndRespond(
         getPrivateKey,
         request,
         grantedContentNames,
@@ -506,10 +453,6 @@ async function processUnlock(
 
 /**
  * Resolve the final list of contentNames to grant from an access decision.
- *
- * - If `grantedContentNames` is provided, use those directly.
- * - If `grantedKeyNames` is provided, resolve via each entry's keyName → contentNames.
- * - If neither is provided, throws.
  */
 function resolveGrantedContentNames(
     accessDecision: DcaAccessDecision,
@@ -519,60 +462,43 @@ function resolveGrantedContentNames(
         return accessDecision.grantedContentNames;
     }
 
-    if (accessDecision.grantedKeyNames && accessDecision.grantedKeyNames.length > 0) {
-        const keyNameSet = new Set(accessDecision.grantedKeyNames);
+    if (accessDecision.grantedScopes && accessDecision.grantedScopes.length > 0) {
+        const scopeSet = new Set(accessDecision.grantedScopes);
 
-        // Resolve keyNames → contentNames directly from each entry's keyName field
-        return request.contentEncryptionKeys
-            .filter(entry => keyNameSet.has(entry.keyName))
+        return request.keys
+            .filter(entry => scopeSet.has(entry.scope))
             .map(entry => entry.contentName ?? "default");
     }
 
-    throw new Error("Access decision must specify grantedContentNames or grantedKeyNames");
+    throw new Error("Access decision must specify grantedContentNames or grantedScopes");
 }
 
 // ============================================================================
 // Share Link Token verification & unlock
 // ============================================================================
 
-/**
- * Verify a share link token (publisher-signed JWT).
- *
- * @param publisherMap - Trusted publisher map
- * @param shareToken - The share link token JWT string
- * @param expectedDomain - The domain from the request (used for key lookup)
- * @returns Verified share link token payload
- * @throws Error if token is invalid, expired, or from an untrusted publisher
- */
 async function verifyShareLinkToken(
     publisherMap: NormalisedPublisherMap,
     shareToken: string,
     expectedDomain: string,
 ): Promise<DcaShareLinkTokenPayload> {
-    // Look up the publisher's signing key from the domain
     const publisher = publisherMap.lookup(expectedDomain);
     if (!publisher) {
         throw new Error(`Share token: untrusted publisher domain "${expectedDomain}"`);
     }
 
-    // Verify JWT signature with the publisher's signing key
     const payload = await verifyJwt<DcaShareLinkTokenPayload>(shareToken, publisher.signingKeyPem);
 
-    // Validate type discriminator
     if (payload.type !== "dca-share") {
         throw new Error(`Share token: invalid type "${payload.type}", expected "dca-share"`);
     }
 
-    // Validate domain binding
     if (payload.domain !== expectedDomain) {
         throw new Error(
             `Share token: domain mismatch — token domain "${payload.domain}" vs request domain "${expectedDomain}"`,
         );
     }
 
-    // Runtime type guards for timestamp claims.
-    // Without these, missing or non-numeric values (undefined, NaN, strings)
-    // silently pass the numeric comparisons (e.g. `undefined <= number` → false).
     if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) {
         throw new Error("Share token: exp must be a finite number");
     }
@@ -580,77 +506,62 @@ async function verifyShareLinkToken(
         throw new Error("Share token: iat must be a finite number");
     }
 
-    // Validate expiry
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp <= now) {
         throw new Error(`Share token: expired at ${new Date(payload.exp * 1000).toISOString()}`);
     }
 
-    // Validate iat is not in the future (with 60s clock skew tolerance)
     if (payload.iat > now + 60) {
         throw new Error(`Share token: issued in the future (iat: ${payload.iat})`);
     }
 
-    // Validate contentNames is a non-empty array
     if (!Array.isArray(payload.contentNames) || payload.contentNames.length === 0) {
-        // keyNames can substitute for contentNames
-        if (!payload.keyNames || !Array.isArray(payload.keyNames) || payload.keyNames.length === 0) {
-            throw new Error("Share token: contentNames (or keyNames) must be a non-empty array");
+        if (!payload.scopes || !Array.isArray(payload.scopes) || payload.scopes.length === 0) {
+            throw new Error("Share token: contentNames (or scopes) must be a non-empty array");
         }
     }
 
     return payload;
 }
 
-/**
- * Process an unlock request authorized by a share link token.
- */
 async function processShareLinkUnlock(
     publisherMap: NormalisedPublisherMap,
-    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }>,
+    getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     options?: DcaShareLinkUnlockOptions,
 ): Promise<DcaUnlockResponse> {
-    // 1. Verify the share token exists
     if (!request.shareToken) {
         throw new Error("Share link unlock requires a shareToken in the request");
     }
 
-    // 2. Verify the request JWTs (same as normal unlock)
     const { resource } = await verifyRequest(publisherMap, request);
 
-    // 3. Verify the share link token
     const sharePayload = await verifyShareLinkToken(
         publisherMap,
         request.shareToken,
         resource.domain,
     );
 
-    // 4. Validate resource binding: the share token must be for this resource
     if (sharePayload.resourceId !== resource.resourceId) {
         throw new Error(
             `Share token: resourceId mismatch — token "${sharePayload.resourceId}" vs request "${resource.resourceId}"`,
         );
     }
 
-    // 5. Invoke optional callback (use-count tracking, audit logging, etc.)
     if (options?.onShareToken) {
         await options.onShareToken(sharePayload, resource);
     }
 
-    // 6. Build access decision from the share token's claims.
-    //    Resolve keyNames → contentNames if the token uses keyNames.
-    //    Only grant content names that exist in both the token/keyNames AND the contentEncryptionKeys.
+    // Build access decision from the share token's claims.
     const availableContentNames = new Set(
-        request.contentEncryptionKeys.map(k => k.contentName ?? "default"),
+        request.keys.map(k => k.contentName ?? "default"),
     );
     let grantedContentNames: string[];
 
-    if (sharePayload.keyNames && sharePayload.keyNames.length > 0) {
-        // keyName-based share token: resolve keyNames → contentNames from entries
-        const keyNameSet = new Set(sharePayload.keyNames);
-        grantedContentNames = request.contentEncryptionKeys
-            .filter(entry => keyNameSet.has(entry.keyName))
+    if (sharePayload.scopes && sharePayload.scopes.length > 0) {
+        const scopeSet = new Set(sharePayload.scopes);
+        grantedContentNames = request.keys
+            .filter(entry => scopeSet.has(entry.scope))
             .map(entry => entry.contentName ?? "default")
             .filter(name => availableContentNames.has(name));
     } else {
@@ -662,18 +573,17 @@ async function processShareLinkUnlock(
     if (grantedContentNames.length === 0) {
         const availableList = [...availableContentNames].join(", ");
         const tokenDetail =
-            sharePayload.keyNames && sharePayload.keyNames.length > 0
-                ? `keyNames [${sharePayload.keyNames.join(", ")}]`
+            sharePayload.scopes && sharePayload.scopes.length > 0
+                ? `scopes [${sharePayload.scopes.join(", ")}]`
                 : `contentNames [${sharePayload.contentNames.join(", ")}]`;
         throw new Error(
-            `Share token: no matching content items — token grants ${tokenDetail} but contentEncryptionKeys contains [${availableList}]`,
+            `Share token: no matching content items — token grants ${tokenDetail} but keys contains [${availableList}]`,
         );
     }
 
-    // 7. Delegate to the shared unseal-and-respond helper
-    const deliveryMode = options?.deliveryMode ?? "contentKey";
+    const deliveryMode = options?.deliveryMode ?? "direct";
 
-    return unsealAndRespond(
+    return unwrapAndRespond(
         getPrivateKey,
         request,
         grantedContentNames,

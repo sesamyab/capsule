@@ -5,15 +5,14 @@ import { useConsole } from "./ConsoleContext";
 
 /**
  * Database names and stores used by the @sesamy/capsule client library.
- * These must match the constants in packages/capsule-client/src/client.ts
- * and packages/capsule-client/src/storage.ts.
+ * These must match the constants in packages/capsule-client/src/dca-client.ts.
  */
 const RSA_DB_NAME = "dca-keys";
 const RSA_STORE_NAME = "keypair";
 const CONTENT_KEY_DB_NAME = "capsule-content-keys";
 const CONTENT_KEY_STORE_NAME = "content-keys";
-const PERIOD_KEY_DB_NAME = "capsule-period-keys";
-const PERIOD_KEY_STORE_NAME = "period-keys";
+const WRAP_KEY_DB_NAME = "capsule-wrap-keys";
+const WRAP_KEY_STORE_NAME = "wrap-keys";
 
 /** Matches StoredContentKey from @sesamy/capsule client */
 interface StoredContentKey {
@@ -21,13 +20,13 @@ interface StoredContentKey {
   baseId: string;
   encryptedContentKey: string;
   expiresAt: number;
-  periodId?: string;
+  kid?: string;
 }
 
 interface KeyStatus {
   hasRsaKeys: boolean;
   contentKeys: Array<{ key: string; value: StoredContentKey }>;
-  periodKeyCount: number;
+  wrapKeyCount: number;
 }
 
 export function KeyManager() {
@@ -35,7 +34,7 @@ export function KeyManager() {
   const [keyStatus, setKeyStatus] = useState<KeyStatus>({
     hasRsaKeys: false,
     contentKeys: [],
-    periodKeyCount: 0,
+    wrapKeyCount: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
   const [isMounted, setIsMounted] = useState(false);
@@ -48,12 +47,12 @@ export function KeyManager() {
     try {
       const hasRsa = await checkRsaKeys();
       const contentKeys = await getAllContentKeys();
-      const periodKeyCount = await getPeriodKeyCount();
+      const wrapKeyCount = await getWrapKeyCount();
 
       setKeyStatus({
         hasRsaKeys: hasRsa,
         contentKeys,
-        periodKeyCount,
+        wrapKeyCount,
       });
     } catch (err) {
       console.error("Failed to check key status:", err);
@@ -86,11 +85,11 @@ export function KeyManager() {
     log(`Removing content key for ${label}...`, "crypto");
     await deleteContentKey(storeKey);
 
-    // Removing a tier subscription also clears that tier's cached period keys
+    // Removing a scope subscription also clears that scope's cached wrap keys
     if (isSubscription) {
       try {
-        await clearPeriodKeyCacheForTier(stored.baseId);
-        log(`Period key cache cleared for ${stored.baseId}`, "crypto");
+        await clearWrapKeyCacheForScope(stored.baseId);
+        log(`Wrap key cache cleared for ${stored.baseId}`, "crypto");
       } catch {
         // ignore
       }
@@ -114,10 +113,10 @@ export function KeyManager() {
       log(`Failed to remove RSA keys: ${err}`, "error");
     }
 
-    // Also clear cached period keys
+    // Also clear cached wrap keys
     try {
-      await clearPeriodKeyCache();
-      log("Period key cache cleared", "crypto");
+      await clearWrapKeyCache();
+      log("Wrap key cache cleared", "crypto");
     } catch {
       // ignore
     }
@@ -137,7 +136,7 @@ export function KeyManager() {
     return null;
   }
 
-  const hasAnyKeys = keyStatus.hasRsaKeys || keyStatus.contentKeys.length > 0 || keyStatus.periodKeyCount > 0;
+  const hasAnyKeys = keyStatus.hasRsaKeys || keyStatus.contentKeys.length > 0 || keyStatus.wrapKeyCount > 0;
 
   if (!hasAnyKeys) {
     return (
@@ -184,7 +183,7 @@ export function KeyManager() {
               <span
                 className="key-tag-expiry"
                 title={isSubscription
-                  ? `Period key rotates at ${getNextBucketTime().toLocaleTimeString()}`
+                  ? `Wrap key rotates at ${getNextBucketTime().toLocaleTimeString()}`
                   : `Expires at ${new Date(stored.expiresAt).toLocaleTimeString()}`
                 }
                 suppressHydrationWarning
@@ -225,8 +224,8 @@ function getTimeUntilExpiry(expiresAt: number): string {
 }
 
 /**
- * Get the Date of the next hourly time bucket boundary.
- * Period keys rotate at the top of each UTC hour.
+ * Get the Date of the next hourly rotation boundary.
+ * Wrap keys rotate at the top of each UTC hour.
  */
 function getNextBucketTime(): Date {
   const now = new Date();
@@ -237,7 +236,7 @@ function getNextBucketTime(): Date {
 }
 
 /**
- * Human-readable time until the next hourly time bucket.
+ * Human-readable time until the next hourly rotation.
  */
 function getTimeUntilNextBucket(): string {
   const ms = getNextBucketTime().getTime() - Date.now();
@@ -373,22 +372,22 @@ async function clearAllContentKeys(): Promise<void> {
 }
 
 // ============================================================================
-// Period key cache helpers
+// Wrap key cache helpers
 // ============================================================================
 
-async function getPeriodKeyCount(): Promise<number> {
+async function getWrapKeyCount(): Promise<number> {
   try {
     return new Promise((resolve) => {
-      const request = indexedDB.open(PERIOD_KEY_DB_NAME, 1);
+      const request = indexedDB.open(WRAP_KEY_DB_NAME, 1);
       request.onerror = () => resolve(0);
       request.onupgradeneeded = () => {
-        request.result.createObjectStore(PERIOD_KEY_STORE_NAME);
+        request.result.createObjectStore(WRAP_KEY_STORE_NAME);
       };
       request.onsuccess = () => {
         const db = request.result;
         try {
-          const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readonly");
-          const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
+          const tx = db.transaction(WRAP_KEY_STORE_NAME, "readonly");
+          const store = tx.objectStore(WRAP_KEY_STORE_NAME);
           const countReq = store.count();
           countReq.onsuccess = () => { db.close(); resolve(countReq.result); };
           countReq.onerror = () => { db.close(); resolve(0); };
@@ -403,17 +402,17 @@ async function getPeriodKeyCount(): Promise<number> {
   }
 }
 
-async function clearPeriodKeyCache(): Promise<void> {
+async function clearWrapKeyCache(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(PERIOD_KEY_DB_NAME, 1);
+    const request = indexedDB.open(WRAP_KEY_DB_NAME, 1);
     request.onerror = () => reject(request.error);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(PERIOD_KEY_STORE_NAME);
+      request.result.createObjectStore(WRAP_KEY_STORE_NAME);
     };
     request.onsuccess = () => {
       const db = request.result;
-      const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readwrite");
-      const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
+      const tx = db.transaction(WRAP_KEY_STORE_NAME, "readwrite");
+      const store = tx.objectStore(WRAP_KEY_STORE_NAME);
       store.clear();
       tx.oncomplete = () => { db.close(); resolve(); };
       tx.onerror = () => { db.close(); reject(tx.error); };
@@ -422,21 +421,21 @@ async function clearPeriodKeyCache(): Promise<void> {
 }
 
 /**
- * Clear cached period keys for a specific tier (contentName).
- * Keys are stored as `dca:pk:${contentName}:${bucket}`.
+ * Clear cached wrap keys for a specific scope.
+ * Keys are stored as `dca:wk:${scope}:${kid}`.
  */
-async function clearPeriodKeyCacheForTier(contentName: string): Promise<void> {
+async function clearWrapKeyCacheForScope(scope: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(PERIOD_KEY_DB_NAME, 1);
+    const request = indexedDB.open(WRAP_KEY_DB_NAME, 1);
     request.onerror = () => reject(request.error);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(PERIOD_KEY_STORE_NAME);
+      request.result.createObjectStore(WRAP_KEY_STORE_NAME);
     };
     request.onsuccess = () => {
       const db = request.result;
-      const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readwrite");
-      const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
-      const prefix = `dca:pk:${contentName}:`;
+      const tx = db.transaction(WRAP_KEY_STORE_NAME, "readwrite");
+      const store = tx.objectStore(WRAP_KEY_STORE_NAME);
+      const prefix = `dca:wk:${scope}:`;
       const cursorReq = store.openCursor();
       cursorReq.onsuccess = () => {
         const cursor = cursorReq.result;

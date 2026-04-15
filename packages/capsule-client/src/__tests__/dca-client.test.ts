@@ -2,30 +2,32 @@ import { describe, it, expect, vi } from "vitest";
 import { DcaClient } from "../dca-client";
 
 /**
- * Minimal DOM setup: an article element with publisher-content-id,
- * a dca-data script, and a sealed-content template.
+ * Minimal DOM setup: an article element with publisher-content-id
+ * and a dca-manifest script.
  */
 function setupDom(publisherContentId: string) {
   document.body.innerHTML = `
     <article publisher-content-id="${publisherContentId}">
-      <script class="dca-data" type="application/json">${JSON.stringify({
-        version: "1",
+      <script class="dca-manifest" type="application/json">${JSON.stringify({
+        version: "0.10",
         resourceJWT: "fake.jwt.token",
-        contentSealData: {
-          bodytext: { contentType: "text/html", nonce: "AAAA", aad: "test-aad" },
+        content: {
+          bodytext: {
+            contentType: "text/html",
+            iv: "AAAA",
+            aad: "test-aad",
+            ciphertext: "encrypted-blob",
+            wrappedContentKey: [],
+          },
         },
-        sealedContentKeys: {},
-        issuerData: {
+        issuers: {
           testIssuer: {
-            contentEncryptionKeys: [{ contentName: "bodytext", keyName: "bodytext", contentKey: "ck", periodKeys: [] }],
             unlockUrl: "https://example.com/unlock",
             keyId: "k1",
+            keys: [{ contentName: "bodytext", scope: "bodytext", contentKey: "ck", wrapKeys: [] }],
           },
         },
       })}</script>
-      <template class="dca-sealed-content">
-        <div data-dca-content-name="bodytext">encrypted-blob</div>
-      </template>
       <div data-dca-content-name="bodytext">placeholder</div>
     </article>
   `;
@@ -74,7 +76,7 @@ describe("processPage access check", () => {
     const root = setupDom("article-789");
     const paywallFn = vi.fn();
     const unlockFn = vi.fn().mockResolvedValue({
-      contentEncryptionKeys: [{ contentName: "bodytext", contentKey: "fake-key" }],
+      keys: [{ contentName: "bodytext", contentKey: "fake-key" }],
     });
 
     const client = new DcaClient({

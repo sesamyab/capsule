@@ -7,7 +7,7 @@
  * - DCA Publisher for encrypting content (local key derivation, zero network calls)
  * - DCA Issuer for handling unlock requests
  * - ES256 JWT signing and verification
- * - ECDH P-256 / RSA-OAEP key sealing
+ * - ECDH P-256 / RSA-OAEP key wrapping for issuer delivery
  * - Low-level AES-256-GCM encryption utilities
  *
  * @example Publisher (CMS side)
@@ -17,7 +17,7 @@
  * const publisher = createDcaPublisher({
  *   domain: "www.news-site.com",
  *   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
- *   periodSecret: process.env.PERIOD_SECRET!,
+ *   rotationSecret: process.env.ROTATION_SECRET!,
  * });
  *
  * const result = await publisher.render({
@@ -51,9 +51,9 @@
  * });
  *
  * app.post('/api/unlock', async (req) => {
- *   const result = await issuer.unlock(req.body, async (verified) => {
- *     // Check if user has access
- *     return { granted: true, contentNames: ["bodytext"] };
+ *   const result = await issuer.unlock(req.body, {
+ *     grantedContentNames: ["bodytext"],
+ *     deliveryMode: "wrapKey",
  *   });
  *   return result;
  * });
@@ -91,49 +91,49 @@ export {
 } from "./dca-jwt";
 
 // ============================================================================
-// DCA Seal (ECDH P-256 / RSA-OAEP key sealing)
+// DCA Wrap (ECDH P-256 / RSA-OAEP key wrapping for issuer delivery)
 // ============================================================================
 
 export {
-  sealEcdhP256,
-  unsealEcdhP256,
-  sealRsaOaep,
-  unsealRsaOaep,
-  seal,
-  unseal,
+  wrapEcdhP256,
+  unwrapEcdhP256,
+  wrapRsaOaep,
+  unwrapRsaOaep,
+  wrap,
+  unwrap,
   importIssuerPublicKey,
   importIssuerPrivateKey,
-  type DcaSealAlgorithm,
-} from "./dca-seal";
+  type DcaWrapAlgorithm,
+} from "./dca-wrap";
 
 // ============================================================================
-// DCA Time Buckets
+// DCA Rotation (wrapKey identifiers and derivation)
 // ============================================================================
 
 export {
-  formatTimeBucket,
-  getCurrentTimeBuckets,
-  deriveDcaPeriodKey,
+  formatTimeKid,
+  getCurrentRotationVersions,
+  deriveWrapKey,
   generateRenderId,
-} from "./dca-time-buckets";
+} from "./dca-rotation";
 
 // ============================================================================
 // DCA Types
 // ============================================================================
 
 export type {
-  DcaData,
+  DcaManifest,
   DcaResource,
   DcaResourceJwtPayload,
-  DcaContentSealData,
-  DcaSealedContentKey,
+  DcaContentEntry,
+  DcaWrappedContentKeyEntry,
   DcaIssuerEntry,
-  DcaSealedContentEncryptionKey,
-  DcaContentEncryptionKey,
-  DcaContentKeyDelivery,
-  DcaPeriodKeyDelivery,
-  DcaSealedPeriodKeyEntry,
-  DcaPeriodKeyEntry,
+  DcaIssuerKey,
+  DcaWrappedIssuerWrapKey,
+  DcaUnlockedKey,
+  DcaDirectKey,
+  DcaWrapKeyDelivery,
+  DcaUnlockedWrapKey,
   DcaJsonApiResponse,
   DcaPublisherConfig,
   DcaContentItem,

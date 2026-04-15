@@ -28,7 +28,7 @@ export default function ClientPage() {
             <strong>content key caching</strong> - encrypted DEKs stored for reuse
           </li>
           <li>
-            <strong>Auto-renewal</strong> - time-perioded keys are automatically
+            <strong>Auto-renewal</strong> - rotating wrap keys are automatically
             renewed before expiry
           </li>
           <li>
@@ -486,19 +486,17 @@ if (shareToken) {
         <CodeBlock>{`// What unlockWithShareToken sends to the issuer:
 POST /api/unlock
 {
-  "resource": { "domain": "...", "resourceId": "..." },
   "resourceJWT": "eyJ…",
-  "issuerJWT": "eyJ…",
-  "sealed": { "bodytext": { … } },
-  "keyId": "issuer-key-1",
-  "issuerName": "sesamy",
+  "keys": [
+    { "contentName": "bodytext", "scope": "…", "contentKey": "…" }
+  ],
   "shareToken": "eyJ…"    // ← Share link token added here
 }
 
 // The issuer verifies the share token signature (ES256, publisher-signed),
 // validates claims (domain, resourceId, expiry, contentNames),
-// then unseals keys from the normal DCA sealed data.
-// No periodSecret needed — keys flow through the normal DCA channel.`}</CodeBlock>
+// then returns key material from the normal DCA manifest.
+// No rotationSecret needed — keys flow through the normal DCA channel.`}</CodeBlock>
 
         <h3>Security Notes</h3>
         <ul>
@@ -842,32 +840,32 @@ for (const [name, content] of Object.entries(all)) {
 
         <h3>HTML Structure</h3>
         <p>
-          DCA pages contain a <code>&lt;script class=&quot;dca-data&quot;&gt;</code>{" "}
-          element with encrypted metadata and a{" "}
-          <code>&lt;template class=&quot;dca-sealed-content&quot;&gt;</code>{" "}
-          element holding the sealed content blocks:
+          DCA pages contain a single{" "}
+          <code>&lt;script class=&quot;dca-manifest&quot;&gt;</code> element
+          holding the v1 manifest — both the wrapped ciphertext blocks and the
+          issuer metadata live inside it:
         </p>
-        <CodeBlock language="html">{`<!-- DCA metadata -->
-<script class="dca-data" type="application/json">
+        <CodeBlock language="html">{`<!-- DCA manifest -->
+<script class="dca-manifest" type="application/json">
 {
   "version": "1.0",
-  "resource": { "resourceId": "article-123", "..." : "..." },
   "resourceJWT": "eyJ...",
-  "issuerJWT": { "sesamy": "eyJ..." },
-  "contentSealData": {
-    "bodytext": { "contentType": "text/html", "nonce": "...", "aad": "..." }
+  "content": {
+    "bodytext": {
+      "contentType": "text/html",
+      "iv": "...",
+      "aad": "...",
+      "ciphertext": "BASE64URL_CIPHERTEXT",
+      "wrappedContentKey": [
+        { "kid": "2026-04-15", "iv": "...", "ciphertext": "..." }
+      ]
+    }
   },
-  "sealedContentKeys": { "..." : "..." },
-  "issuerData": {
-    "sesamy": { "unlockUrl": "https://api.sesamy.com/unlock", "..." : "..." }
+  "issuers": {
+    "sesamy": { "unlockUrl": "https://api.sesamy.com/unlock", "keyId": "..." }
   }
 }
-</script>
-
-<!-- Sealed content -->
-<template class="dca-sealed-content">
-  <div data-dca-content-name="bodytext">BASE64URL_CIPHERTEXT</div>
-</template>`}</CodeBlock>
+</script>`}</CodeBlock>
 
         <h3>Configuration</h3>
         <CodeBlock>{`interface DcaClientOptions {
@@ -877,23 +875,25 @@ for (const [name, content] of Object.entries(all)) {
   // Custom unlock function — replaces the default fetch-based unlock
   unlockFn?: (unlockUrl: string, body: unknown) => Promise<DcaUnlockResponse>;
 
-  // Period key cache for reusing keys across pages
-  periodKeyCache?: {
-    get(key: string): Promise<string | null>;
-    set(key: string, value: string): Promise<void>;
-  };
+  // Wrap key cache for reusing wrap keys across pages
+  wrapKeyCache?: DcaWrapKeyCache | false;
+}
+
+interface DcaWrapKeyCache {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
 }`}</CodeBlock>
 
         <h3>API Reference</h3>
 
         <h4>parsePage(root?)</h4>
-        <p>Parse DCA data and sealed content from the DOM.</p>
+        <p>Parse the DCA manifest (including wrapped ciphertext blocks) from the DOM.</p>
         <CodeBlock>{`const page = client.parsePage();
 // Or from a specific container
 const page = client.parsePage(document.getElementById('article'));`}</CodeBlock>
 
         <h4>parseJsonResponse(json)</h4>
-        <p>Parse DCA data from a JSON API response instead of the DOM.</p>
+        <p>Parse a DCA manifest from a JSON API response instead of the DOM.</p>
         <CodeBlock>{`const res = await fetch('/api/article/123');
 const page = client.parseJsonResponse(await res.json());`}</CodeBlock>
 
@@ -909,7 +909,7 @@ const page = client.parseJsonResponse(await res.json());`}</CodeBlock>
         <h4>decrypt(page, contentName, unlockResponse)</h4>
         <p>
           Decrypt a single content item. Supports both direct content keys and
-          period-key wrapping.
+          wrap-key delivery.
         </p>
         <CodeBlock>{`const html = await client.decrypt(page, 'bodytext', keys);`}</CodeBlock>
 
@@ -922,7 +922,7 @@ const page = client.parseJsonResponse(await res.json());`}</CodeBlock>
         <p>
           Convenience method that combines parse → unlock → decryptAll in a
           single call. Auto-detects the issuer (first key in{" "}
-          <code>issuerData</code>) and share token (from URL{" "}
+          <code>manifest.issuers</code>) and share token (from URL{" "}
           <code>?share=</code> parameter) unless overridden:
         </p>
         <CodeBlock>{`// Simplest usage — auto-detect everything
@@ -951,7 +951,7 @@ console.log('Rendered:', [...rendered]); // ['bodytext', 'sidebar']`}</CodeBlock
         <p>
           Static method. Checks whether the page (or a given root element)
           contains DCA content by looking for a{" "}
-          <code>&lt;script class=&quot;dca-data&quot;&gt;</code> element.
+          <code>&lt;script class=&quot;dca-manifest&quot;&gt;</code> element.
           Also available as a standalone import:
         </p>
         <CodeBlock>{`import { hasDcaContent } from '@sesamy/capsule';
@@ -960,10 +960,12 @@ if (hasDcaContent()) {
   // Page has DCA content — initialize client
 }`}</CodeBlock>
 
-        <h3>Period Key Caching</h3>
+        <h3>Wrap Key Caching</h3>
         <p>
-          DCA supports time-bucketed period keys that can decrypt content keys
-          locally. Provide a cache to reuse them across page navigations:
+          DCA supports wrap keys — keyed by <code>kid</code> — that can decrypt
+          content keys locally. Provide a cache to reuse them across page
+          navigations. Entries are stored under{" "}
+          <code>dca:wk:{`{scope}`}:{`{kid}`}</code>:
         </p>
         <CodeBlock>{`// Simple sessionStorage-based cache
 const cache = {
@@ -975,17 +977,17 @@ const cache = {
   },
 };
 
-const client = new DcaClient({ periodKeyCache: cache });
+const client = new DcaClient({ wrapKeyCache: cache });
 
-// First page: keys fetched from issuer, periodKeys cached
+// First page: keys fetched from issuer, wrapKeys cached
 const page1 = client.parsePage();
 const keys1 = await client.unlock(page1, 'sesamy');
 await client.decrypt(page1, 'bodytext', keys1);
 
-// Next page: if the same period is active, no server call needed
+// Next page: if the same kid is still referenced, no server call needed
 const page2 = client.parsePage();
 const keys2 = await client.unlock(page2, 'sesamy');
-await client.decrypt(page2, 'bodytext', keys2); // Uses cached periodKey`}</CodeBlock>
+await client.decrypt(page2, 'bodytext', keys2); // Uses cached wrapKey`}</CodeBlock>
 
         <h2>Browser Compatibility</h2>
         <p>Capsule requires the Web Crypto API, which is available in:</p>

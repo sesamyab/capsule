@@ -28,10 +28,10 @@ export default function GlossaryPage() {
             <a href="#key-derivation">Key Derivation</a>
           </li>
           <li>
-            <a href="#key-wrapping">Key Wrapping &amp; Sealing</a>
+            <a href="#key-wrapping">Key Wrapping</a>
           </li>
           <li>
-            <a href="#time-periods">Time Periods &amp; Buckets</a>
+            <a href="#time-periods">Time Periods &amp; Rotation Versions</a>
           </li>
           <li>
             <a href="#dca">DCA (Delegated Content Access)</a>
@@ -46,12 +46,12 @@ export default function GlossaryPage() {
         <h2>🔑 Key Hierarchy</h2>
 
         <div className="concept-card">
-          <h3>Period Secret</h3>
+          <h3>Rotation Secret</h3>
           <p>
-            The root secret from which all period keys are derived. Stored
+            The root secret from which all wrap keys are derived. Stored
             securely on the publisher&apos;s server (ideally in a KMS like AWS
             Secrets Manager, HashiCorp Vault, etc.). Called{" "}
-            <code>periodSecret</code> in the codebase.
+            <code>rotationSecret</code> in the codebase.
           </p>
           <div className="properties">
             <span className="property">Size: 256 bits</span>
@@ -61,39 +61,40 @@ export default function GlossaryPage() {
             </span>
           </div>
           <p className="security-note">
-            ⚠️ Never expose the period secret to clients or embed it in client
+            ⚠️ Never expose the rotation secret to clients or embed it in client
             code.
           </p>
         </div>
 
         <div className="concept-card">
-          <h3>Period Key</h3>
+          <h3>Wrap Key</h3>
           <p>
             A time-derived AES-256 key that wraps (encrypts) the content key.
-            Derived from the period secret using HKDF with a time-based label
-            as context. Clients can cache period keys to enable offline access
-            and &ldquo;unlock once, access all&rdquo; within a time window.
+            Derived from the rotation secret using HKDF with a rotation
+            version label as context. Clients can cache wrap keys to enable
+            offline access and &ldquo;unlock once, access all&rdquo; within a
+            time window.
           </p>
           <div className="properties">
             <span className="property">Algorithm: AES-256</span>
             <span className="property">Purpose: Wrap content keys</span>
-            <span className="property">Scope: Per-content-name, per-time-bucket</span>
+            <span className="property">Scope: Per-scope, per-rotation-version</span>
             <span className="property">
               Client caching: Yes (enables offline access)
             </span>
           </div>
           <p>
-            In the DCA model, period keys are content-specific by construction
-            &mdash; the content name is used as the HKDF salt, so{" "}
-            <code>&quot;bodytext&quot;</code> and <code>&quot;sidebar&quot;</code>{" "}
-            produce different period keys even for the same time bucket.
+            In the DCA model, wrap keys are scope-specific by construction
+            &mdash; the scope is used as the HKDF salt, so items in different
+            scopes produce different wrap keys even for the same rotation
+            version. Items sharing a scope share a wrap key.
           </p>
           <pre className="code-example">
-            {`// Period key derivation (DCA)
-periodKey = HKDF(
-  IKM:  periodSecret,
-  salt: "bodytext",          // content name
-  info: "dca|251023T13",     // "dca|" + time bucket
+            {`// Wrap key derivation (DCA)
+wrapKey = HKDF(
+  IKM:  rotationSecret,
+  salt: "premium",           // scope
+  info: "dca|251023T13",     // "dca|" + kid
   len:  32                   // AES-256
 )`}
           </pre>
@@ -116,15 +117,15 @@ periodKey = HKDF(
             </span>
           </div>
           <p>
-            The content key is wrapped with one or more period keys and stored
+            The content key is wrapped with one or more wrap keys and stored
             alongside the encrypted content. Clients unwrap the content key
-            using a period key they received from the issuer.
+            using a wrap key they received from the issuer.
           </p>
           <pre className="code-example">
             {`// Content key usage
 contentKey = randomBytes(32)
 ciphertext = AES-GCM(contentKey, plaintext, iv, aad)
-wrappedKey = AES-GCM(periodKey, contentKey, wrapIv)`}
+wrappedKey = AES-GCM(wrapKey, contentKey, wrapIv)`}
           </pre>
         </div>
 
@@ -132,17 +133,17 @@ wrappedKey = AES-GCM(periodKey, contentKey, wrapIv)`}
           <h3>Issuer Key Pair</h3>
           <p>
             Each issuer (subscription provider) holds an asymmetric key pair
-            used for <strong>sealing</strong>. The publisher encrypts
-            content keys and period keys with the issuer&apos;s public key so only
-            that issuer can unseal them.
+            used for <strong>wrapping</strong>. The publisher encrypts
+            content keys and wrap keys with the issuer&apos;s public key so only
+            that issuer can unwrap them.
           </p>
           <div className="properties">
             <span className="property">Algorithm: ECDH P-256 or RSA-OAEP</span>
             <span className="property">Storage: Issuer server</span>
-            <span className="property">Purpose: Key sealing / unsealing</span>
+            <span className="property">Purpose: Key wrapping / unwrapping</span>
           </div>
           <p>
-            ECDH P-256 is the preferred algorithm for DCA. Each seal operation
+            ECDH P-256 is the preferred algorithm for DCA. Each wrap operation
             generates a fresh ephemeral key pair, producing a self-contained
             blob that only the issuer&apos;s private key can decrypt.
           </p>
@@ -205,27 +206,27 @@ wrappedKey = AES-GCM(periodKey, contentKey, wrapIv)`}
             domain, decryption fails because the AAD no longer matches.
           </p>
           <p>
-            <strong>Seal AAD</strong> binds sealed key material (content keys
-            and period keys) to the access tier via the{" "}
-            <code>keyName</code>. This prevents an attacker from substituting
-            sealed keys between tiers &mdash; unsealing will
-            fail because the <code>keyName</code> AAD won&apos;t match.
+            <strong>Wrap AAD</strong> binds wrapped key material (content keys
+            and wrap keys) to the access tier via the{" "}
+            <code>scope</code>. This prevents an attacker from substituting
+            wrapped keys between tiers &mdash; unwrapping will
+            fail because the <code>scope</code> AAD won&apos;t match.
           </p>
           <div className="properties">
             <span className="property">
-              Content AAD: <code>domain|resourceId|contentName|keyName</code>
+              Content AAD: <code>domain|resourceId|contentName|scope</code>
             </span>
             <span className="property">
-              Seal AAD: <code>keyName</code>
+              Wrap AAD: <code>scope</code>
             </span>
             <span className="property">Encoding: UTF-8 bytes</span>
             <span className="property">
-              Storage: Content AAD in contentSealData.aad, Seal AAD from entry keyName
+              Storage: Content AAD in content[name].aad, Wrap AAD from entry scope
             </span>
           </div>
           <pre className="code-example">
             {`// Content AAD — binds ciphertext to its resource context
-contentAad = "www.news-site.com|article-123|bodytext|1"
+contentAad = "www.news-site.com|article-123|bodytext|premium"
 
 // Encrypt content with content AAD
 ciphertext = AES-GCM(contentKey, plaintext, iv, contentAad)
@@ -234,36 +235,36 @@ ciphertext = AES-GCM(contentKey, plaintext, iv, contentAad)
 plaintext = AES-GCM-Decrypt(contentKey, ciphertext, iv, contentAad)
 // Fails if AAD doesn't match → prevents content relocation
 
-// Seal AAD — binds sealed key material to the access tier
-sealedContentKey = seal(contentKey, issuerPubKey, algorithm, encodeUtf8(keyName))
-sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(keyName))
-// Unsealing fails if keyName doesn't match → prevents cross-tier key substitution`}
+// Wrap AAD — binds wrapped key material to the access tier
+wrappedContentKey = wrap(contentKey, issuerPubKey, algorithm, encodeUtf8(scope))
+wrappedWrapKey    = wrap(wrapKey, issuerPubKey, algorithm, encodeUtf8(scope))
+// Unwrapping fails if scope doesn't match → prevents cross-tier key substitution`}
           </pre>
           <p>
             <strong>Why two layers?</strong> Content AAD protects the
             ciphertext &mdash; it ensures encrypted content cannot be moved to a
-            different page. Seal AAD protects the key material &mdash; it
-            ensures sealed keys from one render cannot be transplanted into
-            another resource&apos;s DCA data. Together they provide end-to-end
-            binding from the key material through to the ciphertext.
+            different page. Wrap AAD protects the key material &mdash; it
+            ensures wrapped keys from one render cannot be transplanted into
+            another resource&apos;s DCA manifest. Together they provide
+            end-to-end binding from the key material through to the ciphertext.
           </p>
         </div>
 
         <div className="concept-card">
           <h3>ECDH P-256 (Elliptic Curve Diffie-Hellman)</h3>
           <p>
-            Asymmetric key agreement used for <strong>sealing</strong> key
-            material for issuers. For each seal operation a fresh ephemeral
+            Asymmetric key agreement used for <strong>wrapping</strong> key
+            material for issuers. For each wrap operation a fresh ephemeral
             key pair is generated, and the shared secret is used directly as an
             AES-256-GCM key.
           </p>
           <div className="properties">
             <span className="property">Curve: P-256 (secp256r1)</span>
             <span className="property">Shared secret: 32 bytes (x-coordinate)</span>
-            <span className="property">Ephemeral: Fresh key per seal</span>
+            <span className="property">Ephemeral: Fresh key per wrap</span>
           </div>
           <pre className="code-example">
-            {`// ECDH P-256 sealed blob format
+            {`// ECDH P-256 wrapped blob format
 | 0-64  | Ephemeral public key (65 bytes, uncompressed) |
 | 65-76 | AES-GCM IV (12 bytes)                         |
 | 77+   | Ciphertext + 16-byte GCM auth tag             |`}
@@ -274,7 +275,7 @@ sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(keyName))
           <h3>RSA-OAEP</h3>
           <p>
             Asymmetric encryption using RSA with Optimal Asymmetric Encryption
-            Padding. Used as an alternative sealing algorithm for DCA issuers.
+            Padding. Used as an alternative wrapping algorithm for DCA issuers.
           </p>
           <div className="properties">
             <span className="property">Key size: 2048+ bits</span>
@@ -290,7 +291,7 @@ sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(keyName))
             Elliptic curve digital signature algorithm used for signing DCA
             JWTs. The publisher signs <code>resourceJWT</code> and{" "}
             <code>issuerJWT</code> tokens with ES256; issuers verify them
-            before unsealing keys.
+            before unwrapping keys.
           </p>
           <div className="properties">
             <span className="property">Curve: P-256</span>
@@ -310,48 +311,48 @@ sealedPeriodKey  = seal(periodKey, issuerPubKey, algorithm, encodeUtf8(keyName))
           <h3>HKDF (HMAC-based Key Derivation Function)</h3>
           <p>
             RFC 5869 standard for deriving cryptographic keys from a master
-            secret. Capsule uses HKDF-SHA256 to derive period keys from the
-            period secret.
+            secret. Capsule uses HKDF-SHA256 to derive wrap keys from the
+            rotation secret.
           </p>
           <div className="properties">
             <span className="property">Hash: SHA-256</span>
-            <span className="property">Input: Period secret + context</span>
+            <span className="property">Input: Rotation secret + context</span>
             <span className="property">Output: 256-bit keys</span>
           </div>
           <pre className="code-example">
-            {`// DCA period key derivation
-periodKey = HKDF-SHA256(
-  IKM:  periodSecret,
-  salt: contentName,        // e.g., "bodytext"
-  info: "dca|251023T13",    // "dca|" + time bucket label
+            {`// DCA wrap key derivation
+wrapKey = HKDF-SHA256(
+  IKM:  rotationSecret,
+  salt: scope,              // e.g., "premium"
+  info: "dca|251023T13",    // "dca|" + kid (rotation version)
   len:  32
 )`}
           </pre>
           <p>
-            In the DCA model, the <code>salt</code> is the content name,
-            making period keys content-specific by construction. The{" "}
-            <code>info</code> parameter encodes the time bucket, ensuring each
-            time window gets a unique key.
+            In the DCA model, the <code>salt</code> is the scope, making wrap
+            keys scope-specific by construction. The <code>info</code>{" "}
+            parameter encodes the kid (rotation version), ensuring each
+            rotation window gets a unique key.
           </p>
         </div>
 
         <div className="concept-card">
           <h3>Time-Based Key Rotation</h3>
           <p>
-            Capsule rotates keys automatically using time periods. Each period
-            has its own derived key, providing forward secrecy &mdash; old
-            period keys can&apos;t decrypt future content.
+            Capsule rotates keys automatically using rotation versions. Each
+            rotation version has its own derived key, providing forward secrecy
+            &mdash; old wrap keys can&apos;t decrypt future content.
           </p>
           <div className="properties">
             <span className="property">
-              Hourly buckets (YYMMDDTHH format)
+              Hourly rotation versions (YYMMDDTHH format)
             </span>
             <span className="property">
-              Window: Current + next bucket always available
+              Window: Current + next rotation version always available
             </span>
           </div>
           <pre className="code-example">
-            {`// Time bucket format
+            {`// kid (rotation version) format
 "251023T13"     // Oct 23, 2025 at 13:00 UTC (hourly)
 "251023T1430"   // Sub-hour variant (30-min)`}
           </pre>
@@ -359,61 +360,64 @@ periodKey = HKDF-SHA256(
       </section>
 
       <section id="key-wrapping">
-        <h2>📦 Key Wrapping &amp; Sealing</h2>
+        <h2>📦 Key Wrapping</h2>
 
         <div className="concept-card">
           <h3>Content Key Wrapping</h3>
           <p>
-            The content key is wrapped (encrypted) with a period key using
+            The content key is wrapped (encrypted) with a wrap key using
             AES-256-GCM. Each article stores multiple wrapped copies of its
-            content key &mdash; one per active time bucket &mdash; so clients
-            can unwrap using whichever period key they have cached.
+            content key &mdash; one per active rotation version &mdash; so
+            clients can unwrap using whichever wrap key they have cached.
           </p>
           <div className="properties">
             <span className="property">Algorithm: AES-256-GCM</span>
             <span className="property">
-              Nonce: Unique 12-byte IV per wrap
+              IV: Unique 12-byte IV per wrap
             </span>
             <span className="property">
-              Wrapped copies: 2 (current + next period)
+              Wrapped copies: 2 (current + next rotation version)
             </span>
           </div>
           <pre className="code-example">
-            {`// DCA sealedContentKeys structure
-sealedContentKeys: {
-  "bodytext": [
-    { t: "251023T13", nonce: "...", key: "..." },
-    { t: "251023T14", nonce: "...", key: "..." }
-  ]
+            {`// DCA wrappedContentKey structure (per content item)
+content: {
+  "bodytext": {
+    wrappedContentKey: [
+      { kid: "251023T13", iv: "...", key: "..." },
+      { kid: "251023T14", iv: "...", key: "..." }
+    ],
+    ...
+  }
 }`}
           </pre>
         </div>
 
         <div className="concept-card">
-          <h3>Issuer Sealing</h3>
+          <h3>Issuer Wrapping</h3>
           <p>
-            Key material (content keys and period keys) is <strong>sealed</strong>{" "}
+            Key material (content keys and wrap keys) is <strong>wrapped</strong>{" "}
             with the issuer&apos;s public key. Only the issuer holding the
-            matching private key can unseal them. Each issuer gets its own
-            sealed copies, enabling multi-issuer support. Sealed blobs include
-            AAD binding via the <code>keyName</code>, which ties the sealed
+            matching private key can unwrap them. Each issuer gets its own
+            wrapped copies, enabling multi-issuer support. Wrapped blobs include
+            AAD binding via the <code>scope</code>, which ties the wrapped
             key material to a specific access tier and prevents cross-tier key
             substitution.
           </p>
           <div className="properties">
-            <span className="property">ECDH P-256: Ephemeral key per seal</span>
+            <span className="property">ECDH P-256: Ephemeral key per wrap</span>
             <span className="property">RSA-OAEP: Standard ciphertext</span>
             <span className="property">Auto-detection: From PEM key type</span>
-            <span className="property">AAD: keyName (UTF-8 encoded)</span>
+            <span className="property">AAD: scope (UTF-8 encoded)</span>
           </div>
           <pre className="code-example">
-            {`// Issuer sealed structure
-issuerData: {
+            {`// Issuer wrapped structure
+issuers: {
   "sesamy": {
-    sealed: {
-      "bodytext": {
-        contentKey: "base64url...",   // sealed with issuer pubkey + keyName AAD
-        periodKeys: {
+    wrapped: {
+      "premium": {
+        contentKey: "base64url...",   // wrapped with issuer pubkey + scope AAD
+        wrapKeys: {
           "251023T13": "base64url...",
           "251023T14": "base64url..."
         }
@@ -430,29 +434,29 @@ issuerData: {
           <h3>Envelope Encryption</h3>
           <p>
             The pattern of encrypting data with a content key, then wrapping
-            the content key with a period key. This enables &ldquo;unlock once,
-            access all&rdquo; &mdash; a single period key can unwrap the
-            content key for any article encrypted in that time window.
+            the content key with a wrap key. This enables &ldquo;unlock once,
+            access all&rdquo; &mdash; a single wrap key can unwrap the
+            content key for any article encrypted in that rotation window.
           </p>
           <ul>
             <li>Content encrypted with random content key (fast, symmetric)</li>
-            <li>Content key wrapped with period key (enables time-based access)</li>
-            <li>Period key sealed with issuer&apos;s public key (delegated access)</li>
+            <li>Content key wrapped with wrap key (enables time-based access)</li>
+            <li>Wrap key wrapped with issuer&apos;s public key (delegated access)</li>
           </ul>
         </div>
       </section>
 
       <section id="time-periods">
-        <h2>⏱️ Time Periods &amp; Buckets</h2>
+        <h2>⏱️ Time Periods &amp; Rotation Versions</h2>
 
         <div className="concept-card">
-          <h3>Why Time Periods?</h3>
-          <p>Time periods provide several security benefits:</p>
+          <h3>Why Rotation Versions?</h3>
+          <p>Rotation versions provide several security benefits:</p>
           <ul>
             <li>
-              <strong>Forward Secrecy:</strong> Old period keys can&apos;t decrypt
-              new content. If a key is compromised, only that period&apos;s content
-              is at risk.
+              <strong>Forward Secrecy:</strong> Old wrap keys can&apos;t decrypt
+              new content. If a key is compromised, only that rotation
+              version&apos;s content is at risk.
             </li>
             <li>
               <strong>Automatic Revocation:</strong> Keys expire naturally. No
@@ -460,17 +464,17 @@ issuerData: {
             </li>
             <li>
               <strong>Subscription Enforcement:</strong> Users must have an
-              active subscription to get current period keys.
+              active subscription to get current wrap keys.
             </li>
           </ul>
         </div>
 
         <div className="concept-card">
-          <h3>Period Duration Selection</h3>
+          <h3>Rotation Duration Selection</h3>
           <table className="info-table">
             <thead>
               <tr>
-                <th>Period</th>
+                <th>Rotation</th>
                 <th>Use Case</th>
                 <th>Trade-offs</th>
               </tr>
@@ -505,13 +509,13 @@ issuerData: {
           <p>
             To handle clock differences between publisher and client, Capsule
             always encrypts content keys with both the current <em>and</em> next
-            period key. This ensures content remains accessible during the
-            transition between time buckets.
+            wrap key. This ensures content remains accessible during the
+            transition between rotation versions.
           </p>
           <ul>
-            <li>Publisher wraps content key with current + next period keys</li>
+            <li>Publisher wraps content key with current + next wrap keys</li>
             <li>Client tries each wrapped key until one succeeds</li>
-            <li>Period key cache uses the time bucket label as key</li>
+            <li>Wrap key cache uses the kid (rotation version) as key</li>
           </ul>
         </div>
       </section>
@@ -531,15 +535,15 @@ issuerData: {
           <ul>
             <li>
               <strong>Publisher:</strong> Encrypts content at build time,
-              seals keys for each issuer, signs JWTs
+              wraps keys for each issuer, signs JWTs
             </li>
             <li>
               <strong>Issuer:</strong> Verifies JWTs, checks integrity proofs,
-              makes access decisions, unseals and returns keys
+              makes access decisions, unwraps and returns keys
             </li>
             <li>
-              <strong>Client:</strong> Parses DCA data from the page, calls an
-              issuer&apos;s unlock endpoint, decrypts content
+              <strong>Client:</strong> Parses DCA manifest from the page, calls
+              an issuer&apos;s unlock endpoint, decrypts content
             </li>
           </ul>
         </div>
@@ -550,7 +554,7 @@ issuerData: {
             A single page can contain multiple named content items (e.g.,{" "}
             <code>&quot;bodytext&quot;</code>, <code>&quot;sidebar&quot;</code>,{" "}
             <code>&quot;data&quot;</code>). Each item gets its own content key,
-            IV, AAD, and sealed copies. Issuers can grant access to a subset of
+            IV, AAD, and wrapped copies. Issuers can grant access to a subset of
             items per request.
           </p>
           <pre className="code-example">
@@ -576,10 +580,11 @@ contentItems: [
               directly. Simplest path &mdash; client decrypts immediately.
             </li>
             <li>
-              <strong>periodKey mode:</strong> Returns period keys that the
+              <strong>wrapKey mode:</strong> Returns wrap keys that the
               client uses to unwrap the content key from{" "}
-              <code>sealedContentKeys</code>. Enables client-side caching:
-              a cached period key can unlock any article in that time window.
+              <code>wrappedContentKey</code>. Enables client-side caching:
+              a cached wrap key can unlock any article in that rotation
+              window.
             </li>
           </ul>
         </div>
@@ -587,12 +592,12 @@ contentItems: [
         <div className="concept-card">
           <h3>Wire Format (HTML)</h3>
           <p>
-            DCA data is embedded in the page as standard HTML elements:
+            The DCA manifest is embedded in the page as standard HTML elements:
           </p>
           <pre className="code-example">
-            {`<!-- DCA metadata and keys -->
-<script type="application/json" class="dca-data">
-  { "version": "1", "resource": {...}, "resourceJWT": "...", ... }
+            {`<!-- DCA manifest and keys -->
+<script type="application/json" class="dca-manifest">
+  { "version": "0.10", "resourceJWT": "...", "content": {...}, "issuers": {...} }
 </script>
 
 <!-- Encrypted content -->
@@ -620,8 +625,8 @@ contentItems: [
   "iss": "www.news-site.com",        // publisher domain
   "sub": "article-123",              // resource ID
   "iat": 1698062400,                 // render timestamp (Unix seconds)
-  "jti": "base64url...",             // render ID (binds sealed keys)
-  "keyNames": ["premium"],           // required entitlements
+  "jti": "base64url...",             // render ID (binds wrapped keys)
+  "scopes": ["premium"],             // required entitlements
   "data": { "section": "politics" }  // access metadata
 }`}
           </pre>
@@ -631,19 +636,19 @@ contentItems: [
           <h3>issuerJWT</h3>
           <p>
             A per-issuer ES256 JWT containing SHA-256 integrity proofs of
-            every sealed blob for that issuer. The issuer verifies these hashes
-            before unsealing, ensuring the sealed keys haven&apos;t been tampered
-            with in transit.
+            every wrapped blob for that issuer. The issuer verifies these hashes
+            before unwrapping, ensuring the wrapped keys haven&apos;t been
+            tampered with in transit.
           </p>
           <pre className="code-example">
             {`// issuerJWT payload
 {
-  "renderId": "base64url...",          // must match resourceJWT
+  "jti": "base64url...",               // must match resourceJWT jti
   "issuerName": "sesamy",
   "proof": {
-    "bodytext": {
-      "contentKey": "sha256_hash...",  // hash of sealed blob
-      "periodKeys": {
+    "premium": {
+      "contentKey": "sha256_hash...",  // hash of wrapped blob
+      "wrapKeys": {
         "251023T13": "sha256_hash...",
         "251023T14": "sha256_hash..."
       }
@@ -656,8 +661,8 @@ contentItems: [
         <div className="concept-card">
           <h3>SHA-256 Integrity Proofs</h3>
           <p>
-            Each sealed blob&apos;s base64url string is hashed with SHA-256 and
-            included in the issuerJWT. Before unsealing, the issuer recomputes
+            Each wrapped blob&apos;s base64url string is hashed with SHA-256 and
+            included in the issuerJWT. Before unwrapping, the issuer recomputes
             the hashes and compares them &mdash; any mismatch indicates
             tampering and the request is rejected.
           </p>
@@ -673,11 +678,11 @@ proofHash = base64url(SHA-256(utf8_bytes_of_base64url_string))
         <div className="concept-card">
           <h3>renderId (Binding Token)</h3>
           <p>
-            A random base64url string (16 bytes) generated fresh each render.
-            Present in both the <code>resourceJWT</code> and{" "}
-            <code>issuerJWT</code> payloads, the issuer verifies they match
-            &mdash; binding the two JWTs together and preventing replay of
-            mismatched tokens.
+            A random base64url string (16 bytes) generated fresh each render,
+            carried as the <code>jti</code> claim in both the{" "}
+            <code>resourceJWT</code> and <code>issuerJWT</code> payloads. The
+            issuer verifies they match &mdash; binding the two JWTs together
+            and preventing replay of mismatched tokens.
           </p>
         </div>
       </section>

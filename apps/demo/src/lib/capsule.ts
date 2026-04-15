@@ -2,7 +2,7 @@
  * DCA publisher and issuer singletons for the demo app.
  *
  * Uses the DCA (Delegated Content Access) standard for content encryption.
- * The publisher derives periodKeys locally from a periodSecret (HKDF) —
+ * The publisher derives wrapKeys locally from a rotationSecret (HKDF) —
  * zero runtime network calls for key generation.
  *
  * All secrets and key pairs are resolved lazily so that `next build` can
@@ -17,8 +17,8 @@ import {
   exportP256KeyPairPem,
 } from "@sesamy/capsule-server";
 
-/** Period duration in hours (1 hour for demo, configurable for production) */
-export const PERIOD_DURATION_HOURS = 1;
+/** Rotation interval in hours (1 hour for demo, configurable for production) */
+export const ROTATION_INTERVAL_HOURS = 1;
 
 const DEV_FALLBACK_SECRET = Buffer.from(
   "demo-secret-do-not-use-in-production!!",
@@ -29,25 +29,25 @@ const DEV_FALLBACK_SECRET = Buffer.from(
 // Secret helpers – throw at runtime if missing outside dev
 // ---------------------------------------------------------------------------
 
-let _periodSecret: string | undefined;
+let _rotationSecret: string | undefined;
 
-/** @throws if PERIOD_SECRET is missing and NODE_ENV !== "development" */
-export function getPeriodSecret(): string {
-  if (_periodSecret) return _periodSecret;
-  const secret = process.env.PERIOD_SECRET;
+/** @throws if ROTATION_SECRET is missing and NODE_ENV !== "development" */
+export function getRotationSecret(): string {
+  if (_rotationSecret) return _rotationSecret;
+  const secret = process.env.ROTATION_SECRET ?? process.env.PERIOD_SECRET;
   if (secret) {
-    _periodSecret = secret;
+    _rotationSecret = secret;
     return secret;
   }
   if (process.env.NODE_ENV === "development") {
     console.warn(
-      "[capsule] PERIOD_SECRET not set — using insecure demo fallback (dev only)",
+      "[capsule] ROTATION_SECRET not set — using insecure demo fallback (dev only)",
     );
-    _periodSecret = DEV_FALLBACK_SECRET;
-    return _periodSecret;
+    _rotationSecret = DEV_FALLBACK_SECRET;
+    return _rotationSecret;
   }
   throw new Error(
-    "PERIOD_SECRET environment variable is required in production",
+    "ROTATION_SECRET environment variable is required in production",
   );
 }
 
@@ -62,7 +62,7 @@ interface DcaKeys {
   /** ES256 (ECDSA P-256) signing key pair PEMs — publisher signs JWTs */
   signingPrivateKeyPem: string;
   signingPublicKeyPem: string;
-  /** ECDH P-256 key pair PEMs — issuer unseals keys */
+  /** ECDH P-256 key pair PEMs — issuer unwraps keys */
   issuerPrivateKeyPem: string;
   issuerPublicKeyPem: string;
 }
@@ -136,15 +136,15 @@ export async function getPublisher() {
     _publisher = createDcaPublisher({
       domain: DEMO_DOMAIN,
       signingKeyPem: keys.signingPrivateKeyPem,
-      periodSecret: getPeriodSecret(),
-      periodDurationHours: PERIOD_DURATION_HOURS,
+      rotationSecret: getRotationSecret(),
+      rotationIntervalHours: ROTATION_INTERVAL_HOURS,
     });
   }
   return _publisher;
 }
 
 /**
- * Get the issuer public key PEM (needed by publisher to seal keys for the issuer).
+ * Get the issuer public key PEM (needed by publisher to wrap keys for the issuer).
  */
 export async function getIssuerPublicKeyPem(): Promise<string> {
   const keys = await getDcaKeys();

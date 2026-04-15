@@ -17,7 +17,7 @@ export default function SpecPage() {
           Capsule uses the <strong>Delegated Content Access (DCA)</strong>{" "}
           protocol, which separates content encryption (publisher) from access
           control (issuer). The publisher encrypts content with AES-256-GCM and
-          seals keys for each issuer using ECDH P-256. Issuers unseal keys only
+          wraps keys for each issuer using ECDH P-256. Issuers unwrap keys only
           when access is granted, and the client decrypts content locally in the
           browser.
         </p>
@@ -39,11 +39,11 @@ export default function SpecPage() {
           <tbody>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Publisher</strong></td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Encrypts content at render time. Seals per-content keys for each issuer with ECDH P-256, using <code>keyName</code> as seal AAD. Signs a <code>resourceJWT</code> (ES256) binding metadata.</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Encrypts content at render time. Wraps per-content keys for each issuer with ECDH P-256, using <code>scope</code> as wrap AAD. Signs a <code>resourceJWT</code> (ES256) binding metadata.</td>
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Issuer</strong></td>
-              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Owns an ECDH P-256 key pair. On unlock, reads <code>keyName</code> from each entry, unseals keys using <code>keyName</code> as seal AAD, and returns them to the client. Optionally verifies <code>resourceJWT</code> for publisher trust.</td>
+              <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>Owns an ECDH P-256 key pair. On unlock, reads <code>scope</code> from each entry, unwraps keys using <code>scope</code> as wrap AAD, and returns them to the client. Optionally verifies <code>resourceJWT</code> for publisher trust.</td>
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}><strong>Client</strong></td>
@@ -56,10 +56,10 @@ export default function SpecPage() {
         <h3>Content Encryption</h3>
         <p>
           The publisher generates a random <strong>contentKey</strong> (256-bit AES)
-          and optional rotating <strong>periodKeys</strong> per content item, then
-          encrypts content with AES-256-GCM using a random nonce and an AAD string.
-          The contentKey is additionally wrapped with each periodKey so the issuer
-          can grant either content-level or period-level access.
+          and optional rotating <strong>wrapKeys</strong> per content item, then
+          encrypts content with AES-256-GCM using a random iv and an AAD string.
+          The contentKey is additionally wrapped with each wrapKey so the issuer
+          can grant either content-level or rotation-version-level access.
         </p>
         <CodeBlock>{`// Publisher render (server-side)
 const result = await publisher.render({
@@ -78,119 +78,123 @@ const result = await publisher.render({
   ],
 });
 
-// result.html.dcaDataScript → <script class="dca-data">…</script>
-// result.html.sealedContentTemplate → <template class="dca-sealed-content">…</template>`}</CodeBlock>
+// result.html.dcaManifestScript → <script class="dca-manifest">…</script>`}</CodeBlock>
 
-        <h3>Key Sealing (Publisher → Issuer)</h3>
+        <h3>Key Wrapping (Publisher → Issuer)</h3>
         <p>
           For each issuer, the publisher uses <strong>ECDH P-256</strong> key
           agreement to derive a shared secret, then wraps the contentKey and
-          periodKeys with AES-256-GCM. The resulting opaque blobs are stored in{" "}
-          <code>issuerData</code>. Only the matching issuer private key can
-          unseal them.
+          wrapKeys with AES-256-GCM. The resulting opaque blobs are stored in{" "}
+          <code>issuers</code>. Only the matching issuer private key can
+          unwrap them.
         </p>
-        <CodeBlock>{`// Sealing internals (automatic during render)
-// 1. Ephemeral ECDH P-256 key pair generated per seal operation
+        <CodeBlock>{`// Wrapping internals (automatic during render)
+// 1. Ephemeral ECDH P-256 key pair generated per wrap operation
 // 2. ECDH shared secret derived: ephemeralPrivate × issuerPublic
-// 3. HKDF-SHA256(secret, salt="dca-seal", info="dca-seal-aes256gcm") → 256-bit wrapping key
-// 4. AES-256-GCM wrap each key with a unique 12-byte nonce
-//    AAD = keyName (binds sealed blob to this access tier)
-// 5. Sealed blob = ephemeralPublicKey(65B) ‖ nonce(12B) ‖ ciphertext+tag`}</CodeBlock>
+// 3. HKDF-SHA256(secret, salt="dca-wrap", info="dca-wrap-aes256gcm") → 256-bit wrapping key
+// 4. AES-256-GCM wrap each key with a unique 12-byte iv
+//    AAD = scope (binds wrapped blob to this access tier)
+// 5. Wrapped blob = ephemeralPublicKey(65B) ‖ iv(12B) ‖ ciphertext+tag`}</CodeBlock>
 
-        <h3>Seal AAD (Additional Authenticated Data)</h3>
+        <h3>Wrap AAD (Additional Authenticated Data)</h3>
         <p>
-          When sealing contentKeys and periodKeys for issuers, the publisher
-          passes the <code>keyName</code> (access tier) as AAD to the AES-GCM
-          encryption (for ECDH P-256 sealing) or as the RSA-OAEP label (for
-          RSA-based sealing). This cryptographically binds each sealed key blob
+          When wrapping contentKeys and wrapKeys for issuers, the publisher
+          passes the <code>scope</code> (access tier) as AAD to the AES-GCM
+          encryption (for ECDH P-256 wrapping) or as the RSA-OAEP label (for
+          RSA-based wrapping). This cryptographically binds each wrapped key blob
           to its access tier.
         </p>
         <p>
-          On unlock, the issuer reads <code>keyName</code> from each
-          entry and provides it as AAD when unsealing. If the{" "}
-          <code>keyName</code> has been tampered with, AES-GCM decryption fails
+          On unlock, the issuer reads <code>scope</code> from each
+          entry and provides it as AAD when unwrapping. If the{" "}
+          <code>scope</code> has been tampered with, AES-GCM decryption fails
           with an authentication error.
         </p>
         <p>
-          <strong>Why this matters:</strong> Seal AAD prevents{" "}
+          <strong>Why this matters:</strong> Wrap AAD prevents{" "}
           <em>cross-tier key substitution attacks</em>. Without it, an
-          attacker could change <code>keyName</code> from &quot;free&quot; to
-          &quot;premium&quot; on a sealed entry, tricking the issuer into
-          unsealing keys for a tier they don&apos;t have access to. With seal
-          AAD, the sealed blobs are bound to the original{" "}
-          <code>keyName</code> and cannot be unsealed under a different tier.
+          attacker could change <code>scope</code> from &quot;free&quot; to
+          &quot;premium&quot; on a wrapped entry, tricking the issuer into
+          unwrapping keys for a tier they don&apos;t have access to. With wrap
+          AAD, the wrapped blobs are bound to the original{" "}
+          <code>scope</code> and cannot be unwrapped under a different tier.
         </p>
-        <CodeBlock>{`// Seal AAD binding
+        <CodeBlock>{`// Wrap AAD binding
 // Publisher (during render):
-//   sealedBlob = AES-256-GCM-Encrypt(wrappingKey, contentKey, nonce, aad=keyName)
+//   wrappedBlob = AES-256-GCM-Encrypt(wrappingKey, contentKey, iv, aad=scope)
 //
 // Issuer (during unlock):
-//   1. Read keyName from each contentEncryptionKeys entry
-//   2. contentKey = AES-256-GCM-Decrypt(wrappingKey, sealedBlob, nonce, aad=keyName)
-//   3. If keyName was tampered with → GCM auth tag check fails → reject`}</CodeBlock>
+//   1. Read scope from each keys entry
+//   2. contentKey = AES-256-GCM-Decrypt(wrappingKey, wrappedBlob, iv, aad=scope)
+//   3. If scope was tampered with → GCM auth tag check fails → reject`}</CodeBlock>
 
         <h3>Integrity Protection</h3>
         <p>
-          In v2, integrity of sealed key blobs is guaranteed by{" "}
-          <strong>seal AAD</strong> rather than a separate <code>issuerJWT</code>.
-          The <code>keyName</code> (from each sealed-key entry) is
-          used as AAD during AES-GCM sealing, so any substitution or tampering of
-          sealed blobs causes a GCM authentication failure at unseal time. This
-          replaces the v1 approach of signing per-issuer SHA-256 hash proofs in a
-          separate JWT.
+          Integrity of wrapped key blobs is guaranteed by{" "}
+          <strong>wrap AAD</strong> rather than a separate <code>issuerJWT</code>.
+          The <code>scope</code> (from each wrapped-key entry) is
+          used as AAD during AES-GCM wrapping, so any substitution or tampering of
+          wrapped blobs causes a GCM authentication failure at unwrap time. This
+          replaces the older approach of signing per-issuer SHA-256 hash proofs in
+          a separate JWT.
         </p>
-        <CodeBlock>{`// v2 integrity: seal AAD binds keys to access tier
+        <CodeBlock>{`// Integrity: wrap AAD binds keys to access tier
 //
-// v1 (deprecated): publisher signed an issuerJWT with SHA-256 hashes of sealed blobs
-//   → issuer verified hashes before unsealing
+// Old approach (deprecated): publisher signed an issuerJWT with SHA-256 hashes of wrapped blobs
+//   → issuer verified hashes before unwrapping
 //
-// v2 (current): publisher passes keyName as AAD during AES-GCM sealing
-//   → issuer provides keyName (from each entry) as AAD during unsealing
-//   → GCM authentication tag rejects any blob sealed for a different tier
+// Current approach: publisher passes scope as AAD during AES-GCM wrapping
+//   → issuer provides scope (from each entry) as AAD during unwrapping
+//   → GCM authentication tag rejects any blob wrapped for a different tier
 //
 // Result: each entry is self-describing and tamper-proof, no separate mapping needed`}</CodeBlock>
 
         <h3>DCA HTML Embedding</h3>
         <p>
-          DCA data and sealed content are embedded using two elements. The{" "}
-          <code>&lt;script&gt;</code> tag holds all metadata, the <code>resourceJWT</code>, and sealed keys.
-          The <code>&lt;template&gt;</code> tag holds the encrypted content blobs
-          (inert — no scripts execute, no images load).
+          The DCA manifest is embedded in a single <code>&lt;script&gt;</code>{" "}
+          tag. It holds all metadata, the <code>resourceJWT</code>, wrapped keys,
+          and the encrypted content ciphertext inline under each{" "}
+          <code>content[name]</code> entry. The target elements on the page
+          (e.g. <code>&lt;div data-dca-content-name=&quot;bodytext&quot;&gt;&lt;/div&gt;</code>)
+          are empty placeholders that the client fills in after decryption.
         </p>
-        <CodeBlock>{`<!-- DCA metadata + sealed keys -->
-<script type="application/json" class="dca-data">
+        <CodeBlock>{`<!-- DCA manifest: metadata + wrapped keys + ciphertext -->
+<script type="application/json" class="dca-manifest">
 {
-  "version": "2",
+  "version": "0.10",
   "resourceJWT": "eyJ…",
-  "contentSealData": {
-    "bodytext": { "contentType": "text/html", "nonce": "…", "aad": "…" }
+  "content": {
+    "bodytext": {
+      "contentType": "text/html",
+      "iv": "…",
+      "aad": "…",
+      "ciphertext": "base64url-encrypted-content…",
+      "wrappedContentKey": [
+        { "kid": "251023T13", "iv": "…", "ciphertext": "…" }
+      ]
+    }
   },
-  "sealedContentKeys": {
-    "bodytext": [{ "t": "251023T13", "nonce": "…", "key": "…" }]
-  },
-  "issuerData": {
+  "issuers": {
     "sesamy": {
-      "contentEncryptionKeys": [
+      "unlockUrl": "https://issuer.example.com/api/unlock",
+      "keyId": "issuer-key-1",
+      "keys": [
         {
           "contentName": "bodytext",
-          "keyName": "premium",
-          "contentKey": "base64url-sealed-blob",
-          "periodKeys": [
-            { "bucket": "251023T13", "key": "base64url-sealed-blob" }
+          "scope": "premium",
+          "contentKey": "base64url-wrapped-blob",
+          "wrapKeys": [
+            { "kid": "251023T13", "key": "base64url-wrapped-blob" }
           ]
         }
-      ],
-      "unlockUrl": "https://issuer.example.com/api/unlock",
-      "keyId": "issuer-key-1"
+      ]
     }
   }
 }
 </script>
 
-<!-- Encrypted content (inert) -->
-<template class="dca-sealed-content">
-  <div data-dca-content-name="bodytext">base64url-encrypted-content…</div>
-</template>`}</CodeBlock>
+<!-- Target placeholder (filled in by the client after decryption) -->
+<div data-dca-content-name="bodytext"></div>`}</CodeBlock>
 
         <h3>Unlock Flow</h3>
         <p>
@@ -199,8 +203,8 @@ const result = await publisher.render({
         </p>
         <ol>
           <li>Optionally verify <code>resourceJWT</code> signature (ES256) using the publisher's public key, looked up by <code>resource.domain</code>.</li>
-          <li>Read <code>keyName</code> from each <code>contentEncryptionKeys</code> entry.</li>
-          <li>Unseal keys using the issuer's ECDH private key, providing <code>keyName</code> as AAD (GCM auth tag validates the blob was sealed for this access tier).</li>
+          <li>Read <code>scope</code> from each <code>keys</code> entry.</li>
+          <li>Unwrap keys using the issuer's ECDH private key, providing <code>scope</code> as AAD (GCM auth tag validates the blob was wrapped for this access tier).</li>
           <li>Return keys to the client — either as plaintext (direct) or RSA-OAEP wrapped (client-bound).</li>
         </ol>
 
@@ -208,13 +212,13 @@ const result = await publisher.render({
 POST /api/unlock
 {
   "resourceJWT": "eyJ…",             // optional — for publisher trust verification
-  "contentEncryptionKeys": [
+  "keys": [
     {
       "contentName": "bodytext",
-      "keyName": "premium",           // AAD-bound access tier
-      "contentKey": "base64url-sealed-blob",
-      "periodKeys": [
-        { "bucket": "251023T13", "sealedKey": "base64url-sealed-blob" }
+      "scope": "premium",             // AAD-bound access tier
+      "contentKey": "base64url-wrapped-blob",
+      "wrapKeys": [
+        { "kid": "251023T13", "key": "base64url-wrapped-blob" }
       ]
     }
   ],
@@ -223,27 +227,27 @@ POST /api/unlock
 
 // Issuer verification:
 // 1. Optionally verify resourceJWT → extract domain, resourceId
-// 2. Unseal each key blob with ECDH private key + keyName as AAD
-//    (mismatched keyName → GCM auth failure → reject)
+// 2. Unwrap each key blob with ECDH private key + scope as AAD
+//    (mismatched scope → GCM auth failure → reject)
 // 3. Return keys
 
 // Issuer → Client (one delivery form per entry)
-//   deliveryMode: "contentKey" → returns contentKey only
-//   deliveryMode: "periodKey"  → returns periodKeys only (cacheable, 1-hour buckets)
+//   deliveryMode: "direct"  → returns contentKey only
+//   deliveryMode: "wrapKey" → returns wrapKeys only (cacheable, 1-hour rotation versions)
 {
-  "contentEncryptionKeys": [
-    { "contentName": "bodytext", "keyName": "premium", "contentKey": "base64url-key-or-wrapped-key" }
+  "keys": [
+    { "contentName": "bodytext", "scope": "premium", "contentKey": "base64url-key-or-wrapped-key" }
   ],
   "transport": "client-bound"    // or "direct" (default)
 }
-// — or with periodKey delivery —
+// — or with wrapKey delivery —
 {
-  "contentEncryptionKeys": [
+  "keys": [
     {
       "contentName": "bodytext",
-      "keyName": "premium",
-      "periodKeys": [
-        { "bucket": "251023T13", "key": "base64url-key-or-wrapped-key" }
+      "scope": "premium",
+      "wrapKeys": [
+        { "kid": "251023T13", "key": "base64url-key-or-wrapped-key" }
       ]
     }
   ]
@@ -319,8 +323,8 @@ POST /api/unlock {
   "clientPublicKey": "base64url(SPKI-encoded RSA-OAEP public key)"
 }
 
-// 2. Issuer unseals keys normally, then wraps each with client's public key
-for each key in unsealedKeys:
+// 2. Issuer unwraps keys normally, then wraps each with client's public key
+for each key in unwrappedKeys:
   wrappedKey = RSA-OAEP-Encrypt(clientPublicKey, rawKeyBytes)
   response.keys[contentName][keyType] = base64url(wrappedKey)
 response.transport = "client-bound"
@@ -343,12 +347,13 @@ rawKey = RSA-OAEP-Decrypt(privateKey, wrappedKeyBytes)
         <h3>Client-Side Decryption</h3>
         <p>
           After receiving keys (direct or unwrapped), the client decrypts content
-          using AES-256-GCM with the original nonce and AAD from <code>contentSealData</code>:
+          using AES-256-GCM with the original iv and AAD from{" "}
+          <code>content[name]</code>:
         </p>
-        <CodeBlock>{`// 1. Parse DCA data from the page
+        <CodeBlock>{`// 1. Parse DCA manifest from the page
 const page = client.parsePage();
 
-// 2. Unlock via issuer (sends sealed keys + optional clientPublicKey)
+// 2. Unlock via issuer (sends wrapped keys + optional clientPublicKey)
 const response = await client.unlock("sesamy");
 
 // 3. Decrypt content (handles unwrapping if client-bound)
@@ -420,30 +425,30 @@ observer.observe(document.body, {
         <p>
           The critical design insight: a share link token is <strong>purely an
             authorization grant</strong>, not a key-delivery mechanism. The
-          publisher&apos;s <code>periodSecret</code> never leaves the publisher.
-          Key material flows through the normal DCA seal/unseal channel — the
-          sealed keys are already embedded in the page&apos;s DCA data, and the
-          issuer unseals them as usual.
+          publisher&apos;s <code>rotationSecret</code> never leaves the publisher.
+          Key material flows through the normal DCA wrap/unwrap channel — the
+          wrapped keys are already embedded in the page&apos;s DCA manifest, and
+          the issuer unwraps them as usual.
         </p>
         <p>
           This is DCA-compatible because the issuer never needs the publisher&apos;s{" "}
-          <code>periodSecret</code>. The publisher creates a signed JWT that says
+          <code>rotationSecret</code>. The publisher creates a signed JWT that says
           &ldquo;this bearer may access these content items for this resource.&rdquo;
           The issuer validates the token signature (the publisher already has a
           trusted signing key in the allowlist), uses the token&apos;s claims as the
-          access decision, and returns unsealed keys from the normal DCA sealed data.
+          access decision, and returns unwrapped keys from the normal DCA manifest.
         </p>
 
         <CodeBlock>{`// Share Link Flow (DCA-compatible)
 //
 // 1. Publisher signs a share token (ES256 JWT) granting access
-// 2. User clicks the share link → loads page with normal DCA-sealed content
+// 2. User clicks the share link → loads page with normal DCA-wrapped content
 // 3. Client includes the share token in the unlock request
 // 4. Issuer verifies token (publisher-signed, trusted key) → access decision
-// 5. Issuer unseals keys from normal DCA sealed data → returns to client
+// 5. Issuer unwraps keys from normal DCA manifest → returns to client
 // 6. Client decrypts content locally
 //
-// Key insight: periodSecret never leaves the publisher.
+// Key insight: rotationSecret never leaves the publisher.
 // The token is authorization only — key material uses normal DCA channels.`}</CodeBlock>
 
         <h3>Token Structure</h3>
@@ -477,7 +482,7 @@ observer.observe(document.body, {
 const publisher = createDcaPublisher({
   domain: "news.example.com",
   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
-  periodSecret: process.env.PERIOD_SECRET!,
+  rotationSecret: process.env.ROTATION_SECRET!,
 });
 
 // Generate a share link token
@@ -517,7 +522,7 @@ export async function POST(request: Request) {
   if (body.shareToken) {
     // Share link flow: token IS the access decision
     const result = await issuer.unlockWithShareToken(body, {
-      deliveryMode: "contentKey",        // or "periodKey" for caching
+      deliveryMode: "direct",            // or "wrapKey" for caching
       onShareToken: async (payload, resource) => {
         // Optional: use-count tracking, audit logging
         console.log(\`Share token used: \${payload.jti}\`);
@@ -539,8 +544,8 @@ export async function POST(request: Request) {
           <li>Validates resourceId binding (token must be for this resource)</li>
           <li>Checks expiry (reject expired tokens)</li>
           <li>Invokes optional <code>onShareToken</code> callback (use-count, audit)</li>
-          <li>Grants access to content names listed in token ∩ available sealed data</li>
-          <li>Unseals keys from normal DCA sealed blobs and returns them</li>
+          <li>Grants access to content names listed in token ∩ available wrapped data</li>
+          <li>Unwraps keys from normal DCA wrapped blobs and returns them</li>
         </ol>
 
         <h3>Unlock Request with Share Token</h3>
@@ -548,8 +553,8 @@ export async function POST(request: Request) {
 POST /api/unlock
 {
   "resourceJWT": "eyJ…",
-  "contentEncryptionKeys": [
-    { "contentName": "bodytext", "contentKey": "…", "periodKeys": [{ "bucket": "…", "key": "…" }] }
+  "keys": [
+    { "contentName": "bodytext", "contentKey": "…", "wrapKeys": [{ "kid": "…", "key": "…" }] }
   ],
   "shareToken": "eyJ…",                  // ← Share link token
   "clientPublicKey": "base64url-SPKI…"   // Optional: client-bound transport
@@ -557,7 +562,7 @@ POST /api/unlock
 
 // Issuer → Client (same response format as normal unlock)
 {
-  "contentEncryptionKeys": [
+  "keys": [
     { "contentName": "bodytext", "contentKey": "base64url-key-or-wrapped-key" }
   ],
   "transport": "client-bound"
@@ -623,13 +628,13 @@ const result = await issuer.unlockWithShareToken(body, {
             ✅ Tokens are ES256-signed using the publisher&apos;s existing signing key
           </li>
           <li>✅ Issuer validates signature via the trusted-publisher allowlist (no new secrets)</li>
-          <li>✅ <code>periodSecret</code> never leaves the publisher — DCA boundary intact</li>
+          <li>✅ <code>rotationSecret</code> never leaves the publisher — DCA boundary intact</li>
           <li>✅ Expiration limits exposure window</li>
           <li>✅ Usage limits via <code>maxUses</code> + <code>onShareToken</code> callback</li>
           <li>✅ Resource and domain binding prevent token reuse across content</li>
           <li>✅ Content-name scoping limits what each token can unlock</li>
           <li>✅ Full audit trail via <code>jti</code>, <code>data</code>, and callback</li>
-          <li>✅ Key material uses the same DCA seal/unseal channel (no new attack surface)</li>
+          <li>✅ Key material uses the same DCA wrap/unwrap channel (no new attack surface)</li>
           <li>
             ⚠️ Tokens are bearer credentials — anyone with the URL has access
           </li>
@@ -640,11 +645,11 @@ const result = await issuer.unlockWithShareToken(body, {
 
         <h2>Security Considerations</h2>
 
-        <h3>Period Secret Protection</h3>
+        <h3>Rotation Secret Protection</h3>
         <p>
-          The period secret is the root of all security. If compromised,
-          attackers can derive all future period keys. Only the publisher
-          should hold the period secret.
+          The rotation secret is the root of all security. If compromised,
+          attackers can derive all future wrapKeys. Only the publisher
+          should hold the rotation secret.
         </p>
 
         <table
@@ -689,7 +694,7 @@ const result = await issuer.unlockWithShareToken(body, {
           <tbody>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Period Secret
+                Rotation Secret
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 🔒 SECRET
@@ -700,7 +705,7 @@ const result = await issuer.unlockWithShareToken(body, {
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Period Derivation Algorithm
+                WrapKey Derivation Algorithm
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 ✅ Public
@@ -711,7 +716,7 @@ const result = await issuer.unlockWithShareToken(body, {
             </tr>
             <tr>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
-                Period Keys
+                WrapKeys
               </td>
               <td style={{ padding: "0.5rem", borderBottom: "1px solid #ddd" }}>
                 🔒 SECRET
@@ -747,11 +752,11 @@ const result = await issuer.unlockWithShareToken(body, {
 
         <h3>Access Revocation</h3>
         <p>
-          With time-period keys, access is automatically revoked within the
-          period duration (15 minutes):
+          With rotating wrapKeys, access is automatically revoked within the
+          rotation interval (default: 1 hour):
         </p>
         <ul>
-          <li>User's browser caches unwrapped content key until period expires</li>
+          <li>User's browser caches unwrapped content key until the rotation version expires</li>
           <li>
             When subscription cancelled, issuer refuses new unlock requests
           </li>
@@ -765,8 +770,8 @@ const result = await issuer.unlockWithShareToken(body, {
         </p>
         <ul>
           <li>❌ Plaintext content (publisher already has this)</li>
-          <li>❌ Period secret and derived period keys</li>
-          <li>✅ Cannot unseal keys without issuer private key</li>
+          <li>❌ Rotation secret and derived wrapKeys</li>
+          <li>✅ Cannot unwrap keys without issuer private key</li>
           <li>✅ Cannot decrypt for other users (no user private keys)</li>
         </ul>
 
@@ -775,7 +780,7 @@ const result = await issuer.unlockWithShareToken(body, {
           <strong>If the issuer is compromised, attacker gets:</strong>
         </p>
         <ul>
-          <li>❌ ECDH private key → can unseal content keys and period keys</li>
+          <li>❌ ECDH private key → can unwrap content keys and wrapKeys</li>
           <li>❌ Can decrypt content if they also have the encrypted content</li>
           <li>✅ Cannot access content without the encrypted HTML (publisher-side)</li>
           <li>✅ Cannot forge publisher JWTs (no ES256 signing key)</li>
@@ -795,7 +800,7 @@ const result = await issuer.unlockWithShareToken(body, {
 
         <h3>Key Storage</h3>
         <p>
-          The period secret and signing keys should be stored in a secure key
+          The rotation secret and signing keys should be stored in a secure key
           management system (KMS) in production. Never hardcode secrets in
           source code.
         </p>
@@ -825,22 +830,22 @@ const result = await issuer.unlockWithShareToken(body, {
             tampering
           </li>
           <li>
-            ✅ <strong>Forward Secrecy:</strong> Time periods limit exposure
+            ✅ <strong>Forward Secrecy:</strong> Rotation versions limit exposure
             window
           </li>
           <li>
-            ✅ <strong>Secure Key Transport:</strong> ECDH P-256 sealing + optional RSA-OAEP client-bound wrapping
+            ✅ <strong>Secure Key Transport:</strong> ECDH P-256 wrapping + optional RSA-OAEP client-bound wrapping
           </li>
           <li>
             ✅ <strong>Content Key Binding:</strong> Two layers of AAD prevent
-            substitution — content AAD (<code>domain|resourceId|contentName|keyName</code>)
-            binds ciphertext to resource context, seal AAD (<code>keyName</code>)
-            binds sealed key material to the access tier
+            substitution — content AAD (<code>domain|resourceId|contentName|scope</code>)
+            binds ciphertext to resource context, wrap AAD (<code>scope</code>)
+            binds wrapped key material to the access tier
           </li>
           <li>
-            ✅ <strong>Cross-Tier Protection:</strong> Seal AAD prevents
-            key substitution between access tiers — sealed blobs cannot be
-            unsealed under a different tier&apos;s context
+            ✅ <strong>Cross-Tier Protection:</strong> Wrap AAD prevents
+            key substitution between access tiers — wrapped blobs cannot be
+            unwrapped under a different tier&apos;s context
           </li>
           <li>
             ✅ <strong>Offline Access:</strong> Cached keys work without network
@@ -873,7 +878,7 @@ const result = await issuer.unlockWithShareToken(body, {
         <h2>Implementation Checklist</h2>
         <ul>
           <li>✅ AES-256-GCM for content encryption</li>
-          <li>✅ ECDH P-256 for key sealing (with keyName as seal AAD)</li>
+          <li>✅ ECDH P-256 for key wrapping (with scope as wrap AAD)</li>
           <li>✅ ES256 (ECDSA P-256) for JWT signing</li>
           <li>✅ Unique 96-bit IV per encrypted content</li>
           <li>✅ 128-bit authentication tag (GCM)</li>

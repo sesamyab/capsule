@@ -2,10 +2,10 @@
  * DCA Client — browser-side parser, unlock caller, and decryptor.
  *
  * This module provides:
- *   1. Page parsing: extract DCA data and sealed content from the DOM
+ *   1. Page parsing: extract the DCA manifest from the DOM
  *   2. Unlock flow: call issuer's unlock endpoint and receive keys
  *   3. Decryption: AES-256-GCM content decryption with AAD support
- *   4. Period key caching: reuse periodKeys across pages
+ *   4. WrapKey caching: reuse wrapKeys across pages
  *
  * Designed for browser environments (Web Crypto API required).
  *
@@ -15,7 +15,7 @@
  *
  * const client = new DcaClient();
  *
- * // Parse DCA data from the current page
+ * // Parse the manifest from the current page
  * const page = client.parsePage();
  *
  * // Unlock via an issuer
@@ -33,43 +33,43 @@
 // Types (self-contained for browser bundle size)
 // ============================================================================
 
-/** DCA data from `<script class="dca-data">` */
-export interface DcaData {
+/** DCA manifest from `<script class="dca-manifest">` */
+export interface DcaManifest {
     version: string;
     resourceJWT: string;
-    contentSealData: Record<string, {
+    content: Record<string, {
         contentType: string;
-        nonce: string;
+        iv: string;
         aad: string;
-    }>;
-    sealedContentKeys: Record<string, Array<{
-        t: string;
-        nonce: string;
-        key: string;
-    }>>;
-    issuerData: Record<string, {
-        contentEncryptionKeys: Array<{
-            contentName?: string;
-            keyName?: string;
-            contentKey: string;
-            periodKeys: Array<{ bucket: string; sealedKey: string }>;
+        ciphertext: string;
+        wrappedContentKey: Array<{
+            kid: string;
+            iv: string;
+            ciphertext: string;
         }>;
+    }>;
+    issuers: Record<string, {
         unlockUrl: string;
         keyId: string;
+        keys: Array<{
+            contentName?: string;
+            scope: string;
+            contentKey: string;
+            wrapKeys: Array<{ kid: string; key: string }>;
+        }>;
     }>;
 }
 
-/** Parsed page data */
+/** Parsed page data — manifest only (ciphertext lives inside manifest.content) */
 export interface DcaParsedPage {
-    dcaData: DcaData;
-    sealedContent: Record<string, string>;
+    manifest: DcaManifest;
 }
 
 /** Unlock response from issuer — each entry has exactly one delivery form */
 export interface DcaUnlockResponse {
-    contentEncryptionKeys: Array<
-        | { contentName?: string; keyName?: string; contentKey: string; periodKeys?: never }
-        | { contentName?: string; keyName?: string; periodKeys: Array<{ bucket: string; key: string }>; contentKey?: never }
+    keys: Array<
+        | { contentName?: string; scope?: string; contentKey: string; wrapKeys?: never }
+        | { contentName?: string; scope?: string; wrapKeys: Array<{ kid: string; key: string }>; contentKey?: never }
     >;
     /**
      * Transport mode used by the issuer:
@@ -98,10 +98,15 @@ export interface DcaClientOptions {
      */
     unlockFn?: (unlockUrl: string, body: unknown) => Promise<DcaUnlockResponse>;
     /**
-     * Period key cache implementation. If provided, periodKeys are cached
-     * and reused across pages.
+     * WrapKey cache implementation.
+     *
+     * - Omitted / `undefined` (default): uses an IndexedDB-backed cache so
+     *   wrapKeys are reused across page navigations.
+     * - A custom {@link DcaWrapKeyCache}: delegates to the provided cache
+     *   (e.g. sessionStorage, in-memory).
+     * - `false`: disables caching entirely.
      */
-    periodKeyCache?: DcaPeriodKeyCache;
+    wrapKeyCache?: DcaWrapKeyCache | false;
     /**
      * Enable client-bound transport mode.
      *
@@ -141,15 +146,15 @@ export interface DcaClientOptions {
     paywallFn?: (publisherContentId: string | null, root: Document | Element) => void;
 }
 
-/** Simple key-value cache interface for period keys */
-export interface DcaPeriodKeyCache {
+/** Simple key-value cache interface for wrapKeys */
+export interface DcaWrapKeyCache {
     get(key: string): Promise<string | null>;
     set(key: string, value: string): Promise<void>;
 }
 
 /** Options for the {@link DcaClient.processPage} convenience method */
 export interface DcaProcessPageOptions {
-    /** Override issuer name (default: first issuer found in issuerData) */
+    /** Override issuer name (default: first issuer found in manifest) */
     issuerName?: string;
     /**
      * Override share token.
@@ -171,7 +176,6 @@ export interface DcaProcessPageOptions {
 // ============================================================================
 
 function base64UrlDecode(s: string): Uint8Array {
-    // Pad for standard base64
     const pad = s.length % 4;
     const padded = pad ? s + "=".repeat(4 - pad) : s;
     const b64 = padded.replace(/-/g, "+").replace(/_/g, "/");
@@ -199,7 +203,70 @@ const DEFAULT_KEY_DB_NAME = "dca-keys";
 const DEFAULT_KEY_STORE_NAME = "keypair";
 const DEFAULT_KEY_ID = "default";
 
+/** IndexedDB defaults for the wrapKey cache */
+const DEFAULT_WRAP_KEY_DB_NAME = "dca-wrap-keys";
+const DEFAULT_WRAP_KEY_STORE_NAME = "wrap-keys";
 
+/**
+ * Build an IndexedDB-backed {@link DcaWrapKeyCache}.
+ *
+ * Used as the default cache when no explicit one is provided. Silently
+ * no-ops in environments without IndexedDB (SSR, Node) so the client
+ * stays safe to import server-side.
+ */
+function createDefaultWrapKeyCache(): DcaWrapKeyCache {
+    let dbPromise: Promise<IDBDatabase> | null = null;
+
+    function openDb(): Promise<IDBDatabase> {
+        if (!dbPromise) {
+            dbPromise = new Promise((resolve, reject) => {
+                const request = indexedDB.open(DEFAULT_WRAP_KEY_DB_NAME, 1);
+                request.onupgradeneeded = () => {
+                    const db = request.result;
+                    if (!db.objectStoreNames.contains(DEFAULT_WRAP_KEY_STORE_NAME)) {
+                        db.createObjectStore(DEFAULT_WRAP_KEY_STORE_NAME);
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+        return dbPromise;
+    }
+
+    return {
+        async get(key) {
+            if (typeof indexedDB === "undefined") return null;
+            try {
+                const db = await openDb();
+                return await new Promise<string | null>((resolve) => {
+                    const tx = db.transaction(DEFAULT_WRAP_KEY_STORE_NAME, "readonly");
+                    const store = tx.objectStore(DEFAULT_WRAP_KEY_STORE_NAME);
+                    const req = store.get(key);
+                    req.onsuccess = () => resolve((req.result as string) ?? null);
+                    req.onerror = () => resolve(null);
+                });
+            } catch {
+                return null;
+            }
+        },
+        async set(key, value) {
+            if (typeof indexedDB === "undefined") return;
+            try {
+                const db = await openDb();
+                await new Promise<void>((resolve, reject) => {
+                    const tx = db.transaction(DEFAULT_WRAP_KEY_STORE_NAME, "readwrite");
+                    const store = tx.objectStore(DEFAULT_WRAP_KEY_STORE_NAME);
+                    store.put(value, key);
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                });
+            } catch {
+                // ignore — cache is best-effort
+            }
+        },
+    };
+}
 
 // ============================================================================
 // DCA Client
@@ -208,7 +275,7 @@ const DEFAULT_KEY_ID = "default";
 export class DcaClient {
     private fetchFn: typeof globalThis.fetch;
     private unlockFn?: (unlockUrl: string, body: unknown) => Promise<DcaUnlockResponse>;
-    private periodKeyCache?: DcaPeriodKeyCache;
+    private wrapKeyCache?: DcaWrapKeyCache;
     private clientBound: boolean;
     private rsaKeySize: 2048 | 4096;
     private keyDbName: string;
@@ -219,7 +286,9 @@ export class DcaClient {
     constructor(options: DcaClientOptions = {}) {
         this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
         this.unlockFn = options.unlockFn;
-        this.periodKeyCache = options.periodKeyCache;
+        this.wrapKeyCache = options.wrapKeyCache === false
+            ? undefined
+            : options.wrapKeyCache ?? createDefaultWrapKeyCache();
         this.clientBound = options.clientBound ?? false;
         this.rsaKeySize = options.rsaKeySize ?? 2048;
         this.keyDbName = options.keyDbName ?? DEFAULT_KEY_DB_NAME;
@@ -232,57 +301,45 @@ export class DcaClient {
     // --------------------------------------------------------------------------
 
     /**
-     * Parse DCA data and sealed content from the current page DOM.
+     * Parse the DCA manifest from the current page DOM.
+     *
+     * Looks for `<script class="dca-manifest">` and parses its JSON body.
+     * The manifest contains everything needed for decryption — no separate
+     * sealed-content template is required.
      *
      * @param root - DOM root to search (default: document)
      * @returns Parsed page data
-     * @throws Error if DCA elements are not found or data is invalid
+     * @throws Error if the manifest element is not found or data is invalid
      */
     parsePage(root?: Document | Element): DcaParsedPage {
         const container = root ?? document;
 
-        // Parse DCA data
-        const scriptEl = container.querySelector("script.dca-data");
+        const scriptEl = container.querySelector("script.dca-manifest");
         if (!scriptEl) {
-            throw new Error("DCA: <script class=\"dca-data\"> not found");
+            throw new Error("DCA: <script class=\"dca-manifest\"> not found");
         }
 
-        const dcaData = JSON.parse(scriptEl.textContent ?? "") as DcaData;
+        const manifest = JSON.parse(scriptEl.textContent ?? "") as DcaManifest;
 
-        // Parse sealed content
-        const templateEl = container.querySelector("template.dca-sealed-content");
-        const sealedContent: Record<string, string> = {};
-
-        if (templateEl && templateEl instanceof HTMLTemplateElement) {
-            const contentEls = templateEl.content.querySelectorAll("[data-dca-content-name]");
-            for (const el of Array.from(contentEls)) {
-                const name = el.getAttribute("data-dca-content-name");
-                if (name) {
-                    sealedContent[name] = el.textContent?.trim() ?? "";
-                }
-            }
-        }
-
-        return { dcaData, sealedContent };
+        return { manifest };
     }
 
     /**
-     * Parse DCA data from a JSON API response.
+     * Parse a DCA manifest from a JSON API response.
      */
-    parseJsonResponse(json: DcaData & { sealedContent: Record<string, string> }): DcaParsedPage {
-        const { sealedContent, ...dcaData } = json;
-        return { dcaData, sealedContent };
+    parseJsonResponse(json: DcaManifest): DcaParsedPage {
+        return { manifest: json };
     }
 
     /**
-     * Check whether the given root (or current page) contains DCA content.
+     * Check whether the given root (or current page) contains a DCA manifest.
      *
      * @param root - DOM root to search (default: document)
-     * @returns `true` if a `<script class="dca-data">` element exists
+     * @returns `true` if a `<script class="dca-manifest">` element exists
      */
     static hasDcaContent(root?: Document | Element): boolean {
         const container = root ?? document;
-        return container.querySelector("script.dca-data") !== null;
+        return container.querySelector("script.dca-manifest") !== null;
     }
 
     // --------------------------------------------------------------------------
@@ -302,19 +359,17 @@ export class DcaClient {
         issuerName: string,
         additionalBody?: Record<string, unknown>,
     ): Promise<DcaUnlockResponse> {
-        const issuerEntry = page.dcaData.issuerData[issuerName];
+        const issuerEntry = page.manifest.issuers[issuerName];
         if (!issuerEntry) {
-            throw new Error(`DCA: issuer "${issuerName}" not found in issuerData`);
+            throw new Error(`DCA: issuer "${issuerName}" not found in manifest.issuers`);
         }
 
-        // Build request body
         const body: Record<string, unknown> = {
-            resourceJWT: page.dcaData.resourceJWT,
-            contentEncryptionKeys: issuerEntry.contentEncryptionKeys,
+            resourceJWT: page.manifest.resourceJWT,
+            keys: issuerEntry.keys,
             ...additionalBody,
         };
 
-        // Client-bound transport: include RSA public key
         if (this.clientBound) {
             body.clientPublicKey = await this.getPublicKey();
         }
@@ -338,16 +393,6 @@ export class DcaClient {
 
     /**
      * Unlock content using a share link token.
-     *
-     * Convenience method that includes the share token in the unlock request.
-     * The issuer validates the publisher-signed token and grants access
-     * without requiring a subscription check.
-     *
-     * @param page - Parsed page data
-     * @param issuerName - Which issuer to call
-     * @param shareToken - Publisher-signed share link token (JWT)
-     * @param additionalBody - Extra fields to include in the request body
-     * @returns Unlock response with key material
      */
     async unlockWithShareToken(
         page: DcaParsedPage,
@@ -363,9 +408,6 @@ export class DcaClient {
 
     /**
      * Extract a share token from the current URL's query parameters.
-     *
-     * @param paramName - Query parameter name (default: "share")
-     * @returns The share token string, or null if not present
      */
     static getShareTokenFromUrl(paramName = "share"): string | null {
         if (typeof window === "undefined" || typeof URL === "undefined") return null;
@@ -385,8 +427,8 @@ export class DcaClient {
      * Decrypt a content item using keys from the unlock response.
      *
      * Handles both delivery modes:
-     *   - contentKey: decrypts directly
-     *   - periodKey: unwraps contentKey from sealedContentKeys first
+     *   - direct (contentKey): decrypts directly
+     *   - wrapKey: unwraps contentKey from manifest.content[name].wrappedContentKey first
      *
      * @param page - Parsed page data
      * @param contentName - Which content item to decrypt
@@ -398,88 +440,67 @@ export class DcaClient {
         contentName: string,
         unlockResponse: DcaUnlockResponse,
         /** @internal Pre-resolved key entry — skips the linear scan when provided. */
-        resolvedKeyEntry?: DcaUnlockResponse["contentEncryptionKeys"][number],
+        resolvedKeyEntry?: DcaUnlockResponse["keys"][number],
     ): Promise<string> {
-        const sealData = page.dcaData.contentSealData[contentName];
-        if (!sealData) {
-            throw new Error(`DCA: contentSealData not found for "${contentName}"`);
+        const entry = page.manifest.content[contentName];
+        if (!entry) {
+            throw new Error(`DCA: content entry not found for "${contentName}"`);
         }
 
-        const ciphertext = page.sealedContent[contentName];
-        if (!ciphertext) {
-            throw new Error(`DCA: sealed content not found for "${contentName}"`);
-        }
-
-        // Use pre-resolved entry if available, otherwise look up from flat array
-        const keyEntry = resolvedKeyEntry ?? unlockResponse.contentEncryptionKeys.find(
+        const keyEntry = resolvedKeyEntry ?? unlockResponse.keys.find(
             k => (k.contentName ?? "default") === contentName,
         );
         if (!keyEntry) {
             throw new Error(`DCA: no key provided for "${contentName}"`);
         }
 
-        // Determine if keys need RSA-OAEP unwrapping
         const isClientBound = unlockResponse.transport === "client-bound";
 
-        // Convert flat periodKeys array to Record for internal use
-        const periodKeysRecord = keyEntry.periodKeys
-            ? Object.fromEntries(keyEntry.periodKeys.map(pk => [pk.bucket, pk.key]))
+        const wrapKeysRecord = keyEntry.wrapKeys
+            ? Object.fromEntries(keyEntry.wrapKeys.map(wk => [wk.kid, wk.key]))
             : undefined;
 
-        // Resolve contentKey
         let contentKeyBytes: Uint8Array;
 
         if (keyEntry.contentKey) {
-            // Direct path: contentKey provided
+            // Direct delivery: contentKey provided
             contentKeyBytes = isClientBound
                 ? await this.rsaUnwrapKey(keyEntry.contentKey)
                 : base64UrlDecode(keyEntry.contentKey);
+        } else if (wrapKeysRecord) {
+            // WrapKey delivery: unwrap contentKey from manifest using a wrapKey
+            const rawWrapKeys = isClientBound
+                ? await this.unwrapWrapKeyMap(wrapKeysRecord)
+                : wrapKeysRecord;
 
-            // Cache associated periodKeys if present
-            if (periodKeysRecord && this.periodKeyCache) {
-                // For client-bound, unwrap periodKeys before caching (store raw keys)
-                const rawPeriodKeys = isClientBound
-                    ? await this.unwrapPeriodKeyMap(periodKeysRecord)
-                    : periodKeysRecord;
-                // Cache by keyName (not contentName) for cross-content sharing
-                const keyName = keyEntry.keyName ?? contentName;
-                await this.cachePeriodKeys(keyName, rawPeriodKeys);
-            }
-        } else if (periodKeysRecord) {
-            // Cacheable path: unwrap contentKey from sealedContentKeys using a periodKey
-            const rawPeriodKeys = isClientBound
-                ? await this.unwrapPeriodKeyMap(periodKeysRecord)
-                : periodKeysRecord;
-
-            contentKeyBytes = await this.unwrapWithPeriodKeys(
-                page.dcaData.sealedContentKeys[contentName] ?? [],
-                rawPeriodKeys,
+            contentKeyBytes = await this.unwrapContentKey(
+                entry.wrappedContentKey,
+                rawWrapKeys,
             );
 
-            // Cache by keyName for cross-content sharing
-            if (this.periodKeyCache) {
-                const keyName = keyEntry.keyName ?? contentName;
-                await this.cachePeriodKeys(keyName, rawPeriodKeys);
+            // Cache by scope for cross-content reuse
+            if (this.wrapKeyCache) {
+                const scope = this.resolveScope(page, contentName) ?? contentName;
+                await this.cacheWrapKeys(scope, rawWrapKeys);
             }
         } else {
-            // Try cached periodKeys (by keyName from issuerData entries)
-            const issuerEntries = Object.values(page.dcaData.issuerData).flatMap(i => i.contentEncryptionKeys);
-            const keyName = issuerEntries.find(e => (e.contentName ?? "default") === contentName)?.keyName ?? contentName;
-            const cached = await this.getCachedPeriodKeys(keyName, page.dcaData.sealedContentKeys[contentName] ?? []);
+            // Try cached wrapKeys (by scope)
+            const scope = this.resolveScope(page, contentName) ?? contentName;
+            const cached = await this.getCachedWrapKeys(scope, entry.wrappedContentKey);
             if (cached) {
-                contentKeyBytes = await this.unwrapWithPeriodKeys(
-                    page.dcaData.sealedContentKeys[contentName] ?? [],
+                contentKeyBytes = await this.unwrapContentKey(
+                    entry.wrappedContentKey,
                     cached,
                 );
             } else {
-                throw new Error(`DCA: no contentKey or periodKeys available for "${contentName}"`);
+                throw new Error(`DCA: no contentKey or wrapKeys available for "${contentName}"`);
             }
         }
 
-        // Decrypt content
-        const ciphertextBytes = base64UrlDecode(ciphertext);
-        const iv = base64UrlDecode(sealData.nonce);
-        const aad = new TextEncoder().encode(sealData.aad);
+        // Decrypt content body
+        const ciphertextBytes = base64UrlDecode(entry.ciphertext);
+        const iv = base64UrlDecode(entry.iv);
+        const aad = new TextEncoder().encode(entry.aad);
 
         const aesKey = await crypto.subtle.importKey(
             "raw",
@@ -499,16 +520,15 @@ export class DcaClient {
     }
 
     /**
-     * Decrypt all content items on a page and return a map.
+     * Decrypt all content items that have unlocked keys and return a map.
      */
     async decryptAll(
         page: DcaParsedPage,
         unlockResponse: DcaUnlockResponse,
     ): Promise<Record<string, string>> {
         const results: Record<string, string> = {};
-        // Build a map once so decrypt() doesn't re-scan the array for each item
         const keyEntryMap = new Map(
-            unlockResponse.contentEncryptionKeys.map(e => [e.contentName ?? "default", e]),
+            unlockResponse.keys.map(e => [e.contentName ?? "default", e]),
         );
         for (const [contentName, entry] of keyEntryMap) {
             results[contentName] = await this.decrypt(page, contentName, unlockResponse, entry);
@@ -523,7 +543,7 @@ export class DcaClient {
     /**
      * Parse, unlock, and decrypt all content in a single call.
      *
-     * Auto-detects the issuer (first key in `issuerData`) and share token
+     * Auto-detects the issuer (first key in `manifest.issuers`) and share token
      * (from URL query parameters) unless explicitly overridden via `options`.
      *
      * @param options - Optional overrides for issuer, share token, root, etc.
@@ -532,10 +552,6 @@ export class DcaClient {
     async processPage(options: DcaProcessPageOptions = {}): Promise<Record<string, string>> {
         const root = options.root ?? document;
 
-        // Check entitlement before attempting unlock.
-        // When accessCheck is configured but no publisher-content-id attribute
-        // is found, we treat it as "denied" for safety: notify via paywallFn
-        // (so consumers can decide how to handle a null id) and return early.
         if (this.accessCheck) {
             const publisherContentId = DcaClient.getPublisherContentId(root);
             if (!publisherContentId) {
@@ -558,9 +574,9 @@ export class DcaClient {
         const page = this.parsePage(root);
 
         const issuerName = options.issuerName
-            ?? Object.keys(page.dcaData.issuerData)[0];
+            ?? Object.keys(page.manifest.issuers)[0];
         if (!issuerName) {
-            throw new Error("DCA: no issuers found in issuerData");
+            throw new Error("DCA: no issuers found in manifest.issuers");
         }
 
         const shareToken = options.shareToken !== undefined
@@ -614,14 +630,12 @@ export class DcaClient {
     static getPublisherContentId(root?: Document | Element): string | null {
         const container = root ?? document;
 
-        // If root is an element, check it and its ancestors
         if (container instanceof Element) {
             const match = container.closest("[publisher-content-id]");
             if (match) return match.getAttribute("publisher-content-id");
         }
 
-        // Fall back to searching from the dca-data script element
-        const scriptEl = container.querySelector("script.dca-data");
+        const scriptEl = container.querySelector("script.dca-manifest");
         if (scriptEl) {
             const match = scriptEl.closest("[publisher-content-id]");
             if (match) return match.getAttribute("publisher-content-id");
@@ -633,7 +647,7 @@ export class DcaClient {
     /**
      * Start observing the DOM for dynamically added DCA content.
      *
-     * When new elements containing `<script class="dca-data">` are inserted,
+     * When new elements containing `<script class="dca-manifest">` are inserted,
      * the observer automatically runs the access check and, if entitled,
      * calls {@link processPage} + {@link renderToPage}. If not entitled,
      * it calls the configured {@link DcaClientOptions.paywallFn | paywallFn}.
@@ -653,18 +667,16 @@ export class DcaClient {
                 for (const node of Array.from(mutation.addedNodes)) {
                     if (!(node instanceof HTMLElement)) continue;
 
-                    // The added node itself may be a container with DCA content,
-                    // or it may contain nested DCA content elements.
                     const targets: Element[] = [];
 
-                    if (node.matches("script.dca-data")) {
+                    if (node.matches("script.dca-manifest")) {
                         const scriptContainer = node.parentElement ?? node;
                         if (!targets.includes(scriptContainer)) {
                             targets.push(scriptContainer);
                         }
                     }
 
-                    const scripts = node.querySelectorAll("script.dca-data");
+                    const scripts = node.querySelectorAll("script.dca-manifest");
                     for (const script of Array.from(scripts)) {
                         const scriptContainer = script.parentElement ?? node;
                         if (!targets.includes(scriptContainer)) {
@@ -692,72 +704,81 @@ export class DcaClient {
     }
 
     // --------------------------------------------------------------------------
-    // Period key management
+    // WrapKey management
     // --------------------------------------------------------------------------
 
     /**
-     * Unwrap a contentKey using one of the provided periodKeys.
-     * Tries each sealedContentKey entry until one matches a provided periodKey.
+     * Resolve the scope for a given content item from the manifest.
      */
-    private async unwrapWithPeriodKeys(
-        sealedEntries: Array<{ t: string; nonce: string; key: string }>,
-        periodKeys: Record<string, string>,
-    ): Promise<Uint8Array> {
-        for (const entry of sealedEntries) {
-            const periodKeyB64 = periodKeys[entry.t];
-            if (!periodKeyB64) continue;
+    private resolveScope(page: DcaParsedPage, contentName: string): string | undefined {
+        for (const issuer of Object.values(page.manifest.issuers)) {
+            const match = issuer.keys.find(k => (k.contentName ?? "default") === contentName);
+            if (match) return match.scope;
+        }
+        return undefined;
+    }
 
-            const periodKeyBytes = base64UrlDecode(periodKeyB64);
-            const nonce = base64UrlDecode(entry.nonce);
-            const wrappedKey = base64UrlDecode(entry.key);
+    /**
+     * Unwrap a contentKey using one of the provided wrapKeys.
+     * Tries each wrappedContentKey entry until one matches a provided wrapKey.
+     */
+    private async unwrapContentKey(
+        wrappedContentKey: Array<{ kid: string; iv: string; ciphertext: string }>,
+        wrapKeys: Record<string, string>,
+    ): Promise<Uint8Array> {
+        for (const entry of wrappedContentKey) {
+            const wrapKeyB64 = wrapKeys[entry.kid];
+            if (!wrapKeyB64) continue;
+
+            const wrapKeyBytes = base64UrlDecode(wrapKeyB64);
+            const iv = base64UrlDecode(entry.iv);
+            const ciphertext = base64UrlDecode(entry.ciphertext);
 
             const aesKey = await crypto.subtle.importKey(
                 "raw",
-                periodKeyBytes as BufferSource,
+                wrapKeyBytes as BufferSource,
                 { name: "AES-GCM" },
                 false,
                 ["decrypt"],
             );
 
             try {
-                // Unwrap contentKey from sealedContentKey (no AAD for key wrapping)
                 const decrypted = await crypto.subtle.decrypt(
-                    { name: "AES-GCM", iv: nonce as BufferSource, tagLength: 128 },
+                    { name: "AES-GCM", iv: iv as BufferSource, tagLength: 128 },
                     aesKey,
-                    wrappedKey as BufferSource,
+                    ciphertext as BufferSource,
                 );
                 return new Uint8Array(decrypted);
             } catch {
-                // Wrong period perhaps, try next
                 continue;
             }
         }
 
-        throw new Error("DCA: could not unwrap contentKey — no matching periodKey");
+        throw new Error("DCA: could not unwrap contentKey — no matching wrapKey");
     }
 
-    private async cachePeriodKeys(
-        keyName: string,
-        periodKeys: Record<string, string>,
+    private async cacheWrapKeys(
+        scope: string,
+        wrapKeys: Record<string, string>,
     ): Promise<void> {
-        if (!this.periodKeyCache) return;
-        for (const [t, keyB64] of Object.entries(periodKeys)) {
-            await this.periodKeyCache.set(`dca:pk:${keyName}:${t}`, keyB64);
+        if (!this.wrapKeyCache) return;
+        for (const [kid, keyB64] of Object.entries(wrapKeys)) {
+            await this.wrapKeyCache.set(`dca:wk:${scope}:${kid}`, keyB64);
         }
     }
 
-    private async getCachedPeriodKeys(
-        keyName: string,
-        sealedEntries: Array<{ t: string }>,
+    private async getCachedWrapKeys(
+        scope: string,
+        wrappedContentKey: Array<{ kid: string }>,
     ): Promise<Record<string, string> | null> {
-        if (!this.periodKeyCache) return null;
+        if (!this.wrapKeyCache) return null;
 
         const keys: Record<string, string> = {};
         let found = false;
-        for (const entry of sealedEntries) {
-            const cached = await this.periodKeyCache.get(`dca:pk:${keyName}:${entry.t}`);
+        for (const entry of wrappedContentKey) {
+            const cached = await this.wrapKeyCache.get(`dca:wk:${scope}:${entry.kid}`);
             if (cached) {
-                keys[entry.t] = cached;
+                keys[entry.kid] = cached;
                 found = true;
             }
         }
@@ -791,9 +812,6 @@ export class DcaClient {
         }
     }
 
-    /**
-     * Ensure an RSA-OAEP key pair exists, loading from IndexedDB or generating a new one.
-     */
     private ensureKeyPair(): Promise<CryptoKeyPair> {
         if (!this.keyPairPromise) {
             this.keyPairPromise = this.loadOrCreateKeyPair();
@@ -802,7 +820,6 @@ export class DcaClient {
     }
 
     private async loadOrCreateKeyPair(): Promise<CryptoKeyPair> {
-        // Try loading from IndexedDB
         try {
             const db = await this.openKeyDb();
             const stored = await this.idbGet(db, DEFAULT_KEY_ID);
@@ -813,7 +830,6 @@ export class DcaClient {
             // IndexedDB not available, fall through to generate in-memory
         }
 
-        // Generate new RSA-OAEP key pair
         const keyPair = await crypto.subtle.generateKey(
             {
                 name: "RSA-OAEP",
@@ -821,23 +837,21 @@ export class DcaClient {
                 publicExponent: RSA_PUBLIC_EXPONENT,
                 hash: "SHA-256",
             },
-            true, // extractable (needed to re-import private key as non-extractable)
+            true,
             ["encrypt", "decrypt"],
         ) as CryptoKeyPair;
 
-        // Re-import private key as non-extractable
         const privateKeyJwk = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
         const nonExtractablePrivateKey = await crypto.subtle.importKey(
             "jwk",
             privateKeyJwk,
             { name: "RSA-OAEP", hash: "SHA-256" },
-            false, // NOT extractable
+            false,
             ["decrypt"],
         );
 
         const result = { publicKey: keyPair.publicKey, privateKey: nonExtractablePrivateKey } as CryptoKeyPair;
 
-        // Persist to IndexedDB
         try {
             const db = await this.openKeyDb();
             await this.idbPut(db, DEFAULT_KEY_ID, {
@@ -870,15 +884,15 @@ export class DcaClient {
     }
 
     /**
-     * Unwrap a map of period bucket → RSA-OAEP-wrapped periodKey to raw base64url strings.
+     * Unwrap a map of kid → RSA-OAEP-wrapped wrapKey to raw base64url strings.
      */
-    private async unwrapPeriodKeyMap(
-        wrappedPeriodKeys: Record<string, string>,
+    private async unwrapWrapKeyMap(
+        wrappedWrapKeys: Record<string, string>,
     ): Promise<Record<string, string>> {
         const raw: Record<string, string> = {};
-        for (const [t, wrappedKey] of Object.entries(wrappedPeriodKeys)) {
+        for (const [kid, wrappedKey] of Object.entries(wrappedWrapKeys)) {
             const keyBytes = await this.rsaUnwrapKey(wrappedKey);
-            raw[t] = base64UrlEncode(keyBytes);
+            raw[kid] = base64UrlEncode(keyBytes);
         }
         return raw;
     }

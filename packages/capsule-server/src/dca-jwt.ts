@@ -5,6 +5,7 @@
  *
  * resourceJWT uses standard JWT claims (RFC 7519):
  *   - `iss` = publisher domain, `sub` = resourceId, `iat` = render time, `jti` = renderId
+ *   - `scopes` = required access scopes (custom claim)
  *   - `data` = custom publisher metadata
  *
  * One JWT per page:
@@ -117,13 +118,13 @@ export function decodeJwtPayload<T = unknown>(jwt: string): T {
 // ============================================================================
 
 /**
- * Compute the DCA proof hash of a sealed blob string.
+ * Compute the DCA proof hash of a wrapped blob string.
  *
  * Hash input: the base64url string as-is (UTF-8 bytes), NOT the decoded binary.
  * Output: base64url(SHA-256(utf8_bytes_of_base64url_string)), 43 chars no padding.
  */
-export async function computeProofHash(sealedBlobBase64Url: string): Promise<string> {
-  const bytes = encodeUtf8(sealedBlobBase64Url);
+export async function computeProofHash(wrappedBlobBase64Url: string): Promise<string> {
+  const bytes = encodeUtf8(wrappedBlobBase64Url);
   const hash = await sha256(bytes);
   return toBase64Url(hash);
 }
@@ -143,7 +144,7 @@ export async function createResourceJwt(
     sub: resource.resourceId,
     iat: Math.floor(new Date(resource.issuedAt).getTime() / 1000),
     jti: resource.renderId,
-    keyNames: resource.keyNames,
+    scopes: resource.scopes,
     data: resource.data,
   };
   return createJwt(payload, signingKey);
@@ -161,7 +162,7 @@ export function resourceJwtPayloadToResource(payload: DcaResourceJwtPayload): Dc
     resourceId: payload.sub,
     issuedAt: new Date(payload.iat * 1000).toISOString(),
     renderId: payload.jti,
-    keyNames: payload.keyNames ?? [],
+    scopes: payload.scopes ?? [],
     data: payload.data,
   };
 }

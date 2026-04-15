@@ -4,10 +4,10 @@
  * The publisher:
  *   1. Generates per-content-item contentKeys and IVs
  *   2. Encrypts content with AES-256-GCM + AAD
- *   3. Derives periodKeys and wraps contentKeys with them
- *   4. Seals contentKeys and periodKeys for each issuer
+ *   3. Derives wrapKeys and wraps contentKeys with them (per rotation version)
+ *   4. Wraps contentKeys and wrapKeys for each issuer's public key
  *   5. Signs resourceJWT (ES256)
- *   6. Assembles the DCA data JSON and sealed HTML template
+ *   6. Assembles the manifest JSON and HTML script tag
  */
 
 import {
@@ -26,20 +26,20 @@ import { encryptContent } from "./encryption";
 
 import { aesGcmEncrypt } from "./web-crypto";
 
-import { generateRenderId, getCurrentTimeBuckets, deriveDcaPeriodKey } from "./dca-time-buckets";
+import { generateRenderId, getCurrentRotationVersions, deriveWrapKey } from "./dca-rotation";
 
-import { seal, importIssuerPublicKey } from "./dca-seal";
+import { wrap, importIssuerPublicKey } from "./dca-wrap";
 
 import { createResourceJwt, createJwt } from "./dca-jwt";
 
 import type {
-    DcaData,
+    DcaManifest,
     DcaResource,
-    DcaContentSealData,
-    DcaSealedContentKey,
+    DcaContentEntry,
+    DcaWrappedContentKeyEntry,
     DcaIssuerEntry,
-    DcaSealedContentEncryptionKey,
-    DcaSealedPeriodKeyEntry,
+    DcaIssuerKey,
+    DcaWrappedIssuerWrapKey,
     DcaPublisherConfig,
     DcaRenderOptions,
     DcaRenderResult,
@@ -60,7 +60,7 @@ import type {
  * const publisher = createDcaPublisher({
  *   domain: "www.news-site.com",
  *   signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
- *   periodSecret: process.env.PERIOD_SECRET!,
+ *   rotationSecret: process.env.ROTATION_SECRET!,
  * });
  *
  * const result = await publisher.render({
@@ -81,11 +81,11 @@ import type {
  * ```
  */
 export function createDcaPublisher(config: DcaPublisherConfig) {
-    const periodSecret = typeof config.periodSecret === "string"
-        ? fromBase64(config.periodSecret)
-        : config.periodSecret;
+    const rotationSecret = typeof config.rotationSecret === "string"
+        ? fromBase64(config.rotationSecret)
+        : config.rotationSecret;
 
-    const periodDurationHours = config.periodDurationHours ?? 1;
+    const rotationIntervalHours = config.rotationIntervalHours ?? 1;
 
     let signingKeyPromise: Promise<WebCryptoKey> | null = null;
 
@@ -97,16 +97,16 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
     }
 
     return {
-        render: (options: DcaRenderOptions) => render(config.domain, periodSecret, periodDurationHours, getSigningKey, options),
+        render: (options: DcaRenderOptions) => render(config.domain, rotationSecret, rotationIntervalHours, getSigningKey, options),
 
         /**
          * Create a share link token — a publisher-signed JWT that grants
          * pre-authenticated access to specific content via a URL.
          *
-         * DCA-compatible: the periodSecret never leaves the publisher.
+         * DCA-compatible: the rotationSecret never leaves the publisher.
          * The token is purely an authorization grant. Key material flows
-         * through the normal DCA seal/unseal channel — the issuer receives
-         * sealed keys from the client and unseals them as usual.
+         * through the normal DCA wrap/unwrap channel — the issuer receives
+         * wrapped keys from the client and unwraps them as usual.
          *
          * @example
          * ```typescript
@@ -122,9 +122,8 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
         createShareLinkToken: async (options: DcaShareLinkOptions): Promise<string> => {
             const now = Math.floor(Date.now() / 1000);
 
-            // Require at least one of contentNames or keyNames
-            if (!options.contentNames?.length && !options.keyNames?.length) {
-                throw new Error("createShareLinkToken requires contentNames or keyNames");
+            if (!options.contentNames?.length && !options.scopes?.length) {
+                throw new Error("createShareLinkToken requires contentNames or scopes");
             }
 
             const payload: DcaShareLinkTokenPayload = {
@@ -133,11 +132,11 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
                 resourceId: options.resourceId,
                 contentNames: options.contentNames ?? [],
                 iat: now,
-                exp: now + (options.expiresIn ?? 7 * 24 * 3600), // default: 7 days
+                exp: now + (options.expiresIn ?? 7 * 24 * 3600),
                 ...(options.maxUses !== undefined ? { maxUses: options.maxUses } : {}),
                 jti: options.jti ?? toHex(getRandomBytes(16)),
                 ...(options.data !== undefined ? { data: options.data } : {}),
-                ...(options.keyNames !== undefined ? { keyNames: options.keyNames } : {}),
+                ...(options.scopes !== undefined ? { scopes: options.scopes } : {}),
             };
 
             const signingKey = await getSigningKey();
@@ -152,8 +151,8 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
 
 async function render(
     domain: string,
-    periodSecret: Uint8Array,
-    periodDurationHours: number,
+    rotationSecret: Uint8Array,
+    rotationIntervalHours: number,
     getSigningKey: () => Promise<WebCryptoKey>,
     options: DcaRenderOptions,
 ): Promise<DcaRenderResult> {
@@ -162,77 +161,65 @@ async function render(
     // 1. Generate renderId
     const renderId = generateRenderId();
 
-    // 2. Get time buckets (current + next)
-    const buckets = getCurrentTimeBuckets(periodDurationHours);
+    // 2. Get current + next rotation kids
+    const rotation = getCurrentRotationVersions(rotationIntervalHours);
 
-    // 2b. Resolve keyName for each content item (defaults to contentName)
-    const resolvedKeyNames: Record<string, string> = {};
+    // 2b. Resolve scope for each content item (defaults to contentName)
+    const resolvedScopes: Record<string, string> = {};
     for (const item of contentItems) {
-        resolvedKeyNames[item.contentName] = item.keyName ?? item.contentName;
+        resolvedScopes[item.contentName] = item.scope ?? item.contentName;
     }
 
-    // 3. Per content item: generate contentKey, IV, encrypt
+    // 3. Per content item: generate contentKey, IV, encrypt content, build manifest entry
     const contentKeys: Record<string, Uint8Array> = {};
-    const contentSealData: Record<string, DcaContentSealData> = {};
-    const sealedContent: Record<string, string> = {};
+    const content: Record<string, DcaContentEntry> = {};
 
     for (const item of contentItems) {
         const contentName = item.contentName;
         const contentType = item.contentType ?? "text/html";
+        const scope = resolvedScopes[contentName];
 
-        // Generate content key and IV
         const contentKey = generateAesKeyBytes();
         const iv = generateIv();
 
-        // Build AAD string: domain|resourceId|contentName|keyName
-        const keyName = resolvedKeyNames[contentName];
-        const aadString = `${domain}|${resourceId}|${contentName}|${keyName}`;
+        // AAD binds ciphertext to domain|resourceId|contentName|scope
+        const aadString = `${domain}|${resourceId}|${contentName}|${scope}`;
         const aadBytes = encodeUtf8(aadString);
 
-        // Encrypt content with AAD
         const { encryptedContent } = await encryptContent(item.content, contentKey, iv, aadBytes);
 
         contentKeys[contentName] = contentKey;
-        contentSealData[contentName] = {
-            contentType,
-            nonce: toBase64Url(iv),
-            aad: aadString,
-        };
-        sealedContent[contentName] = toBase64Url(encryptedContent);
-    }
 
-    // 4. Derive periodKeys and wrap contentKeys
-    //    periodKey derivation uses keyName (not contentName) as HKDF salt.
-    //    Content items sharing a keyName get the same periodKey.
-    const sealedContentKeys: Record<string, DcaSealedContentKey[]> = {};
+        // 4. Wrap contentKey with each rotation-version wrapKey
+        //    scope (not contentName) is the HKDF salt — items sharing a scope share wrapKeys
+        const wrappedContentKey: DcaWrappedContentKeyEntry[] = [];
+        for (const version of [rotation.current, rotation.next]) {
+            const wrapKey = await deriveWrapKey(rotationSecret, scope, version.kid);
 
-    for (const item of contentItems) {
-        const contentName = item.contentName;
-        const keyName = resolvedKeyNames[contentName];
-        const entries: DcaSealedContentKey[] = [];
-
-        for (const bucket of [buckets.current, buckets.next]) {
-            const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
-
-            // Wrap contentKey with periodKey using AES-256-GCM (no AAD for key wrapping)
             const wrapIv = generateIv();
             const { encryptedContent: wrappedKey } = await aesGcmEncrypt(
-                contentKeys[contentName],
-                periodKey,
+                contentKey,
+                wrapKey,
                 wrapIv,
             );
 
-            entries.push({
-                t: bucket.t,
-                nonce: toBase64Url(wrapIv),
-                key: toBase64Url(wrappedKey),
+            wrappedContentKey.push({
+                kid: version.kid,
+                iv: toBase64Url(wrapIv),
+                ciphertext: toBase64Url(wrappedKey),
             });
         }
 
-        sealedContentKeys[contentName] = entries;
+        content[contentName] = {
+            contentType,
+            iv: toBase64Url(iv),
+            aad: aadString,
+            ciphertext: toBase64Url(encryptedContent),
+            wrappedContentKey,
+        };
     }
 
-    // 5. Import issuer public keys and seal contentKeys + periodKeys for each issuer
+    // 5. For each issuer: wrap contentKeys and wrapKeys with the issuer's public key
     const issuerData: Record<string, DcaIssuerEntry> = {};
 
     for (const issuerConfig of issuers) {
@@ -241,72 +228,72 @@ async function render(
             issuerConfig.algorithm,
         );
 
-        const issuerContentEncryptionKeys: DcaSealedContentEncryptionKey[] = [];
+        const issuerKeys: DcaIssuerKey[] = [];
 
-        // Resolve which content items to seal for this issuer.
-        // keyNames takes precedence: seal all items whose keyName is in the list.
-        // contentNames: seal those specific items by name.
-        let contentNamesToSeal: string[];
-        if (issuerConfig.keyNames && issuerConfig.keyNames.length > 0) {
-            const keyNameSet = new Set(issuerConfig.keyNames);
-            contentNamesToSeal = contentItems
-                .filter(item => keyNameSet.has(resolvedKeyNames[item.contentName]))
+        // Resolve which content items to wrap for this issuer.
+        // scopes takes precedence: wrap all items whose scope is in the list.
+        // contentNames: wrap those specific items by name.
+        let contentNamesToWrap: string[];
+        if (issuerConfig.scopes && issuerConfig.scopes.length > 0) {
+            const scopeSet = new Set(issuerConfig.scopes);
+            contentNamesToWrap = contentItems
+                .filter(item => scopeSet.has(resolvedScopes[item.contentName]))
                 .map(item => item.contentName);
         } else if (issuerConfig.contentNames && issuerConfig.contentNames.length > 0) {
-            contentNamesToSeal = issuerConfig.contentNames;
+            contentNamesToWrap = issuerConfig.contentNames;
         } else {
-            throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or keyNames`);
+            throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or scopes`);
         }
 
-        for (const contentName of contentNamesToSeal) {
+        for (const contentName of contentNamesToWrap) {
             const contentKey = contentKeys[contentName];
             if (!contentKey) {
                 throw new Error(`Content item "${contentName}" not found for issuer "${issuerConfig.issuerName}"`);
             }
 
-            const keyName = resolvedKeyNames[contentName];
+            const scope = resolvedScopes[contentName];
 
-            // AAD binds sealed blobs to this access tier — tampering with keyName causes unseal failure
-            const sealAad = encodeUtf8(keyName);
+            // AAD binds wrapped blobs to this scope — tampering with scope causes unwrap failure
+            const wrapAad = encodeUtf8(scope);
 
-            // Seal contentKey
-            const sealedContentKey = await seal(contentKey, issuerPubKey, algorithm, sealAad);
+            // Wrap contentKey for issuer
+            const wrappedContentKey = await wrap(contentKey, issuerPubKey, algorithm, wrapAad);
 
-            // Seal periodKeys (using keyName, not contentName, for derivation)
-            const sealedPeriodKeys: DcaSealedPeriodKeyEntry[] = [];
-            for (const bucket of [buckets.current, buckets.next]) {
-                const periodKey = await deriveDcaPeriodKey(periodSecret, keyName, bucket.t);
-                sealedPeriodKeys.push({
-                    bucket: bucket.t,
-                    sealedKey: await seal(periodKey, issuerPubKey, algorithm, sealAad),
+            // Wrap each rotation-version wrapKey for issuer
+            const wrappedWrapKeys: DcaWrappedIssuerWrapKey[] = [];
+            for (const version of [rotation.current, rotation.next]) {
+                const wrapKey = await deriveWrapKey(rotationSecret, scope, version.kid);
+                wrappedWrapKeys.push({
+                    kid: version.kid,
+                    key: await wrap(wrapKey, issuerPubKey, algorithm, wrapAad),
                 });
             }
 
-            issuerContentEncryptionKeys.push({
+            issuerKeys.push({
                 contentName,
-                keyName,
-                contentKey: sealedContentKey,
-                periodKeys: sealedPeriodKeys,
+                scope,
+                contentKey: wrappedContentKey,
+                wrapKeys: wrappedWrapKeys,
             });
         }
 
         issuerData[issuerConfig.issuerName] = {
-            contentEncryptionKeys: issuerContentEncryptionKeys,
             unlockUrl: issuerConfig.unlockUrl,
             keyId: issuerConfig.keyId,
+            keys: issuerKeys,
         };
     }
 
     // 6. Build resource object
-    // Compute unique keyNames (deduplicated, in order of first appearance)
-    const uniqueKeyNames = [...new Set(Object.values(resolvedKeyNames))];
+    // Compute unique scopes (deduplicated, in order of first appearance)
+    const uniqueScopes = [...new Set(Object.values(resolvedScopes))];
 
     const resource: DcaResource = {
         renderId,
         domain,
         issuedAt: new Date().toISOString(),
         resourceId,
-        keyNames: uniqueKeyNames,
+        scopes: uniqueScopes,
         data: resourceData ?? {},
     };
 
@@ -314,45 +301,26 @@ async function render(
     const signingKey = await getSigningKey();
     const resourceJWT = await createResourceJwt(resource, signingKey);
 
-    // 8. Assemble DCA data
-    const dcaData: DcaData = {
-        version: "2",
+    // 8. Assemble manifest
+    const manifest: DcaManifest = {
+        version: "0.10",
         resourceJWT,
-        contentSealData,
-        sealedContentKeys,
-        issuerData,
+        content,
+        issuers: issuerData,
     };
 
-    // 10. Build HTML strings
-    // Escape closing script tags to prevent script-breakout XSS when embedding JSON in HTML
-    const dcaDataScript = `<script type="application/json" class="dca-data">${JSON.stringify(dcaData).replace(/<\//g, "\\u003c/")}</script>`;
+    // 9. Build HTML strings.
+    // Escape closing script tags to prevent script-breakout XSS when embedding JSON in HTML.
+    const manifestScript = `<script type="application/json" class="dca-manifest">${JSON.stringify(manifest).replace(/<\//g, "\\u003c/")}</script>`;
 
-    const sealedContentDivs = Object.entries(sealedContent)
-        .map(([name, ct]) => `  <div data-dca-content-name="${escapeHtmlAttr(name)}">${ct}</div>`)
-        .join("\n");
-    const sealedContentTemplate = `<template class="dca-sealed-content">\n${sealedContentDivs}\n</template>`;
-
-    // 11. Build JSON API response
-    const json: DcaJsonApiResponse = {
-        ...dcaData,
-        sealedContent,
-    };
+    // 10. JSON API response is just the manifest (ciphertext is already inline)
+    const json: DcaJsonApiResponse = manifest;
 
     return {
-        dcaData,
-        sealedContent,
+        manifest,
         html: {
-            dcaDataScript,
-            sealedContentTemplate,
+            manifestScript,
         },
         json,
     };
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-function escapeHtmlAttr(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
