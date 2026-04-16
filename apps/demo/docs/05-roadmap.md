@@ -15,7 +15,7 @@ This works but is non-standard. Replacing it with **JWE Compact Serialization** 
 - Built-in algorithm agility through the `alg`/`enc` headers
 - Interoperability with any JWE library (jose, node-jose, etc.)
 
-```
+```ts
 // Current custom format
 "sealed": "Base64url(ephemeralPub ‖ nonce ‖ AES-GCM(sharedSecret, plainKey))"
 
@@ -54,7 +54,7 @@ message text can change between versions.
 
 Instead, the library should expose typed error subclasses with a stable `code` property:
 
-```
+```ts
 // Proposed error hierarchy
 class DcaError extends Error {
   code: string;
@@ -93,7 +93,7 @@ try {
 
 The `DcaSealedContentKey` type uses a single-character field name `t` for the time bucket identifier:
 
-```
+```jsonc
 // Current wire format
 "sealedContentKeys": {
   "bodytext": [

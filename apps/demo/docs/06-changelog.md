@@ -39,13 +39,15 @@ harder to reason about than a single content-keyed map.
 
 #### Current Wire Format
 
-```
+```js
 // DcaManifest -- embedded as <script class="dca-manifest"> JSON
 {
   "version": "0.10",
   "resourceJWT": "eyJ...",
   "issuers": {
     "sesamy": {
+      "unlockUrl": "https://unlock.sesamy.com/v1/unlock",
+      "keyId": "sesamy-prod-2026Q2",
       "keys": [
         {
           "contentName": "bodytext",
@@ -134,7 +136,7 @@ without a separate server-side lookup.
 The client can also read `keyNames` before calling unlock to show
 the right paywall (e.g. "Subscribe to Premium to read this") without a round-trip.
 
-```
+```js
 // resourceJWT payload (decoded)
 {
   "iss": "news.example.com",
@@ -179,7 +181,7 @@ poor TypeScript ergonomics -- no autocomplete on dynamic keys, hard to type, and
 `any`-adjacent in practice. The flat array gives every field a name and
 makes the simplest case (single unnamed content item) trivially simple.
 
-```
+```jsonc
 // Before (v0.8) -- nested Records
 {
   "contentKeys": {
@@ -282,7 +284,7 @@ tricking the issuer into unsealing keys for a different tier.
 3. Mismatched AAD causes decryption to **fail** -- a blob sealed for tier
    "free" cannot be unsealed with AAD "premium".
 
-```
+```js
 // Publisher side -- keyName bound as AAD during seal
 const result = await publisher.render({
   resourceId: "article-123",
@@ -331,7 +333,7 @@ cryptographic binding than `issuerJWT` integrity proofs.
 
 Use the v2 unlock request format:
 
-```
+```text
 // v2 request format (the only format now)
 POST /api/unlock
 {
@@ -383,7 +385,7 @@ The request is stripped down to the cryptographic essentials:
 Removing the issuerJWT eliminates one JWT signature verification per unlock request
 and the SHA-256 proof computation on both publisher and service sides.
 
-```
+```text
 // Before -- 6 fields + 2 JWTs
 POST /api/unlock
 {
@@ -451,7 +453,7 @@ The `resourceJWT` payload now uses standard JWT claim names:
 
 The decoded `resourceJWT` payload now looks like a standard JWT:
 
-```
+```jsonc
 // resourceJWT payload (decoded)
 {
   "iss": "news.example.com",       // domain
@@ -505,7 +507,7 @@ by `keyName` instead of listing individual content names.
 
 **Publisher -- before & after:**
 
-```
+```js
 // Before: contentName = "TierA" (conflates identity with access scope)
 const result = await publisher.render({
   resourceId: "article-123",
@@ -540,7 +542,7 @@ Each `contentEncryptionKeys` entry carries its own `keyName`,
 making it self-describing. The `keyName` is cryptographically bound
 via seal AAD -- tampering causes unseal failure:
 
-```
+```jsonc
 // issuerData entry (embedded in page)
 {
   "contentEncryptionKeys": [
@@ -558,7 +560,7 @@ to `contentName`, so the simplest case requires no extra configuration.
 The issuer's access decision can now use `grantedKeyNames` instead of
 (or alongside) `grantedContentNames`:
 
-```
+```js
 // Before: grant by content name
 const result = await issuer.unlock(request, {
   grantedContentNames: ["bodytext", "sidebar"],
@@ -578,7 +580,7 @@ The client handles `keyName` transparently. Period keys are cached
 by `keyName` instead of `contentName`, so unlocking any
 "premium" article automatically caches the key for all other "premium" articles:
 
-```
+```js
 const client = new DcaClient();
 const page = client.parsePage();
 
@@ -603,7 +605,7 @@ The `resourceJWT` is now optional in unlock requests.
 
 ### Client Usage
 
-```
+```ts
 import { DcaClient } from '@sesamy/capsule-client';
 
 const client = new DcaClient();
@@ -617,7 +619,7 @@ const html = await client.decrypt(page, "bodytext", response);
 
 The service accepts unlock requests with `resourceJWT` and `contentKeys`:
 
-```
+```ts
 const issuer = createDcaIssuer({
   issuerName: "sesamy",
   privateKeyPem: process.env.ISSUER_ECDH_P256_PRIVATE_KEY!,

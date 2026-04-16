@@ -12,7 +12,7 @@ npm install @sesamy/capsule-server
 
 The publisher encrypts content at render time. No network calls -- all key derivation is local from a `rotationSecret`:
 
-```
+```ts
 import { createDcaPublisher } from '@sesamy/capsule-server';
 
 const publisher = createDcaPublisher({
@@ -47,7 +47,7 @@ const result = await publisher.render({
 
 The issuer verifies JWTs, checks access, and unwraps keys:
 
-```
+```ts
 import { createDcaIssuer } from '@sesamy/capsule-server';
 
 const issuer = createDcaIssuer({
@@ -83,7 +83,7 @@ app.post('/api/unlock', async (req, res) => {
 ### Issuer (Unlock Server)
 
 - Verifies publisher JWT signatures (trusted-publisher allowlist)
-- Verifies integrity proofs for wrapped blobs
+- Validates integrity via scope-bound AAD tokens (authenticated during unwrap)
 - Makes access decisions (subscription check, share token, etc.)
 - Unwraps keys with its ECDH private key
 - Optionally wraps keys with client's RSA public key (client-bound transport)
@@ -91,7 +91,7 @@ app.post('/api/unlock', async (req, res) => {
 
 ### Flow Diagram
 
-```
+```text
 ┌─────────────────────────┐
 │       Publisher          │
 │  (Content + Encryption)  │
@@ -136,7 +136,7 @@ The publisher needs two secrets:
 1. **ES256 signing key** (ECDSA P-256): for signing `resourceJWT` and share link tokens
 2. **Rotation secret**: for HKDF-based wrapKey derivation (never shared with the issuer)
 
-```
+```ts
 import { generateEcdsaP256KeyPair, exportP256KeyPairPem } from '@sesamy/capsule-server';
 
 // Generate an ES256 key pair (do this once, store securely)
@@ -152,7 +152,7 @@ const rotationSecret = crypto.randomBytes(32).toString('base64');
 
 ### DcaPublisherConfig
 
-```
+```ts
 interface DcaPublisherConfig {
   domain: string;                    // Publisher domain (e.g., "news.example.com")
   signingKeyPem: string;             // ES256 private key PEM
@@ -163,7 +163,7 @@ interface DcaPublisherConfig {
 
 ### Render Options
 
-```
+```ts
 interface DcaRenderOptions {
   resourceId: string;          // Unique article/resource identifier
   contentItems: Array<{
@@ -189,7 +189,7 @@ interface DcaRenderOptions {
 
 The publisher returns a single HTML string ready to embed, plus a JSON variant for headless/SPA use. The manifest is self-contained -- per v1, ciphertext lives inside the manifest, so there is no separate content template:
 
-```
+```ts
 const result = await publisher.render({ ... });
 
 // HTML embedding (SSR / static site):
@@ -251,7 +251,7 @@ For reference, the manifest embedded in the `dca-manifest` script has this shape
 
 The issuer needs an ECDH P-256 key pair for unwrapping:
 
-```
+```ts
 import { generateEcdhP256KeyPair, exportP256KeyPairPem } from '@sesamy/capsule-server';
 
 // Generate an ECDH P-256 key pair (do this once, store securely)
@@ -263,7 +263,7 @@ const pem = await exportP256KeyPairPem(keyPair);
 
 ### DcaIssuerServerConfig
 
-```
+```ts
 interface DcaIssuerServerConfig {
   issuerName: string;          // Must match what publishers use
   privateKeyPem: string;       // ECDH P-256 private key PEM
@@ -282,7 +282,7 @@ interface DcaIssuerServerConfig {
 
 Every publisher domain must be explicitly listed. Requests from unlisted domains are rejected. Domains are normalized (lowercase, trailing dots stripped):
 
-```
+```ts
 const issuer = createDcaIssuer({
   issuerName: "sesamy",
   privateKeyPem: process.env.ISSUER_ECDH_P256_PRIVATE_KEY!,
@@ -306,7 +306,7 @@ const issuer = createDcaIssuer({
 
 The issuer decides which content items (or scopes) to grant and how to deliver keys:
 
-```
+```ts
 const result = await issuer.unlock(request, {
   // Which content items to grant access to (by contentName)…
   grantedContentNames: ["bodytext"],
@@ -322,7 +322,7 @@ const result = await issuer.unlock(request, {
 
 ### Full Unlock Handler (Next.js)
 
-```
+```ts
 import { createDcaIssuer } from '@sesamy/capsule-server';
 import type { DcaUnlockRequest } from '@sesamy/capsule-server';
 
@@ -362,7 +362,7 @@ export async function POST(request: Request) {
 
 Verify request JWTs without unwrapping, useful for access checks before committing:
 
-```
+```ts
 const verified = await issuer.verify(request);
 // verified.resource  — the verified DcaResource (publisher domain, resourceId, etc.)
 // verified.domain    — normalised publisher domain
@@ -374,7 +374,7 @@ The publisher derives **wrapKeys** locally using HKDF from the `rotationSecret`.
 
 ### How It Works
 
-```
+```text
 // WrapKey derivation (internal to the publisher):
 //   IKM  = rotationSecret
 //   salt = scope (items sharing a scope share a wrapKey)
@@ -421,7 +421,7 @@ Share links allow pre-authenticated access to premium content. In the DCA model,
 
 The publisher creates share tokens using the same signing key that signs `resourceJWT`:
 
-```
+```ts
 import { createDcaPublisher } from '@sesamy/capsule-server';
 
 const publisher = createDcaPublisher({
@@ -446,7 +446,7 @@ const shareUrl = `https://news.example.com/article/123?share=${token}`;
 
 The issuer validates share tokens using the publisher's ES256 public key, which is already in the `trustedPublisherKeys` allowlist:
 
-```
+```ts
 import { createDcaIssuer } from '@sesamy/capsule-server';
 
 const issuer = createDcaIssuer({
@@ -490,7 +490,7 @@ npm install @sesamy/capsule-server
 
 ### Complete Publisher Example
 
-```
+```ts
 import { createDcaPublisher } from '@sesamy/capsule-server';
 
 const publisher = createDcaPublisher({
@@ -522,7 +522,7 @@ const result = await publisher.render({
 
 ### Complete Issuer Example (Next.js)
 
-```
+```ts
 // app/api/unlock/route.ts
 import { createDcaIssuer } from '@sesamy/capsule-server';
 import type { DcaUnlockRequest } from '@sesamy/capsule-server';
@@ -560,7 +560,7 @@ export async function POST(request: Request) {
 
 The package also exports low-level primitives for custom implementations:
 
-```
+```ts
 import {
   // Key generation
   generateEcdsaP256KeyPair,   // ES256 signing key pair

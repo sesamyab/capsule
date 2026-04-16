@@ -55,7 +55,7 @@ export interface DcaManifest {
             contentName?: string;
             scope: string;
             contentKey: string;
-            wrapKeys: Array<{ kid: string; key: string }>;
+            wrapKeys?: Array<{ kid: string; key: string }>;
         }>;
     }>;
 }

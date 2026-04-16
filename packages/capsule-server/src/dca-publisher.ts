@@ -167,7 +167,16 @@ async function render(
     // 2. Get current + next rotation kids
     const rotation = getCurrentRotationVersions(rotationIntervalHours);
 
-    // 2b. Resolve scope for each content item (defaults to contentName)
+    // 2b. Reject duplicate contentName values
+    const seenNames = new Set<string>();
+    for (const item of contentItems) {
+        if (seenNames.has(item.contentName)) {
+            throw new Error(`Duplicate contentName "${item.contentName}" in contentItems`);
+        }
+        seenNames.add(item.contentName);
+    }
+
+    // 2c. Resolve scope for each content item (defaults to contentName)
     const resolvedScopes: Record<string, string> = {};
     for (const item of contentItems) {
         resolvedScopes[item.contentName] = item.scope ?? item.contentName;
