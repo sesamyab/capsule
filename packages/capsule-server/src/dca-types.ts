@@ -148,8 +148,9 @@ export interface DcaIssuerKey {
     scope: string;
     /** base64url-encoded contentKey wrapped for the issuer's public key */
     contentKey: string;
-    /** WrapKeys (per rotation) wrapped for the issuer's public key */
-    wrapKeys: DcaWrappedIssuerWrapKey[];
+    /** WrapKeys (per rotation) wrapped for the issuer's public key.
+     *  Omitted in name-granular mode (contentNames) to prevent scope-level key leakage. */
+    wrapKeys?: DcaWrappedIssuerWrapKey[];
 }
 
 /**

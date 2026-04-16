@@ -7,6 +7,7 @@ dist/
 build/
 .next/
 out/
+apps/demo/public/docs.md
 
 # Cache
 .cache/

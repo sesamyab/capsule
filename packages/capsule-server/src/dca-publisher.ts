@@ -235,8 +235,9 @@ async function render(
 
         // Resolve which content items to wrap for this issuer.
         // scopes takes precedence: wrap all items whose scope is in the list.
-        // contentNames: wrap those specific items by name.
+        // contentNames: wrap those specific items by name (name-granular mode).
         let contentNamesToWrap: string[];
+        let isNameGranular = false;
         if (issuerConfig.scopes && issuerConfig.scopes.length > 0) {
             const scopeSet = new Set(issuerConfig.scopes);
             contentNamesToWrap = [
@@ -248,6 +249,7 @@ async function render(
             ];
         } else if (issuerConfig.contentNames && issuerConfig.contentNames.length > 0) {
             contentNamesToWrap = [...new Set(issuerConfig.contentNames)];
+            isNameGranular = true;
         } else {
             throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or scopes`);
         }
@@ -272,21 +274,26 @@ async function render(
             // Wrap contentKey for issuer
             const wrappedContentKey = await wrap(contentKey, issuerPubKey, algorithm, wrapAad);
 
-            // Wrap each rotation-version wrapKey for issuer
+            // Wrap each rotation-version wrapKey for issuer.
+            // In name-granular mode (contentNames), wrapKeys are omitted to
+            // prevent a client from reusing a shared scope wrapKey to decrypt
+            // other items in the same scope that were not explicitly granted.
             const wrappedWrapKeys: DcaWrappedIssuerWrapKey[] = [];
-            for (const version of [rotation.current, rotation.next]) {
-                const wrapKey = await deriveWrapKey(rotationSecret, scope, version.kid);
-                wrappedWrapKeys.push({
-                    kid: version.kid,
-                    key: await wrap(wrapKey, issuerPubKey, algorithm, wrapAad),
-                });
+            if (!isNameGranular) {
+                for (const version of [rotation.current, rotation.next]) {
+                    const wrapKey = await deriveWrapKey(rotationSecret, scope, version.kid);
+                    wrappedWrapKeys.push({
+                        kid: version.kid,
+                        key: await wrap(wrapKey, issuerPubKey, algorithm, wrapAad),
+                    });
+                }
             }
 
             issuerKeys.push({
                 contentName,
                 scope,
                 contentKey: wrappedContentKey,
-                wrapKeys: wrappedWrapKeys,
+                ...(wrappedWrapKeys.length > 0 ? { wrapKeys: wrappedWrapKeys } : {}),
             });
         }
 

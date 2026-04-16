@@ -499,7 +499,7 @@ describe("DCA end-to-end", () => {
                     publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                     keyId: "pk-1",
                     unlockUrl: "https://pk.test/unlock",
-                    contentNames: ["bodytext"],
+                    scopes: ["bodytext"],
                 },
             ],
         });
@@ -519,7 +519,7 @@ describe("DCA end-to-end", () => {
                 resourceJWT: result.manifest.resourceJWT,
                 keys: result.manifest.issuers["pk-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "wrapKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "wrapKey" },
         );
 
         expect(findKey(response, "bodytext").wrapKeys).toBeDefined();
@@ -1274,7 +1274,7 @@ describe("DCA client-bound transport", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "cbpk-1",
                 unlockUrl: "https://cbpk.test/unlock",
-                contentNames: ["bodytext"],
+                scopes: ["bodytext"],
             }],
         });
 
@@ -1291,7 +1291,7 @@ describe("DCA client-bound transport", () => {
                 keys: result.manifest.issuers["cb-pk-issuer"].keys,
                 clientPublicKey: clientKeys.clientPublicKey,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "wrapKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "wrapKey" },
         );
 
         expect(response.transport).toBe("client-bound");
@@ -1476,13 +1476,13 @@ describe("Share Link Tokens", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "spk-1",
                 unlockUrl: "https://share-pk.test/unlock",
-                contentNames: ["bodytext"],
+                scopes: ["bodytext"],
             }],
         });
 
         const shareToken = await publisher.createShareLinkToken({
             resourceId: "shared-pk-1",
-            contentNames: ["bodytext"],
+            scopes: ["bodytext"],
         });
 
         const issuer = createDcaIssuer({
@@ -2189,7 +2189,7 @@ describe("unlock request format", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "v2pk-1",
                 unlockUrl: "https://v2pk.test/unlock",
-                contentNames: ["bodytext"],
+                scopes: ["bodytext"],
             }],
         });
 
@@ -2208,7 +2208,7 @@ describe("unlock request format", () => {
                 resourceJWT: result.manifest.resourceJWT,
                 keys: result.manifest.issuers["v2pk-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "wrapKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "wrapKey" },
         );
 
         expect(findKey(response, "bodytext").wrapKeys).toBeDefined();
