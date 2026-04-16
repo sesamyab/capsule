@@ -243,10 +243,12 @@ wrappedWrapKey    = wrap(wrapKey, issuerPubKey, algorithm, encodeUtf8(scope))
           <p>
             <strong>Why two layers?</strong> Content AAD protects the
             ciphertext &mdash; it ensures encrypted content cannot be moved to a
-            different page. Wrap AAD protects the key material &mdash; it
-            ensures wrapped keys from one render cannot be transplanted into
-            another resource&apos;s DCA manifest. Together they provide
-            end-to-end binding from the key material through to the ciphertext.
+            different page. Wrap AAD is scope-only (implemented
+            as <code>encodeUtf8(scope)</code>) and therefore prevents
+            cross-tier or cross-scope key substitution, but does not by itself
+            provide full cross-resource binding. Full end-to-end binding from
+            key material through to ciphertext requires additional context or
+            mechanisms beyond the scope-only Wrap AAD.
           </p>
         </div>
 
@@ -585,8 +587,8 @@ contentItems: [
               <strong>wrapKey mode:</strong> Returns wrap keys that the
               client uses to unwrap the content key from{" "}
               <code>wrappedContentKey</code>. Enables client-side caching:
-              a cached wrap key can unlock any article in that rotation
-              window.
+              a cached wrap key can unlock any article in the same scope
+              and rotation window.
             </li>
           </ul>
         </div>
@@ -603,8 +605,8 @@ contentItems: [
     "version": "0.10",
     "resourceJWT": "...",
     "content": {
-      "bodytext": { "iv": "...", "aad": "...", "ciphertext": "base64url_ciphertext...", "wrappedContentKey": [...] },
-      "sidebar":  { "iv": "...", "aad": "...", "ciphertext": "base64url_ciphertext...", "wrappedContentKey": [...] }
+      "bodytext": { "contentType": "text/html", "iv": "...", "aad": "...", "ciphertext": "base64url_ciphertext...", "wrappedContentKey": [...] },
+      "sidebar":  { "contentType": "text/html", "iv": "...", "aad": "...", "ciphertext": "base64url_ciphertext...", "wrappedContentKey": [...] }
     },
     "issuers": {...}
   }

@@ -232,15 +232,17 @@ function getTimeUntilExpiry(expiresAt: number): string {
 
 /**
  * Get the Date of the next rotation boundary.
- * Wrap keys rotate every `rotationIntervalHours` UTC hours, aligned to UTC midnight.
+ * Wrap keys rotate every `rotationIntervalHours` hours, aligned to the Unix
+ * epoch (matching `getCurrentRotationVersions` in capsule-server).
  */
 function getNextBucketTime(rotationIntervalHours: number = ROTATION_INTERVAL_HOURS): Date {
   const now = new Date();
-  const currentHour = now.getUTCHours();
-  const bucketStart = Math.floor(currentHour / rotationIntervalHours) * rotationIntervalHours;
-  const next = new Date(now);
-  next.setUTCHours(bucketStart + rotationIntervalHours, 0, 0, 0);
-  return next;
+  const hourFloorMs = new Date(now);
+  hourFloorMs.setUTCMinutes(0, 0, 0);
+  const hoursSinceEpoch = Math.floor(hourFloorMs.getTime() / 3600_000);
+  const intervalHours = Math.max(1, Math.floor(rotationIntervalHours));
+  const alignedHour = hoursSinceEpoch - (hoursSinceEpoch % intervalHours);
+  return new Date((alignedHour + intervalHours) * 3600_000);
 }
 
 /**

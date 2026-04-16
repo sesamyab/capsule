@@ -239,13 +239,23 @@ async function render(
         let contentNamesToWrap: string[];
         if (issuerConfig.scopes && issuerConfig.scopes.length > 0) {
             const scopeSet = new Set(issuerConfig.scopes);
-            contentNamesToWrap = contentItems
-                .filter(item => scopeSet.has(resolvedScopes[item.contentName]))
-                .map(item => item.contentName);
+            contentNamesToWrap = [
+                ...new Set(
+                    contentItems
+                        .filter(item => scopeSet.has(resolvedScopes[item.contentName]))
+                        .map(item => item.contentName),
+                ),
+            ];
         } else if (issuerConfig.contentNames && issuerConfig.contentNames.length > 0) {
-            contentNamesToWrap = issuerConfig.contentNames;
+            contentNamesToWrap = [...new Set(issuerConfig.contentNames)];
         } else {
             throw new Error(`Issuer "${issuerConfig.issuerName}" must specify contentNames or scopes`);
+        }
+
+        if (contentNamesToWrap.length === 0) {
+            throw new Error(
+                `Issuer "${issuerConfig.issuerName}" resolved to zero content items — check that its scopes match at least one content item`,
+            );
         }
 
         for (const contentName of contentNamesToWrap) {
