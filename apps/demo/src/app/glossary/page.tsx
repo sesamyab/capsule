@@ -384,8 +384,8 @@ wrapKey = HKDF-SHA256(
 content: {
   "bodytext": {
     wrappedContentKey: [
-      { kid: "251023T13", iv: "...", key: "..." },
-      { kid: "251023T14", iv: "...", key: "..." }
+      { kid: "251023T13", iv: "...", ciphertext: "..." },
+      { kid: "251023T14", iv: "...", ciphertext: "..." }
     ],
     ...
   }
@@ -414,15 +414,17 @@ content: {
             {`// Issuer wrapped structure
 issuers: {
   "sesamy": {
-    wrapped: {
-      "premium": {
+    keys: [
+      {
+        contentName: "bodytext",
+        scope: "premium",
         contentKey: "base64url...",   // wrapped with issuer pubkey + scope AAD
-        wrapKeys: {
-          "251023T13": "base64url...",
-          "251023T14": "base64url..."
-        }
+        wrapKeys: [
+          { kid: "251023T13", key: "base64url..." },
+          { kid: "251023T14", key: "base64url..." }
+        ]
       }
-    },
+    ],
     unlockUrl: "https://api.sesamy.com/unlock",
     keyId: "2025-10"
   }
@@ -595,16 +597,22 @@ contentItems: [
             The DCA manifest is embedded in the page as standard HTML elements:
           </p>
           <pre className="code-example">
-            {`<!-- DCA manifest and keys -->
+            {`<!-- DCA manifest (ciphertext lives inline under manifest.content[name]) -->
 <script type="application/json" class="dca-manifest">
-  { "version": "0.10", "resourceJWT": "...", "content": {...}, "issuers": {...} }
+  {
+    "version": "0.10",
+    "resourceJWT": "...",
+    "content": {
+      "bodytext": { "iv": "...", "aad": "...", "ciphertext": "base64url_ciphertext...", "wrappedContentKey": [...] },
+      "sidebar":  { "iv": "...", "aad": "...", "ciphertext": "base64url_ciphertext...", "wrappedContentKey": [...] }
+    },
+    "issuers": {...}
+  }
 </script>
 
-<!-- Encrypted content -->
-<template class="dca-sealed-content">
-  <div data-dca-content-name="bodytext">base64url_ciphertext...</div>
-  <div data-dca-content-name="sidebar">base64url_ciphertext...</div>
-</template>`}
+<!-- Placeholders in the rendered DOM where decrypted content gets injected -->
+<div data-dca-content-name="bodytext">placeholder</div>
+<div data-dca-content-name="sidebar">placeholder</div>`}
           </pre>
         </div>
       </section>

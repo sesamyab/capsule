@@ -480,12 +480,12 @@ export class DcaClient {
 
             // Cache by scope for cross-content reuse
             if (this.wrapKeyCache) {
-                const scope = this.resolveScope(page, contentName) ?? contentName;
+                const scope = this.resolveScope(page, contentName, keyEntry.scope) ?? contentName;
                 await this.cacheWrapKeys(scope, rawWrapKeys);
             }
         } else {
             // Try cached wrapKeys (by scope)
-            const scope = this.resolveScope(page, contentName) ?? contentName;
+            const scope = this.resolveScope(page, contentName, keyEntry.scope) ?? contentName;
             const cached = await this.getCachedWrapKeys(scope, entry.wrappedContentKey);
             if (cached) {
                 contentKeyBytes = await this.unwrapContentKey(
@@ -497,7 +497,13 @@ export class DcaClient {
             }
         }
 
-        // Decrypt content body
+        return this.decryptContentBody(entry, contentKeyBytes);
+    }
+
+    private async decryptContentBody(
+        entry: DcaManifest["content"][string],
+        contentKeyBytes: Uint8Array,
+    ): Promise<string> {
         const ciphertextBytes = base64UrlDecode(entry.ciphertext);
         const iv = base64UrlDecode(entry.iv);
         const aad = new TextEncoder().encode(entry.aad);
@@ -517,6 +523,25 @@ export class DcaClient {
         );
 
         return new TextDecoder().decode(decrypted);
+    }
+
+    private async tryDecryptFromCache(
+        page: DcaParsedPage,
+        contentName: string,
+    ): Promise<string | null> {
+        const entry = page.manifest.content[contentName];
+        if (!entry || entry.wrappedContentKey.length === 0) return null;
+
+        const scope = this.resolveScope(page, contentName) ?? contentName;
+        const cached = await this.getCachedWrapKeys(scope, entry.wrappedContentKey);
+        if (!cached) return null;
+
+        try {
+            const contentKeyBytes = await this.unwrapContentKey(entry.wrappedContentKey, cached);
+            return await this.decryptContentBody(entry, contentKeyBytes);
+        } catch {
+            return null;
+        }
     }
 
     /**
@@ -579,6 +604,22 @@ export class DcaClient {
             throw new Error("DCA: no issuers found in manifest.issuers");
         }
 
+        const results: Record<string, string> = {};
+        const missing: string[] = [];
+
+        for (const contentName of Object.keys(page.manifest.content)) {
+            const cached = await this.tryDecryptFromCache(page, contentName);
+            if (cached !== null) {
+                results[contentName] = cached;
+            } else {
+                missing.push(contentName);
+            }
+        }
+
+        if (missing.length === 0) {
+            return results;
+        }
+
         const shareToken = options.shareToken !== undefined
             ? options.shareToken
             : DcaClient.getShareTokenFromUrl(options.shareTokenParam);
@@ -587,7 +628,11 @@ export class DcaClient {
             ? await this.unlockWithShareToken(page, issuerName, shareToken, options.additionalBody)
             : await this.unlock(page, issuerName, options.additionalBody);
 
-        return this.decryptAll(page, unlockResponse);
+        for (const contentName of missing) {
+            results[contentName] = await this.decrypt(page, contentName, unlockResponse);
+        }
+
+        return results;
     }
 
     /**
@@ -710,7 +755,15 @@ export class DcaClient {
     /**
      * Resolve the scope for a given content item from the manifest.
      */
-    private resolveScope(page: DcaParsedPage, contentName: string): string | undefined {
+    private resolveScope(
+        page: DcaParsedPage,
+        contentName: string,
+        echoedScope?: string,
+    ): string | undefined {
+        // Prefer the scope echoed by the issuer (matches the specific issuer
+        // that unwrapped the keys). Falling back to the manifest lookup is
+        // ambiguous when multiple issuers define the same contentName.
+        if (echoedScope) return echoedScope;
         for (const issuer of Object.values(page.manifest.issuers)) {
             const match = issuer.keys.find(k => (k.contentName ?? "default") === contentName);
             if (match) return match.scope;

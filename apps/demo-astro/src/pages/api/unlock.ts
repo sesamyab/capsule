@@ -33,7 +33,14 @@ export const POST: APIRoute = async ({ request }) => {
     }
 
     // Requires resourceJWT + keys
-    if (!body.resourceJWT || !body.keys) {
+    if (
+      !body.resourceJWT ||
+      !Array.isArray(body.keys) ||
+      body.keys.some(
+        (k: unknown) =>
+          typeof k !== "object" || k === null || typeof (k as Record<string, unknown>).contentKey !== "string",
+      )
+    ) {
       return new Response(
         JSON.stringify({ error: "Invalid DCA unlock request — missing required fields (resourceJWT, keys)" }),
         { status: 400, headers: { "Content-Type": "application/json" } },

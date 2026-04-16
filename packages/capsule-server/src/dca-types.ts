@@ -479,7 +479,7 @@ export interface DcaShareLinkTokenPayload {
      * Scopes this token grants access to.
      * When present, the issuer resolves scopes → contentNames
      * using the `scope` field on each key entry.
-     * Takes precedence over `contentNames` when present.
+     * Mutually exclusive with `contentNames` — tokens that set both are rejected.
      */
     scopes?: string[];
     /** Token issued-at (Unix timestamp, seconds) */

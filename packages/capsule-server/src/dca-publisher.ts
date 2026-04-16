@@ -125,6 +125,9 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
             if (!options.contentNames?.length && !options.scopes?.length) {
                 throw new Error("createShareLinkToken requires contentNames or scopes");
             }
+            if (options.contentNames?.length && options.scopes?.length) {
+                throw new Error("createShareLinkToken: contentNames and scopes are mutually exclusive");
+            }
 
             const payload: DcaShareLinkTokenPayload = {
                 type: "dca-share",

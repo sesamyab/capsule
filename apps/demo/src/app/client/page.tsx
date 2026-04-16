@@ -842,13 +842,13 @@ for (const [name, content] of Object.entries(all)) {
         <p>
           DCA pages contain a single{" "}
           <code>&lt;script class=&quot;dca-manifest&quot;&gt;</code> element
-          holding the v1 manifest — both the wrapped ciphertext blocks and the
-          issuer metadata live inside it:
+          holding the v0.10 manifest — both the wrapped ciphertext blocks and
+          the issuer metadata live inside it:
         </p>
         <CodeBlock language="html">{`<!-- DCA manifest -->
 <script class="dca-manifest" type="application/json">
 {
-  "version": "1.0",
+  "version": "0.10",
   "resourceJWT": "eyJ...",
   "content": {
     "bodytext": {

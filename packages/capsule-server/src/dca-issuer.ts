@@ -458,11 +458,20 @@ function resolveGrantedContentNames(
     accessDecision: DcaAccessDecision,
     request: DcaUnlockRequest,
 ): string[] {
-    if (accessDecision.grantedContentNames && accessDecision.grantedContentNames.length > 0) {
-        return accessDecision.grantedContentNames;
+    const hasNames = !!(accessDecision.grantedContentNames && accessDecision.grantedContentNames.length > 0);
+    const hasScopes = !!(accessDecision.grantedScopes && accessDecision.grantedScopes.length > 0);
+
+    // Fail closed: passing both would silently prefer one and could expand a
+    // narrow content-name grant into a broader scope grant (or vice versa).
+    if (hasNames && hasScopes) {
+        throw new Error("Access decision: grantedContentNames and grantedScopes are mutually exclusive");
     }
 
-    if (accessDecision.grantedScopes && accessDecision.grantedScopes.length > 0) {
+    if (hasNames) {
+        return accessDecision.grantedContentNames!;
+    }
+
+    if (hasScopes) {
         const scopeSet = new Set(accessDecision.grantedScopes);
 
         return request.keys
@@ -515,10 +524,13 @@ async function verifyShareLinkToken(
         throw new Error(`Share token: issued in the future (iat: ${payload.iat})`);
     }
 
-    if (!Array.isArray(payload.contentNames) || payload.contentNames.length === 0) {
-        if (!payload.scopes || !Array.isArray(payload.scopes) || payload.scopes.length === 0) {
-            throw new Error("Share token: contentNames (or scopes) must be a non-empty array");
-        }
+    const hasContentNames = Array.isArray(payload.contentNames) && payload.contentNames.length > 0;
+    const hasScopes = Array.isArray(payload.scopes) && payload.scopes.length > 0;
+    if (!hasContentNames && !hasScopes) {
+        throw new Error("Share token: contentNames (or scopes) must be a non-empty array");
+    }
+    if (hasContentNames && hasScopes) {
+        throw new Error("Share token: contentNames and scopes are mutually exclusive");
     }
 
     return payload;

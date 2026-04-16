@@ -101,17 +101,17 @@ export default function ChangelogPage() {
           <h4>What Changed</h4>
           <p>
             The protocol is renamed and restructured end-to-end. The wire format version
-            is reset to <code>&quot;1&quot;</code> for the pre-release.
+            is <code>&quot;0.10&quot;</code>.
           </p>
           <ul>
             <li><strong>Crypto vocabulary</strong> — aligned with WebCrypto: <code>seal</code>/<code>sealed</code>/<code>sealing</code> → <code>wrap</code>/<code>wrapped</code>/<code>wrapping</code>, and <code>nonce</code> → <code>iv</code> on content items.</li>
             <li><strong>Time-based naming removed</strong> — <code>periodKey</code> → <code>wrapKey</code>, <code>periodSecret</code> → <code>rotationSecret</code>, <code>bucket</code>/<code>t</code> → <code>kid</code>.</li>
             <li><strong>OAuth-aligned access control</strong> — <code>keyName</code>/<code>keyNames</code> → <code>scope</code>/<code>scopes</code>.</li>
-            <li><strong>Manifest rename</strong> — <code>DcaData</code> → <code>DcaManifest</code>, and the embedded <code>&lt;template class=&quot;dca-data&quot;&gt;</code> → <code>&lt;template class=&quot;dca-manifest&quot;&gt;</code>.</li>
+            <li><strong>Manifest rename</strong> — <code>DcaData</code> → <code>DcaManifest</code>, and the embedded <code>&lt;script class=&quot;dca-data&quot;&gt;</code> → <code>&lt;script class=&quot;dca-manifest&quot;&gt;</code>.</li>
             <li><strong>Top-level map merge</strong> — <code>contentSealData</code>, <code>sealedContentKeys</code>, and <code>sealedContent</code> are merged into a single <code>content</code> map keyed by <code>contentName</code>. The separate <code>&lt;template class=&quot;dca-sealed-content&quot;&gt;</code> is eliminated — the manifest now carries ciphertext inline.</li>
             <li><strong>Field renames</strong> — <code>issuerData</code> → <code>issuers</code>, <code>contentEncryptionKeys</code> → <code>keys</code>.</li>
             <li><strong>Delivery modes</strong> — <code>deliveryMode: &quot;contentKey&quot;</code> → <code>deliveryMode: &quot;direct&quot;</code>, and <code>deliveryMode: &quot;periodKey&quot;</code> → <code>deliveryMode: &quot;wrapKey&quot;</code>.</li>
-            <li><strong>Version bump</strong> — <code>version: &quot;2&quot;</code> → <code>version: &quot;1&quot;</code> (reset for pre-release).</li>
+            <li><strong>Version bump</strong> — <code>version: &quot;2&quot;</code> → <code>version: &quot;0.10&quot;</code>.</li>
           </ul>
 
           <h4>Why</h4>
@@ -147,9 +147,13 @@ export default function ChangelogPage() {
   "content": {
     "bodytext": {
       "contentType": "text/html",
-      "iv": "base64url…",
-      "ciphertext": "base64url…",
-      "kid": "260409T11"                   // wrap key id used for this ciphertext
+      "iv": "base64url…",                  // AES-GCM IV for the content body
+      "aad": "…",                          // AEAD associated data (bound to resource)
+      "ciphertext": "base64url…",          // encrypted content body (inline)
+      "wrappedContentKey": [               // contentKey wrapped under each wrapKey rotation
+        { "kid": "260409T11", "iv": "base64url…", "ciphertext": "base64url…" },
+        { "kid": "260409T12", "iv": "base64url…", "ciphertext": "base64url…" }
+      ]
     }
   }
 }
@@ -203,7 +207,7 @@ const result = await issuer.unlock(request, {
               </tr>
               <tr>
                 <td style={td}><strong>Wire format</strong></td>
-                <td style={td}><code>version: &quot;1&quot;</code> (reset). Pre-release — no backwards compatibility shims for the old <code>&quot;2&quot;</code> shape</td>
+                <td style={td}><code>version: &quot;0.10&quot;</code>. Pre-release — no backwards compatibility shims for the old <code>&quot;2&quot;</code> shape</td>
               </tr>
             </tbody>
           </table>

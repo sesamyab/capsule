@@ -165,13 +165,16 @@ export async function getIssuerPublicKeyPem(): Promise<string> {
 interface CachedRender {
   data: DcaRenderResult;
   tier: string;
-  hourBucket: string;
+  rotationBucket: number;
 }
 const renderCache = new Map<string, CachedRender>();
 
-function getCurrentHourBucket(): string {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}`;
+/**
+ * Bucket aligned to the configured rotation interval. Re-renders happen when
+ * the bucket flips, so cache invalidation matches wrap-key rotation.
+ */
+function getCurrentRotationBucket(): number {
+  return Math.floor(Date.now() / (ROTATION_INTERVAL_HOURS * 60 * 60 * 1000));
 }
 
 /**
@@ -184,9 +187,9 @@ function getCurrentHourBucket(): string {
 export async function renderDcaArticle(
   resourceId: string,
 ): Promise<{ result: DcaRenderResult; tier: string } | null> {
-  const hourBucket = getCurrentHourBucket();
+  const rotationBucket = getCurrentRotationBucket();
   const cached = renderCache.get(resourceId);
-  if (cached && cached.hourBucket === hourBucket) {
+  if (cached && cached.rotationBucket === rotationBucket) {
     return { result: cached.data, tier: cached.tier };
   }
 
@@ -222,7 +225,7 @@ export async function renderDcaArticle(
     },
   });
 
-  renderCache.set(resourceId, { data: result, tier: article.tier, hourBucket });
+  renderCache.set(resourceId, { data: result, tier: article.tier, rotationBucket });
   return { result, tier: article.tier };
 }
 

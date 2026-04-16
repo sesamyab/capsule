@@ -86,7 +86,7 @@ export async function POST(request: NextRequest) {
 
     // --- Validate contentNames / scopes ------------------------------------
     // Prefer scopes if provided; fall back to contentNames for backwards compat
-    const rawKeyNames: unknown = body.scopes;
+    const rawScopes: unknown = body.scopes;
     const rawContentNames: unknown = body.contentNames;
 
     const isValidStringArray = (arr: unknown): arr is string[] =>
@@ -97,8 +97,8 @@ export async function POST(request: NextRequest) {
         (n: unknown) => typeof n === "string" && n.length > 0 && n.length <= 128,
       );
 
-    const scopes: string[] | undefined = rawKeyNames && isValidStringArray(rawKeyNames)
-      ? rawKeyNames
+    const scopes: string[] | undefined = rawScopes && isValidStringArray(rawScopes)
+      ? rawScopes
       : undefined;
     const contentNames: string[] | undefined = rawContentNames && isValidStringArray(rawContentNames)
       ? rawContentNames

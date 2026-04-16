@@ -14,6 +14,13 @@ const CONTENT_KEY_STORE_NAME = "content-keys";
 const WRAP_KEY_DB_NAME = "capsule-wrap-keys";
 const WRAP_KEY_STORE_NAME = "wrap-keys";
 
+/**
+ * Must match `ROTATION_INTERVAL_HOURS` in apps/demo/src/lib/capsule.ts.
+ * Mirrored here to avoid pulling the server-only capsule module into a
+ * client component.
+ */
+const ROTATION_INTERVAL_HOURS = 1;
+
 /** Matches StoredContentKey from @sesamy/capsule client */
 interface StoredContentKey {
   type: "shared" | "article" | "subscription";
@@ -224,22 +231,23 @@ function getTimeUntilExpiry(expiresAt: number): string {
 }
 
 /**
- * Get the Date of the next hourly rotation boundary.
- * Wrap keys rotate at the top of each UTC hour.
+ * Get the Date of the next rotation boundary.
+ * Wrap keys rotate every `rotationIntervalHours` UTC hours, aligned to UTC midnight.
  */
-function getNextBucketTime(): Date {
+function getNextBucketTime(rotationIntervalHours: number = ROTATION_INTERVAL_HOURS): Date {
   const now = new Date();
+  const currentHour = now.getUTCHours();
+  const bucketStart = Math.floor(currentHour / rotationIntervalHours) * rotationIntervalHours;
   const next = new Date(now);
-  next.setUTCMinutes(0, 0, 0);
-  next.setUTCHours(next.getUTCHours() + 1);
+  next.setUTCHours(bucketStart + rotationIntervalHours, 0, 0, 0);
   return next;
 }
 
 /**
- * Human-readable time until the next hourly rotation.
+ * Human-readable time until the next rotation boundary.
  */
-function getTimeUntilNextBucket(): string {
-  const ms = getNextBucketTime().getTime() - Date.now();
+function getTimeUntilNextBucket(rotationIntervalHours: number = ROTATION_INTERVAL_HOURS): string {
+  const ms = getNextBucketTime(rotationIntervalHours).getTime() - Date.now();
   if (ms <= 0) return "now";
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `in ${seconds}s`;
