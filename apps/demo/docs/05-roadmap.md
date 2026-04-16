@@ -3,12 +3,22 @@
 Future protocol and library improvements under consideration.
 These are not yet implemented -- feedback is welcome.
 
-## JWE for Sealed Key Blobs
+## JWE for Issuer-Bound Key Wraps
 
 [Under consideration]
 
-The current seal format is a custom binary blob: ephemeral public key || nonce || ciphertext.
-This works but is non-standard. Replacing it with **JWE Compact Serialization** ([RFC 7516](https://datatracker.ietf.org/doc/html/rfc7516)) would give us:
+When the publisher wraps keys for an issuer, `wrapEcdhP256()` produces a custom
+binary blob stored in `DcaIssuerKey.contentKey` and `DcaWrappedIssuerWrapKey.key`:
+
+    ephemeralPub (65 bytes) ‖ IV (12 bytes) ‖ AES-GCM ciphertext+tag
+
+This is the ECDH-P256 issuer-bound wrap — distinct from `wrappedContentKey`
+(the `{ kid, iv, ciphertext }` entries that wrap content keys under symmetric
+wrapKeys via AES-GCM). Only the ECDH blob is in scope here.
+
+The custom blob works but is non-standard. Replacing it with **JWE Compact
+Serialization** ([RFC 7516](https://datatracker.ietf.org/doc/html/rfc7516))
+would give us:
 
 - A well-known, auditable format instead of a custom byte layout
 - Standard algorithm identifiers (`alg: ECDH-ES`, `enc: A256GCM`)
@@ -16,17 +26,27 @@ This works but is non-standard. Replacing it with **JWE Compact Serialization** 
 - Interoperability with any JWE library (jose, node-jose, etc.)
 
 ```ts
-// Current custom format
-"sealed": "Base64url(ephemeralPub ‖ nonce ‖ AES-GCM(sharedSecret, plainKey))"
+// Current: DcaIssuerKey.contentKey / DcaWrappedIssuerWrapKey.key
+"contentKey": "Base64url(ephemeralPub ‖ IV ‖ AES-GCM(derivedKey, plainKey))"
 
-// Proposed JWE Compact Serialization
-"sealed": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImVwayI6ey4uLn19.    .nonce.ciphertext.tag"
-//               header          .CEK.  IV  . ciphertext .tag
+// Proposed JWE Compact Serialization (same fields)
+"contentKey": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImVwayI6ey4uLn19..nonce.ciphertext.tag"
+//                       header (alg, enc, epk)               .CEK. IV . ciphertext .tag
 ```
 
-The `epk` (ephemeral public key) moves into the JWE protected header,
-and AES-GCM nonce/ciphertext/tag are standard JWE fields. The same ECDH-ES +
-HKDF key derivation is used under the hood.
+Mapping from the current blob to JWE fields:
+
+| Current blob segment | JWE field |
+| --- | --- |
+| Ephemeral public key (65 bytes, uncompressed P-256) | `epk` in the JWE protected header (as JWK) |
+| 12-byte AES-GCM nonce | JWE Initialization Vector (third segment) |
+| AES-GCM ciphertext | JWE Ciphertext (fourth segment) |
+| AES-GCM auth tag (last 16 bytes) | JWE Authentication Tag (fifth segment) |
+| — (HKDF-derived, not transmitted) | JWE CEK (second segment, empty for ECDH-ES direct agreement) |
+
+The same ECDH-ES + HKDF key derivation is used under the hood; the `epk`
+moves into the JWE protected header and the remaining AES-GCM fields become
+standard JWE segments.
 
 ## Standard JWT Claims for Share Link Tokens
 
@@ -71,8 +91,8 @@ class DcaKeyMismatchError extends DcaError {
   received: string;
 }
 
-class DcaUnsealError extends DcaError {
-  code = "UNSEAL_FAILED";
+class DcaUnwrapError extends DcaError {
+  code = "UNWRAP_FAILED";
   algorithm: string;
 }
 
