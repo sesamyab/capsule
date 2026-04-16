@@ -19,17 +19,17 @@ import {
     computeProofHash,
 } from "../dca-jwt";
 import {
-    sealEcdhP256,
-    unsealEcdhP256,
+    wrapEcdhP256,
+    unwrapEcdhP256,
     importIssuerPublicKey,
     importIssuerPrivateKey,
-} from "../dca-seal";
+} from "../dca-wrap";
 import {
-    formatTimeBucket,
-    getCurrentTimeBuckets,
-    deriveDcaPeriodKey,
+    formatTimeKid,
+    getCurrentRotationVersions,
+    deriveWrapKey,
     generateRenderId,
-} from "../dca-time-buckets";
+} from "../dca-rotation";
 import {
     generateEcdhP256KeyPair,
     generateEcdsaP256KeyPair,
@@ -50,18 +50,18 @@ import { encryptContent, decryptContent, generateContentKey } from "../encryptio
 // Helpers
 // ============================================================================
 
-import type { DcaUnlockResponse, DcaContentEncryptionKey } from "../dca-types";
+import type { DcaUnlockResponse, DcaUnlockedKey } from "../dca-types";
 
 /** Look up a content encryption key by name from a flat response array. */
-function findKey(response: DcaUnlockResponse, name: string): DcaContentEncryptionKey {
-    const entry = response.contentEncryptionKeys.find(k => (k.contentName ?? "default") === name);
+function findKey(response: DcaUnlockResponse, name: string): DcaUnlockedKey {
+    const entry = response.keys.find(k => (k.contentName ?? "default") === name);
     if (!entry) throw new Error(`No key for "${name}" in response`);
     return entry;
 }
 
-/** Convert flat periodKeys array to Record for tests that need bucket-keyed access. */
-function periodKeysToRecord(entry: DcaContentEncryptionKey): Record<string, string> {
-    return Object.fromEntries((entry.periodKeys ?? []).map(pk => [pk.bucket, pk.key]));
+/** Convert flat wrapKeys array to Record for tests that need kid-keyed access. */
+function wrapKeysToRecord(entry: DcaUnlockedKey): Record<string, string> {
+    return Object.fromEntries((entry.wrapKeys ?? []).map(wk => [wk.kid, wk.key]));
 }
 
 // ============================================================================
@@ -77,13 +77,13 @@ async function generateTestKeys() {
     const issuerEcdhPair = await generateEcdhP256KeyPair();
     const issuerEcdhPems = await exportP256KeyPairPem(issuerEcdhPair.privateKey, issuerEcdhPair.publicKey);
 
-    // Period secret
-    const periodSecret = generateAesKeyBytes();
+    // Rotation secret
+    const rotationSecret = generateAesKeyBytes();
 
     return {
         signingPems,
         issuerEcdhPems,
-        periodSecret,
+        rotationSecret,
     };
 }
 
@@ -160,13 +160,13 @@ describe("ECDH P-256 sealing", () => {
         const { key: privKey } = await importIssuerPrivateKey(pems.privateKeyPem, "ECDH-P256");
 
         const originalKey = generateAesKeyBytes(); // 32 random bytes
-        const sealed = await sealEcdhP256(originalKey, pubKey);
+        const sealed = await wrapEcdhP256(originalKey, pubKey);
 
         // Sealed blob should be a non-empty base64url string
         expect(sealed.length).toBeGreaterThan(0);
         expect(sealed).toMatch(/^[A-Za-z0-9_-]+$/);
 
-        const unsealed = await unsealEcdhP256(sealed, privKey);
+        const unsealed = await unwrapEcdhP256(sealed, privKey);
         expect(unsealed).toEqual(originalKey);
     });
 
@@ -176,8 +176,8 @@ describe("ECDH P-256 sealing", () => {
         const { key: pubKey } = await importIssuerPublicKey(pems.publicKeyPem, "ECDH-P256");
 
         const originalKey = generateAesKeyBytes();
-        const sealed1 = await sealEcdhP256(originalKey, pubKey);
-        const sealed2 = await sealEcdhP256(originalKey, pubKey);
+        const sealed1 = await wrapEcdhP256(originalKey, pubKey);
+        const sealed2 = await wrapEcdhP256(originalKey, pubKey);
 
         // Different ephemeral keys → different ciphertext
         expect(sealed1).not.toBe(sealed2);
@@ -199,20 +199,20 @@ describe("ECDH P-256 sealing", () => {
 
         // Minimum valid blob is 65 (ephemeral pub) + 12 (IV) + 16 (GCM tag) = 93 bytes
         const tooShort = toBase64Url(new Uint8Array(92));
-        await expect(unsealEcdhP256(tooShort, privKey)).rejects.toThrow(
-            /Invalid ECDH-P256 sealed blob: expected at least 93 bytes, got 92/,
+        await expect(unwrapEcdhP256(tooShort, privKey)).rejects.toThrow(
+            /Invalid ECDH-P256 wrapped blob: expected at least 93 bytes, got 92/,
         );
 
         // Empty blob
         const empty = toBase64Url(new Uint8Array(0));
-        await expect(unsealEcdhP256(empty, privKey)).rejects.toThrow(
-            /Invalid ECDH-P256 sealed blob: expected at least 93 bytes, got 0/,
+        await expect(unwrapEcdhP256(empty, privKey)).rejects.toThrow(
+            /Invalid ECDH-P256 wrapped blob: expected at least 93 bytes, got 0/,
         );
 
         // Just below threshold (header only)
         const headerOnly = toBase64Url(new Uint8Array(65));
-        await expect(unsealEcdhP256(headerOnly, privKey)).rejects.toThrow(
-            /Invalid ECDH-P256 sealed blob: expected at least 93 bytes, got 65/,
+        await expect(unwrapEcdhP256(headerOnly, privKey)).rejects.toThrow(
+            /Invalid ECDH-P256 wrapped blob: expected at least 93 bytes, got 65/,
         );
     });
 });
@@ -293,31 +293,31 @@ describe("SHA-256 integrity proofs", () => {
 describe("Time buckets", () => {
     it("formats hourly buckets as YYMMDDTHH", () => {
         const date = new Date("2025-10-23T13:45:00Z");
-        expect(formatTimeBucket(date)).toBe("251023T13");
+        expect(formatTimeKid(date)).toBe("251023T13");
     });
 
     it("formats sub-hour buckets as YYMMDDTHHMM", () => {
         const date = new Date("2025-10-23T14:30:00Z");
-        expect(formatTimeBucket(date, true)).toBe("251023T1430");
+        expect(formatTimeKid(date, true)).toBe("251023T1430");
     });
 
     it("returns current and next bucket", () => {
         const now = new Date("2025-10-23T13:45:00Z");
-        const buckets = getCurrentTimeBuckets(1, now);
+        const buckets = getCurrentRotationVersions(1, now);
 
-        expect(buckets.current.t).toBe("251023T13");
-        expect(buckets.next.t).toBe("251023T14");
+        expect(buckets.current.kid).toBe("251023T13");
+        expect(buckets.next.kid).toBe("251023T14");
     });
 
     it("derives content-specific period keys", async () => {
         const secret = generateAesKeyBytes();
 
-        const key1 = await deriveDcaPeriodKey(secret, "bodytext", "251023T13");
-        const key2 = await deriveDcaPeriodKey(secret, "sidebar", "251023T13");
-        const key3 = await deriveDcaPeriodKey(secret, "bodytext", "251023T14");
+        const key1 = await deriveWrapKey(secret, "bodytext", "251023T13");
+        const key2 = await deriveWrapKey(secret, "sidebar", "251023T13");
+        const key3 = await deriveWrapKey(secret, "bodytext", "251023T14");
 
         // Same content name + same time bucket → same key
-        const key1b = await deriveDcaPeriodKey(secret, "bodytext", "251023T13");
+        const key1b = await deriveWrapKey(secret, "bodytext", "251023T13");
         expect(key1).toEqual(key1b);
 
         // Different content name → different key
@@ -347,7 +347,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -368,16 +368,14 @@ describe("DCA end-to-end", () => {
         });
 
         // Verify DCA data structure
-        expect(result.dcaData.version).toBe("2");
-        expect(result.dcaData.contentSealData["bodytext"]).toBeDefined();
-        expect(result.dcaData.sealedContentKeys["bodytext"]).toHaveLength(2); // current + next period
-        expect(result.dcaData.issuerData["test-issuer"]).toBeDefined();
-        expect(result.sealedContent["bodytext"]).toBeDefined();
+        expect(result.manifest.version).toBe("0.10");
+        expect(result.manifest.content["bodytext"]).toBeDefined();
+        expect(result.manifest.content["bodytext"].wrappedContentKey).toHaveLength(2); // current + next period
+        expect(result.manifest.issuers["test-issuer"]).toBeDefined();
+        expect(result.manifest.content["bodytext"].ciphertext).toBeDefined();
 
         // Verify HTML output
-        expect(result.html.dcaDataScript).toContain('<script type="application/json" class="dca-data">');
-        expect(result.html.sealedContentTemplate).toContain('<template class="dca-sealed-content">');
-        expect(result.html.sealedContentTemplate).toContain('data-dca-content-name="bodytext"');
+        expect(result.html.manifestScript).toContain('<script type="application/json" class="dca-manifest">');
 
         // --- Issuer side (contentKey mode) ---
         const issuer = createDcaIssuer({
@@ -391,10 +389,10 @@ describe("DCA end-to-end", () => {
 
         const unlockResponse = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["test-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["test-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
 
         expect(findKey(unlockResponse, "bodytext")).toBeDefined();
@@ -402,10 +400,10 @@ describe("DCA end-to-end", () => {
 
         // --- Client-side decryption ---
         const contentKeyBytes = fromBase64Url(findKey(unlockResponse, "bodytext").contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
-        const iv = fromBase64Url(sealData.nonce);
-        const aad = encodeUtf8(sealData.aad);
-        const ciphertext = fromBase64Url(result.sealedContent["bodytext"]);
+        const contentEntry = result.manifest.content["bodytext"];
+        const iv = fromBase64Url(contentEntry.iv);
+        const aad = encodeUtf8(contentEntry.aad);
+        const ciphertext = fromBase64Url(contentEntry.ciphertext);
 
         const decrypted = await decryptContent(ciphertext, contentKeyBytes, iv, aad);
         expect(decodeUtf8(decrypted)).toBe("<p>Premium content</p>");
@@ -417,7 +415,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "multi.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -439,13 +437,13 @@ describe("DCA end-to-end", () => {
         });
 
         // Verify multiple content items
-        expect(Object.keys(result.dcaData.contentSealData)).toEqual(["body", "sidebar", "data"]);
-        expect(result.dcaData.contentSealData["data"].contentType).toBe("application/json");
+        expect(Object.keys(result.manifest.content)).toEqual(["body", "sidebar", "data"]);
+        expect(result.manifest.content["data"].contentType).toBe("application/json");
 
-        // Check that each content item has its own nonce
-        const bodyNonce = result.dcaData.contentSealData["body"].nonce;
-        const sidebarNonce = result.dcaData.contentSealData["sidebar"].nonce;
-        expect(bodyNonce).not.toBe(sidebarNonce);
+        // Check that each content item has its own iv
+        const bodyIv = result.manifest.content["body"].iv;
+        const sidebarIv = result.manifest.content["sidebar"].iv;
+        expect(bodyIv).not.toBe(sidebarIv);
 
         // Issuer unlock with contentKey mode
         const issuer = createDcaIssuer({
@@ -459,10 +457,10 @@ describe("DCA end-to-end", () => {
 
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["multi-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["multi-issuer"].keys,
             },
-            { grantedContentNames: ["body", "sidebar", "data"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["body", "sidebar", "data"], deliveryMode: "direct" },
         );
 
         // Decrypt each content item
@@ -472,24 +470,24 @@ describe("DCA end-to-end", () => {
             ["data", '{"key":"value"}'],
         ]) {
             const contentKey = fromBase64Url(findKey(response, name).contentKey!);
-            const seal = result.dcaData.contentSealData[name];
+            const entry = result.manifest.content[name];
             const decrypted = await decryptContent(
-                fromBase64Url(result.sealedContent[name]),
+                fromBase64Url(entry.ciphertext),
                 contentKey,
-                fromBase64Url(seal.nonce),
-                encodeUtf8(seal.aad),
+                fromBase64Url(entry.iv),
+                encodeUtf8(entry.aad),
             );
             expect(decodeUtf8(decrypted)).toBe(expectedContent);
         }
     });
 
-    it("supports periodKey delivery mode", async () => {
+    it("supports wrapKey delivery mode", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "period.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -501,7 +499,7 @@ describe("DCA end-to-end", () => {
                     publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                     keyId: "pk-1",
                     unlockUrl: "https://pk.test/unlock",
-                    contentNames: ["bodytext"],
+                    scopes: ["bodytext"],
                 },
             ],
         });
@@ -515,44 +513,44 @@ describe("DCA end-to-end", () => {
             },
         });
 
-        // Request periodKeys instead of contentKey
+        // Request wrapKeys instead of contentKey
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["pk-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["pk-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "periodKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "wrapKey" },
         );
 
-        expect(findKey(response, "bodytext").periodKeys).toBeDefined();
-        const periodKeys = periodKeysToRecord(findKey(response, "bodytext"));
-        expect(Object.keys(periodKeys).length).toBe(2); // current + next
+        expect(findKey(response, "bodytext").wrapKeys).toBeDefined();
+        const wrapKeys = wrapKeysToRecord(findKey(response, "bodytext"));
+        expect(Object.keys(wrapKeys).length).toBe(2); // current + next
 
-        // Unwrap contentKey from sealedContentKeys using a periodKey
-        const sealedEntries = result.dcaData.sealedContentKeys["bodytext"];
+        // Unwrap contentKey from wrappedContentKey using a wrapKey
+        const wrappedEntries = result.manifest.content["bodytext"].wrappedContentKey;
         let contentKeyBytes: Uint8Array | null = null;
 
-        for (const entry of sealedEntries) {
-            const periodKeyB64 = periodKeys[entry.t];
-            if (!periodKeyB64) continue;
+        for (const entry of wrappedEntries) {
+            const wrapKeyB64 = wrapKeys[entry.kid];
+            if (!wrapKeyB64) continue;
 
-            const periodKeyBytes = fromBase64Url(periodKeyB64);
-            const nonce = fromBase64Url(entry.nonce);
-            const wrappedKey = fromBase64Url(entry.key);
+            const wrapKeyBytes = fromBase64Url(wrapKeyB64);
+            const iv = fromBase64Url(entry.iv);
+            const wrappedKey = fromBase64Url(entry.ciphertext);
 
-            contentKeyBytes = await aesGcmDecrypt(wrappedKey, periodKeyBytes, nonce);
+            contentKeyBytes = await aesGcmDecrypt(wrappedKey, wrapKeyBytes, iv);
             break;
         }
 
         expect(contentKeyBytes).not.toBeNull();
 
         // Decrypt content
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes!,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("Period key content");
     });
@@ -563,7 +561,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "tamper.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -590,7 +588,7 @@ describe("DCA end-to-end", () => {
         });
 
         // Tamper with the sealed contentKey
-        const tamperedContentEncryptionKeys = result.dcaData.issuerData["tamper-issuer"].contentEncryptionKeys.map(
+        const tamperedKeys = result.manifest.issuers["tamper-issuer"].keys.map(
             (entry) => entry.contentName === "bodytext"
                 ? { ...entry, contentKey: toBase64Url(generateAesKeyBytes()) }
                 : entry,
@@ -599,10 +597,10 @@ describe("DCA end-to-end", () => {
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: result.dcaData.resourceJWT,
-                    contentEncryptionKeys: tamperedContentEncryptionKeys,
+                    resourceJWT: result.manifest.resourceJWT,
+                    keys: tamperedKeys,
                 },
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+                { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
             ),
         ).rejects.toThrow();
     });
@@ -613,7 +611,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "unknown.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -643,10 +641,10 @@ describe("DCA end-to-end", () => {
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: result.dcaData.resourceJWT,
-                    contentEncryptionKeys: result.dcaData.issuerData["domain-issuer"].contentEncryptionKeys,
+                    resourceJWT: result.manifest.resourceJWT,
+                    keys: result.manifest.issuers["domain-issuer"].keys,
                 },
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+                { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
             ),
         ).rejects.toThrow("Untrusted publisher domain");
     });
@@ -657,7 +655,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "verify.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -685,8 +683,8 @@ describe("DCA end-to-end", () => {
         });
 
         const verified = await issuer.verify({
-            resourceJWT: result.dcaData.resourceJWT,
-            contentEncryptionKeys: result.dcaData.issuerData["verify-issuer"].contentEncryptionKeys,
+            resourceJWT: result.manifest.resourceJWT,
+            keys: result.manifest.issuers["verify-issuer"].keys,
         });
 
         expect(verified.resource.resourceId).toBe("verify-test");
@@ -700,7 +698,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "json.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -717,14 +715,14 @@ describe("DCA end-to-end", () => {
             ],
         });
 
-        // JSON response should have all DCA data fields plus sealedContent
+        // JSON response should have all manifest fields
         const json = result.json;
-        expect(json.version).toBe("2");
-        expect(json.sealedContent["bodytext"]).toBeDefined();
+        expect(json.version).toBe("0.10");
+        expect(json.content["bodytext"].ciphertext).toBeDefined();
         expect(json.resourceJWT).toBeDefined();
-        expect(json.contentSealData).toBeDefined();
-        expect(json.sealedContentKeys).toBeDefined();
-        expect(json.issuerData).toBeDefined();
+        expect(json.content).toBeDefined();
+        expect(json.content["bodytext"].wrappedContentKey).toBeDefined();
+        expect(json.issuers).toBeDefined();
     });
 
     it("AAD string follows the convention domain|resourceId|contentName|version", async () => {
@@ -733,7 +731,7 @@ describe("DCA end-to-end", () => {
         const publisher = createDcaPublisher({
             domain: "aad.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -750,19 +748,19 @@ describe("DCA end-to-end", () => {
             ],
         });
 
-        expect(result.dcaData.contentSealData["bodytext"].aad).toBe("aad.example.com|aad-article|bodytext|bodytext");
+        expect(result.manifest.content["bodytext"].aad).toBe("aad.example.com|aad-article|bodytext|bodytext");
     });
 
-    it("cross-resource substitution with same keyName unseals but returns wrong key (harmless)", async () => {
+    it("cross-resource substitution with same scope unseals but returns wrong key (harmless)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "aad.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
-        // Render two different resources with the same keyName
+        // Render two different resources with the same scope
         const resultA = await publisher.render({
             resourceId: "article-A",
             contentItems: [{ contentName: "bodytext", content: "Content A" }],
@@ -799,21 +797,21 @@ describe("DCA end-to-end", () => {
         // Normal unlock for A
         const responseA = await issuer.unlock(
             {
-                resourceJWT: resultA.dcaData.resourceJWT,
-                contentEncryptionKeys: resultA.dcaData.issuerData["aad-issuer"].contentEncryptionKeys,
+                resourceJWT: resultA.manifest.resourceJWT,
+                keys: resultA.manifest.issuers["aad-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
         const keyA = findKey(responseA, "bodytext").contentKey!;
 
         // Cross-resource substitution: resourceJWT from A, keys from B
-        // This now succeeds at unseal (same keyName = same AAD), but returns B's contentKey
+        // This now succeeds at unseal (same scope = same AAD), but returns B's contentKey
         const responseSubst = await issuer.unlock(
             {
-                resourceJWT: resultA.dcaData.resourceJWT,
-                contentEncryptionKeys: resultB.dcaData.issuerData["aad-issuer"].contentEncryptionKeys,
+                resourceJWT: resultA.manifest.resourceJWT,
+                keys: resultB.manifest.issuers["aad-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
         const keySubst = findKey(responseSubst, "bodytext").contentKey!;
 
@@ -821,7 +819,7 @@ describe("DCA end-to-end", () => {
         expect(keySubst).not.toBe(keyA);
     });
 
-    it("seal AAD: unseal with matching keyName succeeds", async () => {
+    it("wrap AAD: unwrap with matching scope succeeds", async () => {
         const keyPair = await generateEcdhP256KeyPair();
         const pems = await exportP256KeyPairPem(keyPair.privateKey, keyPair.publicKey);
 
@@ -831,8 +829,8 @@ describe("DCA end-to-end", () => {
         const originalKey = generateAesKeyBytes();
         const aad = encodeUtf8("premium");
 
-        const sealed = await sealEcdhP256(originalKey, pubKey, aad);
-        const unsealed = await unsealEcdhP256(sealed, privKey, aad);
+        const sealed = await wrapEcdhP256(originalKey, pubKey, aad);
+        const unsealed = await unwrapEcdhP256(sealed, privKey, aad);
         expect(unsealed).toEqual(originalKey);
     });
 
@@ -847,8 +845,8 @@ describe("DCA end-to-end", () => {
         const aad = encodeUtf8("premium");
         const wrongAad = encodeUtf8("free");
 
-        const sealed = await sealEcdhP256(originalKey, pubKey, aad);
-        await expect(unsealEcdhP256(sealed, privKey, wrongAad)).rejects.toThrow();
+        const sealed = await wrapEcdhP256(originalKey, pubKey, aad);
+        await expect(unwrapEcdhP256(sealed, privKey, wrongAad)).rejects.toThrow();
     });
 
     it("seal AAD: unseal without AAD fails when AAD was used", async () => {
@@ -861,8 +859,8 @@ describe("DCA end-to-end", () => {
         const originalKey = generateAesKeyBytes();
         const aad = encodeUtf8("premium");
 
-        const sealed = await sealEcdhP256(originalKey, pubKey, aad);
-        await expect(unsealEcdhP256(sealed, privKey)).rejects.toThrow();
+        const sealed = await wrapEcdhP256(originalKey, pubKey, aad);
+        await expect(unwrapEcdhP256(sealed, privKey)).rejects.toThrow();
     });
 });
 
@@ -910,7 +908,7 @@ describe("Trusted-publisher allowlist", () => {
         const publisher = createDcaPublisher({
             domain: "case.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -939,10 +937,10 @@ describe("Trusted-publisher allowlist", () => {
 
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["case-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["case-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
 
         expect(findKey(response, "bodytext").contentKey).toBeDefined();
@@ -968,7 +966,7 @@ describe("Trusted-publisher allowlist", () => {
         const publisher = createDcaPublisher({
             domain: "constrained.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const allowed = await publisher.render({
@@ -1014,10 +1012,10 @@ describe("Trusted-publisher allowlist", () => {
         // Allowed resource
         const response = await issuer.unlock(
             {
-                resourceJWT: allowed.dcaData.resourceJWT,
-                contentEncryptionKeys: allowed.dcaData.issuerData["constrained-issuer"].contentEncryptionKeys,
+                resourceJWT: allowed.manifest.resourceJWT,
+                keys: allowed.manifest.issuers["constrained-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
         expect(findKey(response, "bodytext").contentKey).toBeDefined();
 
@@ -1025,10 +1023,10 @@ describe("Trusted-publisher allowlist", () => {
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: denied.dcaData.resourceJWT,
-                    contentEncryptionKeys: denied.dcaData.issuerData["constrained-issuer"].contentEncryptionKeys,
+                    resourceJWT: denied.manifest.resourceJWT,
+                    keys: denied.manifest.issuers["constrained-issuer"].keys,
                 },
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+                { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
             ),
         ).rejects.toThrow(/not allowed to claim resourceId/);
     });
@@ -1039,7 +1037,7 @@ describe("Trusted-publisher allowlist", () => {
         const publisher = createDcaPublisher({
             domain: "regex.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const premium = await publisher.render({
@@ -1085,10 +1083,10 @@ describe("Trusted-publisher allowlist", () => {
         // "premium-article-42" matches /^premium-/
         const response = await issuer.unlock(
             {
-                resourceJWT: premium.dcaData.resourceJWT,
-                contentEncryptionKeys: premium.dcaData.issuerData["regex-issuer"].contentEncryptionKeys,
+                resourceJWT: premium.manifest.resourceJWT,
+                keys: premium.manifest.issuers["regex-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
         expect(findKey(response, "bodytext").contentKey).toBeDefined();
 
@@ -1096,10 +1094,10 @@ describe("Trusted-publisher allowlist", () => {
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: free.dcaData.resourceJWT,
-                    contentEncryptionKeys: free.dcaData.issuerData["regex-issuer"].contentEncryptionKeys,
+                    resourceJWT: free.manifest.resourceJWT,
+                    keys: free.manifest.issuers["regex-issuer"].keys,
                 },
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+                { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
             ),
         ).rejects.toThrow(/not allowed to claim resourceId/);
     });
@@ -1110,7 +1108,7 @@ describe("Trusted-publisher allowlist", () => {
         const publisher = createDcaPublisher({
             domain: "compat.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1139,10 +1137,10 @@ describe("Trusted-publisher allowlist", () => {
 
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["compat-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["compat-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
 
         expect(findKey(response, "bodytext").contentKey).toBeDefined();
@@ -1203,7 +1201,7 @@ describe("DCA client-bound transport", () => {
         const publisher = createDcaPublisher({
             domain: "cb.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1228,11 +1226,11 @@ describe("DCA client-bound transport", () => {
 
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["cb-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["cb-issuer"].keys,
                 clientPublicKey: clientKeys.clientPublicKey,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
 
         // Response signals client-bound transport
@@ -1248,24 +1246,24 @@ describe("DCA client-bound transport", () => {
         const contentKeyBytes = await rsaUnwrap(wrappedCK, clientKeys.privateKey);
         expect(contentKeyBytes.length).toBe(32); // AES-256 key
 
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("<p>Client-bound content</p>");
     });
 
-    it("periodKey mode: issuer wraps periodKeys with client public key", async () => {
+    it("wrapKey mode: issuer wraps wrapKeys with client public key", async () => {
         const keys = await generateTestKeys();
         const clientKeys = await generateClientKeyPair();
 
         const publisher = createDcaPublisher({
             domain: "cb-pk.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1276,7 +1274,7 @@ describe("DCA client-bound transport", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "cbpk-1",
                 unlockUrl: "https://cbpk.test/unlock",
-                contentNames: ["bodytext"],
+                scopes: ["bodytext"],
             }],
         });
 
@@ -1289,43 +1287,43 @@ describe("DCA client-bound transport", () => {
 
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["cb-pk-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["cb-pk-issuer"].keys,
                 clientPublicKey: clientKeys.clientPublicKey,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "periodKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "wrapKey" },
         );
 
         expect(response.transport).toBe("client-bound");
-        const periodKeys = periodKeysToRecord(findKey(response, "bodytext"));
-        expect(Object.keys(periodKeys).length).toBe(2);
+        const wrapKeys = wrapKeysToRecord(findKey(response, "bodytext"));
+        expect(Object.keys(wrapKeys).length).toBe(2);
 
-        // RSA unwrap each periodKey, then AES-GCM unwrap contentKey
-        const sealedEntries = result.dcaData.sealedContentKeys["bodytext"];
+        // RSA unwrap each wrapKey, then AES-GCM unwrap contentKey
+        const wrappedEntries = result.manifest.content["bodytext"].wrappedContentKey;
         let contentKeyBytes: Uint8Array | null = null;
 
-        for (const entry of sealedEntries) {
-            const wrappedPK = periodKeys[entry.t];
+        for (const entry of wrappedEntries) {
+            const wrappedPK = wrapKeys[entry.kid];
             if (!wrappedPK) continue;
 
-            const periodKeyBytes = await rsaUnwrap(wrappedPK, clientKeys.privateKey);
-            expect(periodKeyBytes.length).toBe(32);
+            const wrapKeyBytes = await rsaUnwrap(wrappedPK, clientKeys.privateKey);
+            expect(wrapKeyBytes.length).toBe(32);
 
-            const nonce = fromBase64Url(entry.nonce);
-            const wrappedCK = fromBase64Url(entry.key);
+            const iv = fromBase64Url(entry.iv);
+            const wrappedCK = fromBase64Url(entry.ciphertext);
 
-            contentKeyBytes = await aesGcmDecrypt(wrappedCK, periodKeyBytes, nonce);
+            contentKeyBytes = await aesGcmDecrypt(wrappedCK, wrapKeyBytes, iv);
             break;
         }
 
         expect(contentKeyBytes).not.toBeNull();
 
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes!,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("Period key CB content");
     });
@@ -1336,7 +1334,7 @@ describe("DCA client-bound transport", () => {
         const publisher = createDcaPublisher({
             domain: "direct.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1361,11 +1359,11 @@ describe("DCA client-bound transport", () => {
         // No clientPublicKey — should use direct transport
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["direct-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["direct-issuer"].keys,
                 // no clientPublicKey
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
 
         // No transport field (or undefined) means direct
@@ -1377,12 +1375,12 @@ describe("DCA client-bound transport", () => {
 
         // Verify it decrypts
         const contentKeyBytes = fromBase64Url(ck);
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("Direct content");
     });
@@ -1399,7 +1397,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "share.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         // Render the page
@@ -1438,8 +1436,8 @@ describe("Share Link Tokens", () => {
         });
 
         const response = await issuer.unlockWithShareToken({
-            resourceJWT: result.dcaData.resourceJWT,
-            contentEncryptionKeys: result.dcaData.issuerData["share-issuer"].contentEncryptionKeys,
+            resourceJWT: result.manifest.resourceJWT,
+            keys: result.manifest.issuers["share-issuer"].keys,
             shareToken,
         });
 
@@ -1449,23 +1447,23 @@ describe("Share Link Tokens", () => {
 
         // Decrypt the content
         const contentKeyBytes = fromBase64Url(findKey(response, "bodytext").contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("<p>Shared premium content</p>");
     });
 
-    it("share link token works with periodKey delivery mode", async () => {
+    it("share link token works with wrapKey delivery mode", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "share-pk.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1478,13 +1476,13 @@ describe("Share Link Tokens", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "spk-1",
                 unlockUrl: "https://share-pk.test/unlock",
-                contentNames: ["bodytext"],
+                scopes: ["bodytext"],
             }],
         });
 
         const shareToken = await publisher.createShareLinkToken({
             resourceId: "shared-pk-1",
-            contentNames: ["bodytext"],
+            scopes: ["bodytext"],
         });
 
         const issuer = createDcaIssuer({
@@ -1498,31 +1496,31 @@ describe("Share Link Tokens", () => {
 
         const response = await issuer.unlockWithShareToken(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["share-pk-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["share-pk-issuer"].keys,
                 shareToken,
             },
-            { deliveryMode: "periodKey" },
+            { deliveryMode: "wrapKey" },
         );
 
-        // Should return periodKeys
-        expect(findKey(response, "bodytext").periodKeys).toBeDefined();
+        // Should return wrapKeys
+        expect(findKey(response, "bodytext").wrapKeys).toBeDefined();
         expect(findKey(response, "bodytext").contentKey).toBeUndefined();
 
-        // Unwrap contentKey from sealedContentKeys using periodKey
-        const periodKeys = periodKeysToRecord(findKey(response, "bodytext"));
-        const sealedContentKeys = result.dcaData.sealedContentKeys["bodytext"];
+        // Unwrap contentKey from wrappedContentKey using wrapKey
+        const wrapKeys = wrapKeysToRecord(findKey(response, "bodytext"));
+        const wrappedContentKey = result.manifest.content["bodytext"].wrappedContentKey;
         let contentKeyBytes: Uint8Array | null = null;
 
-        for (const entry of sealedContentKeys) {
-            const pkB64 = periodKeys[entry.t];
+        for (const entry of wrappedContentKey) {
+            const pkB64 = wrapKeys[entry.kid];
             if (!pkB64) continue;
 
-            const periodKeyBytes = fromBase64Url(pkB64);
-            const nonce = fromBase64Url(entry.nonce);
-            const wrappedKey = fromBase64Url(entry.key);
+            const wrapKeyBytes = fromBase64Url(pkB64);
+            const iv = fromBase64Url(entry.iv);
+            const wrappedKey = fromBase64Url(entry.ciphertext);
 
-            const decryptedKey = await aesGcmDecrypt(wrappedKey, periodKeyBytes, nonce);
+            const decryptedKey = await aesGcmDecrypt(wrappedKey, wrapKeyBytes, iv);
             contentKeyBytes = decryptedKey;
             break;
         }
@@ -1530,12 +1528,12 @@ describe("Share Link Tokens", () => {
         expect(contentKeyBytes).not.toBeNull();
 
         // Decrypt content
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes!,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("Period key shared content");
     });
@@ -1546,7 +1544,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "expire.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1581,8 +1579,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["expire-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["expire-issuer"].keys,
                 shareToken,
             }),
         ).rejects.toThrow(/expired/);
@@ -1594,7 +1592,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "mismatch.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1628,8 +1626,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["mm-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["mm-issuer"].keys,
                 shareToken,
             }),
         ).rejects.toThrow(/resourceId mismatch/);
@@ -1642,13 +1640,13 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "trusted.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const evilPublisher = createDcaPublisher({
             domain: "trusted.example.com", // Claims to be trusted
             signingKeyPem: evilKeys.signingPems.privateKeyPem,
-            periodSecret: evilKeys.periodSecret,
+            rotationSecret: evilKeys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1682,8 +1680,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["trust-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["trust-issuer"].keys,
                 shareToken: evilShareToken,
             }),
         ).rejects.toThrow(/signature/i);
@@ -1695,7 +1693,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "noshare.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1723,8 +1721,8 @@ describe("Share Link Tokens", () => {
 
         await expect(
             issuer.unlockWithShareToken({
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["ns-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["ns-issuer"].keys,
                 // no shareToken
             }),
         ).rejects.toThrow(/shareToken/);
@@ -1736,7 +1734,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "partial.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1771,14 +1769,14 @@ describe("Share Link Tokens", () => {
         });
 
         const response = await issuer.unlockWithShareToken({
-            resourceJWT: result.dcaData.resourceJWT,
-            contentEncryptionKeys: result.dcaData.issuerData["partial-issuer"].contentEncryptionKeys,
+            resourceJWT: result.manifest.resourceJWT,
+            keys: result.manifest.issuers["partial-issuer"].keys,
             shareToken,
         });
 
         // Should only grant preview and bodytext
-        expect(response.contentEncryptionKeys.map(k => k.contentName).sort()).toEqual(["bodytext", "preview"]);
-        expect(response.contentEncryptionKeys.find(k => k.contentName === "bonus")).toBeUndefined();
+        expect(response.keys.map(k => k.contentName).sort()).toEqual(["bodytext", "preview"]);
+        expect(response.keys.find(k => k.contentName === "bonus")).toBeUndefined();
 
         // Verify both decrypt correctly
         for (const [name, expected] of [
@@ -1786,12 +1784,12 @@ describe("Share Link Tokens", () => {
             ["bodytext", "Full body text"],
         ] as const) {
             const ck = fromBase64Url(findKey(response, name).contentKey!);
-            const seal = result.dcaData.contentSealData[name];
+            const entry = result.manifest.content[name];
             const decrypted = await decryptContent(
-                fromBase64Url(result.sealedContent[name]),
+                fromBase64Url(entry.ciphertext),
                 ck,
-                fromBase64Url(seal.nonce),
-                encodeUtf8(seal.aad),
+                fromBase64Url(entry.iv),
+                encodeUtf8(entry.aad),
             );
             expect(decodeUtf8(decrypted)).toBe(expected);
         }
@@ -1803,7 +1801,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "callback.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1842,8 +1840,8 @@ describe("Share Link Tokens", () => {
 
         const response = await issuer.unlockWithShareToken(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["cb-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["cb-issuer"].keys,
                 shareToken,
             },
             {
@@ -1871,7 +1869,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "reject.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -1906,8 +1904,8 @@ describe("Share Link Tokens", () => {
         await expect(
             issuer.unlockWithShareToken(
                 {
-                    resourceJWT: result.dcaData.resourceJWT,
-                    contentEncryptionKeys: result.dcaData.issuerData["rj-issuer"].contentEncryptionKeys,
+                    resourceJWT: result.manifest.resourceJWT,
+                    keys: result.manifest.issuers["rj-issuer"].keys,
                     shareToken,
                 },
                 {
@@ -1925,7 +1923,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "verify.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const shareToken = await publisher.createShareLinkToken({
@@ -1960,7 +1958,7 @@ describe("Share Link Tokens", () => {
         const publisher = createDcaPublisher({
             domain: "jti-auto.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const issuer = createDcaIssuer({
@@ -2122,7 +2120,7 @@ describe("unlock request format", () => {
         const publisher = createDcaPublisher({
             domain: "v2.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -2150,13 +2148,13 @@ describe("unlock request format", () => {
             },
         });
 
-        // Unlock request: resourceJWT + contentEncryptionKeys
+        // Unlock request: resourceJWT + keys
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["v2-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["v2-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
         );
 
         expect(findKey(response, "bodytext")).toBeDefined();
@@ -2164,23 +2162,23 @@ describe("unlock request format", () => {
 
         // Decrypt to verify the full chain works
         const contentKeyBytes = fromBase64Url(findKey(response, "bodytext").contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("<p>v2 content</p>");
     });
 
-    it("unlocks with periodKey delivery mode", async () => {
+    it("unlocks with wrapKey delivery mode", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "v2pk.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -2191,7 +2189,7 @@ describe("unlock request format", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "v2pk-1",
                 unlockUrl: "https://v2pk.test/unlock",
-                contentNames: ["bodytext"],
+                scopes: ["bodytext"],
             }],
         });
 
@@ -2204,40 +2202,40 @@ describe("unlock request format", () => {
             },
         });
 
-        // Unlock with periodKey delivery
+        // Unlock with wrapKey delivery
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["v2pk-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["v2pk-issuer"].keys,
             },
-            { grantedContentNames: ["bodytext"], deliveryMode: "periodKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "wrapKey" },
         );
 
-        expect(findKey(response, "bodytext").periodKeys).toBeDefined();
-        const periodKeys = periodKeysToRecord(findKey(response, "bodytext"));
-        expect(Object.keys(periodKeys).length).toBe(2);
+        expect(findKey(response, "bodytext").wrapKeys).toBeDefined();
+        const wrapKeys = wrapKeysToRecord(findKey(response, "bodytext"));
+        expect(Object.keys(wrapKeys).length).toBe(2);
 
-        // Unwrap contentKey from sealedContentKeys using a periodKey
-        const sealedEntries = result.dcaData.sealedContentKeys["bodytext"];
+        // Unwrap contentKey from wrappedContentKey using a wrapKey
+        const wrappedEntries = result.manifest.content["bodytext"].wrappedContentKey;
         let contentKeyBytes: Uint8Array | null = null;
-        for (const entry of sealedEntries) {
-            const periodKeyB64 = periodKeys[entry.t];
-            if (!periodKeyB64) continue;
+        for (const entry of wrappedEntries) {
+            const wrapKeyB64 = wrapKeys[entry.kid];
+            if (!wrapKeyB64) continue;
             contentKeyBytes = await aesGcmDecrypt(
-                fromBase64Url(entry.key),
-                fromBase64Url(periodKeyB64),
-                fromBase64Url(entry.nonce),
+                fromBase64Url(entry.ciphertext),
+                fromBase64Url(wrapKeyB64),
+                fromBase64Url(entry.iv),
             );
             break;
         }
         expect(contentKeyBytes).not.toBeNull();
 
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes!,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("v2 period key content");
     });
@@ -2248,7 +2246,7 @@ describe("unlock request format", () => {
         const publisher = createDcaPublisher({
             domain: "untrusted-v2.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -2276,10 +2274,10 @@ describe("unlock request format", () => {
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: result.dcaData.resourceJWT,
-                    contentEncryptionKeys: result.dcaData.issuerData["reject-issuer"].contentEncryptionKeys,
+                    resourceJWT: result.manifest.resourceJWT,
+                    keys: result.manifest.issuers["reject-issuer"].keys,
                 },
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+                { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
             ),
         ).rejects.toThrow("Untrusted publisher domain");
     });
@@ -2290,7 +2288,7 @@ describe("unlock request format", () => {
         const publisher = createDcaPublisher({
             domain: "v2share.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -2323,21 +2321,21 @@ describe("unlock request format", () => {
         // Share link unlock
         const response = await issuer.unlockWithShareToken(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["v2share-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["v2share-issuer"].keys,
                 shareToken,
             },
-            { deliveryMode: "contentKey" },
+            { deliveryMode: "direct" },
         );
 
         expect(findKey(response, "bodytext").contentKey).toBeDefined();
         const contentKeyBytes = fromBase64Url(findKey(response, "bodytext").contentKey!);
-        const sealData = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             contentKeyBytes,
-            fromBase64Url(sealData.nonce),
-            encodeUtf8(sealData.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("v2 share content");
     });
@@ -2348,7 +2346,7 @@ describe("unlock request format", () => {
         const publisher = createDcaPublisher({
             domain: "v2nokeys.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -2372,89 +2370,89 @@ describe("unlock request format", () => {
             },
         });
 
-        // Request without contentEncryptionKeys — should fail at runtime even though type requires it
+        // Request without keys — should fail at runtime even though type requires it
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: result.dcaData.resourceJWT,
+                    resourceJWT: result.manifest.resourceJWT,
                 } as any,
-                { grantedContentNames: ["bodytext"], deliveryMode: "contentKey" },
+                { grantedContentNames: ["bodytext"], deliveryMode: "direct" },
             ),
-        ).rejects.toThrow(/contentEncryptionKeys/);
+        ).rejects.toThrow(/keys/);
     });
 });
 
 // ============================================================================
-// keyName — role-based access / key domain separation
+// scope — role-based access separation
 // ============================================================================
 
-describe("keyName (role-based access)", () => {
-    it("publishes multiple content items sharing a keyName", async () => {
+describe("scope (role-based access)", () => {
+    it("publishes multiple content items sharing a scope", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "keyname.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "kn-article-1",
             contentItems: [
-                { contentName: "bodytext", keyName: "premium", content: "<p>Body</p>" },
-                { contentName: "sidebar", keyName: "premium", content: "<p>Sidebar</p>" },
-                { contentName: "teaser", content: "Free teaser" }, // no keyName → defaults to "teaser"
+                { contentName: "bodytext", scope: "premium", content: "<p>Body</p>" },
+                { contentName: "sidebar", scope: "premium", content: "<p>Sidebar</p>" },
+                { contentName: "teaser", content: "Free teaser" }, // no scope → defaults to "teaser"
             ],
             issuers: [{
                 issuerName: "kn-issuer",
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "kn-1",
                 unlockUrl: "https://kn.test/unlock",
-                keyNames: ["premium", "teaser"],
+                scopes: ["premium", "teaser"],
             }],
         });
 
-        // Each entry carries its own keyName
-        const entries = result.dcaData.issuerData["kn-issuer"].contentEncryptionKeys;
-        expect(entries.find(e => e.contentName === "bodytext")?.keyName).toBe("premium");
-        expect(entries.find(e => e.contentName === "sidebar")?.keyName).toBe("premium");
-        expect(entries.find(e => e.contentName === "teaser")?.keyName).toBe("teaser");
+        // Each entry carries its own scope
+        const entries = result.manifest.issuers["kn-issuer"].keys;
+        expect(entries.find(e => e.contentName === "bodytext")?.scope).toBe("premium");
+        expect(entries.find(e => e.contentName === "sidebar")?.scope).toBe("premium");
+        expect(entries.find(e => e.contentName === "teaser")?.scope).toBe("teaser");
 
         // All three items are sealed for the issuer
         expect(entries.map(k => k.contentName)).toEqual(
             expect.arrayContaining(["bodytext", "sidebar", "teaser"]),
         );
 
-        // Each item has its own contentSealData with unified AAD: domain|resourceId|contentName|keyName
-        expect(result.dcaData.contentSealData["bodytext"].aad).toBe(
+        // Each item has its own content entry with unified AAD: domain|resourceId|contentName|scope
+        expect(result.manifest.content["bodytext"].aad).toBe(
             "keyname.example.com|kn-article-1|bodytext|premium",
         );
-        expect(result.dcaData.contentSealData["sidebar"].aad).toBe(
+        expect(result.manifest.content["sidebar"].aad).toBe(
             "keyname.example.com|kn-article-1|sidebar|premium",
         );
     });
 
-    it("items sharing a keyName can be decrypted with the same periodKey", async () => {
+    it("items sharing a scope can be decrypted with the same wrapKey", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "shared-pk.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "shared-pk-1",
             contentItems: [
-                { contentName: "body", keyName: "premium", content: "Body content" },
-                { contentName: "sidebar", keyName: "premium", content: "Sidebar content" },
+                { contentName: "body", scope: "premium", content: "Body content" },
+                { contentName: "sidebar", scope: "premium", content: "Sidebar content" },
             ],
             issuers: [{
                 issuerName: "sp-issuer",
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "sp-1",
                 unlockUrl: "https://sp.test/unlock",
-                keyNames: ["premium"],
+                scopes: ["premium"],
             }],
         });
 
@@ -2467,62 +2465,62 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // Unlock with periodKey delivery — request just "body"
+        // Unlock with wrapKey delivery — request just "body"
         const bodyResponse = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["sp-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["sp-issuer"].keys,
             },
-            { grantedContentNames: ["body"], deliveryMode: "periodKey" },
+            { grantedContentNames: ["body"], deliveryMode: "wrapKey" },
         );
 
-        const bodyPeriodKeys = periodKeysToRecord(findKey(bodyResponse, "body"));
+        const bodyWrapKeys = wrapKeysToRecord(findKey(bodyResponse, "body"));
 
-        // Unwrap "body" contentKey using periodKey
+        // Unwrap "body" contentKey using wrapKey
         let bodyContentKey: Uint8Array | null = null;
-        for (const entry of result.dcaData.sealedContentKeys["body"]) {
-            const pkB64 = bodyPeriodKeys[entry.t];
+        for (const entry of result.manifest.content["body"].wrappedContentKey) {
+            const pkB64 = bodyWrapKeys[entry.kid];
             if (!pkB64) continue;
             bodyContentKey = await aesGcmDecrypt(
-                fromBase64Url(entry.key),
+                fromBase64Url(entry.ciphertext),
                 fromBase64Url(pkB64),
-                fromBase64Url(entry.nonce),
+                fromBase64Url(entry.iv),
             );
             break;
         }
         expect(bodyContentKey).not.toBeNull();
 
-        // Now use the SAME periodKey to unwrap "sidebar" contentKey
-        // (both share keyName "premium", so the periodKey works for both)
+        // Now use the SAME wrapKey to unwrap "sidebar" contentKey
+        // (both share scope "premium", so the wrapKey works for both)
         let sidebarContentKey: Uint8Array | null = null;
-        for (const entry of result.dcaData.sealedContentKeys["sidebar"]) {
-            const pkB64 = bodyPeriodKeys[entry.t];
+        for (const entry of result.manifest.content["sidebar"].wrappedContentKey) {
+            const pkB64 = bodyWrapKeys[entry.kid];
             if (!pkB64) continue;
             sidebarContentKey = await aesGcmDecrypt(
-                fromBase64Url(entry.key),
+                fromBase64Url(entry.ciphertext),
                 fromBase64Url(pkB64),
-                fromBase64Url(entry.nonce),
+                fromBase64Url(entry.iv),
             );
             break;
         }
         expect(sidebarContentKey).not.toBeNull();
 
         // Decrypt both items
-        const bodySeal = result.dcaData.contentSealData["body"];
+        const bodyEntry = result.manifest.content["body"];
         const bodyDecrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["body"]),
+            fromBase64Url(bodyEntry.ciphertext),
             bodyContentKey!,
-            fromBase64Url(bodySeal.nonce),
-            encodeUtf8(bodySeal.aad),
+            fromBase64Url(bodyEntry.iv),
+            encodeUtf8(bodyEntry.aad),
         );
         expect(decodeUtf8(bodyDecrypted)).toBe("Body content");
 
-        const sidebarSeal = result.dcaData.contentSealData["sidebar"];
+        const sidebarEntry = result.manifest.content["sidebar"];
         const sidebarDecrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["sidebar"]),
+            fromBase64Url(sidebarEntry.ciphertext),
             sidebarContentKey!,
-            fromBase64Url(sidebarSeal.nonce),
-            encodeUtf8(sidebarSeal.aad),
+            fromBase64Url(sidebarEntry.iv),
+            encodeUtf8(sidebarEntry.aad),
         );
         expect(decodeUtf8(sidebarDecrypted)).toBe("Sidebar content");
     });
@@ -2533,14 +2531,14 @@ describe("keyName (role-based access)", () => {
         const publisher = createDcaPublisher({
             domain: "gkn.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "gkn-article",
             contentItems: [
-                { contentName: "body", keyName: "premium", content: "Premium body" },
-                { contentName: "sidebar", keyName: "premium", content: "Premium sidebar" },
+                { contentName: "body", scope: "premium", content: "Premium body" },
+                { contentName: "sidebar", scope: "premium", content: "Premium sidebar" },
                 { contentName: "teaser", content: "Free teaser" },
             ],
             issuers: [{
@@ -2548,7 +2546,7 @@ describe("keyName (role-based access)", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "gkn-1",
                 unlockUrl: "https://gkn.test/unlock",
-                keyNames: ["premium", "teaser"],
+                scopes: ["premium", "teaser"],
             }],
         });
 
@@ -2561,18 +2559,18 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // Grant by keyName "premium" → should unlock "body" and "sidebar"
+        // Grant by scope "premium" → should unlock "body" and "sidebar"
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["gkn-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["gkn-issuer"].keys,
             },
-            { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
+            { grantedScopes: ["premium"], deliveryMode: "direct" },
         );
 
         // Should get keys for body and sidebar, but not teaser
-        expect(response.contentEncryptionKeys.map(k => k.contentName).sort()).toEqual(["body", "sidebar"]);
-        expect(response.contentEncryptionKeys.find(k => k.contentName === "teaser")).toBeUndefined();
+        expect(response.keys.map(k => k.contentName).sort()).toEqual(["body", "sidebar"]);
+        expect(response.keys.find(k => k.contentName === "teaser")).toBeUndefined();
 
         // Verify both decrypt correctly
         for (const [name, expected] of [
@@ -2580,12 +2578,12 @@ describe("keyName (role-based access)", () => {
             ["sidebar", "Premium sidebar"],
         ] as const) {
             const ck = fromBase64Url(findKey(response, name).contentKey!);
-            const seal = result.dcaData.contentSealData[name];
+            const entry = result.manifest.content[name];
             const decrypted = await decryptContent(
-                fromBase64Url(result.sealedContent[name]),
+                fromBase64Url(entry.ciphertext),
                 ck,
-                fromBase64Url(seal.nonce),
-                encodeUtf8(seal.aad),
+                fromBase64Url(entry.iv),
+                encodeUtf8(entry.aad),
             );
             expect(decodeUtf8(decrypted)).toBe(expected);
         }
@@ -2597,21 +2595,21 @@ describe("keyName (role-based access)", () => {
         const publisher = createDcaPublisher({
             domain: "v2kn.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "v2kn-article",
             contentItems: [
-                { contentName: "body", keyName: "premium", content: "v2 premium" },
-                { contentName: "extra", keyName: "premium", content: "v2 extra" },
+                { contentName: "body", scope: "premium", content: "v2 premium" },
+                { contentName: "extra", scope: "premium", content: "v2 extra" },
             ],
             issuers: [{
                 issuerName: "v2kn-issuer",
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "v2kn-1",
                 unlockUrl: "https://v2kn.test/unlock",
-                keyNames: ["premium"],
+                scopes: ["premium"],
             }],
         });
 
@@ -2624,35 +2622,35 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // keyName resolution uses the keyName field on each entry
+        // scope resolution uses the scope field on each entry
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["v2kn-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["v2kn-issuer"].keys,
             },
-            { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
+            { grantedScopes: ["premium"], deliveryMode: "direct" },
         );
 
-        expect(response.contentEncryptionKeys.map(k => k.contentName).sort()).toEqual(["body", "extra"]);
+        expect(response.keys.map(k => k.contentName).sort()).toEqual(["body", "extra"]);
 
         const ck = fromBase64Url(findKey(response, "body").contentKey!);
-        const seal = result.dcaData.contentSealData["body"];
+        const entry = result.manifest.content["body"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["body"]),
+            fromBase64Url(entry.ciphertext),
             ck,
-            fromBase64Url(seal.nonce),
-            encodeUtf8(seal.aad),
+            fromBase64Url(entry.iv),
+            encodeUtf8(entry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("v2 premium");
     });
 
-    it("keyName defaults to contentName when not explicitly set", async () => {
+    it("scope defaults to contentName when not explicitly set", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "nokm.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
@@ -2669,25 +2667,25 @@ describe("keyName (role-based access)", () => {
             }],
         });
 
-        // No explicit keyName → defaults to contentName
-        const entry = result.dcaData.issuerData["nokm-issuer"].contentEncryptionKeys[0];
-        expect(entry.keyName).toBe("bodytext");
+        // No explicit scope → defaults to contentName
+        const entry = result.manifest.issuers["nokm-issuer"].keys[0];
+        expect(entry.scope).toBe("bodytext");
     });
 
-    it("share link token with keyNames grants all matching content items", async () => {
+    it("share link token with scopes grants all matching content items", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "share-kn.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "share-kn-article",
             contentItems: [
-                { contentName: "body", keyName: "premium", content: "Share body" },
-                { contentName: "sidebar", keyName: "premium", content: "Share sidebar" },
+                { contentName: "body", scope: "premium", content: "Share body" },
+                { contentName: "sidebar", scope: "premium", content: "Share sidebar" },
                 { contentName: "teaser", content: "Free" },
             ],
             issuers: [{
@@ -2695,14 +2693,14 @@ describe("keyName (role-based access)", () => {
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "skn-1",
                 unlockUrl: "https://skn.test/unlock",
-                keyNames: ["premium", "teaser"],
+                scopes: ["premium", "teaser"],
             }],
         });
 
-        // Create share token with keyNames
+        // Create share token with scopes
         const shareToken = await publisher.createShareLinkToken({
             resourceId: "share-kn-article",
-            keyNames: ["premium"],
+            scopes: ["premium"],
         });
 
         const issuer = createDcaIssuer({
@@ -2715,58 +2713,58 @@ describe("keyName (role-based access)", () => {
         });
 
         const response = await issuer.unlockWithShareToken({
-            resourceJWT: result.dcaData.resourceJWT,
-            contentEncryptionKeys: result.dcaData.issuerData["skn-issuer"].contentEncryptionKeys,
+            resourceJWT: result.manifest.resourceJWT,
+            keys: result.manifest.issuers["skn-issuer"].keys,
             shareToken,
         });
 
-        // Should grant body + sidebar (keyName "premium"), but not teaser
-        expect(response.contentEncryptionKeys.map(k => k.contentName).sort()).toEqual(["body", "sidebar"]);
+        // Should grant body + sidebar (scope "premium"), but not teaser
+        expect(response.keys.map(k => k.contentName).sort()).toEqual(["body", "sidebar"]);
     });
 
-    it("issuer config keyNames selects correct content items for sealing", async () => {
+    it("issuer config scopes selects correct content items for wrapping", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "sel.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "sel-article",
             contentItems: [
-                { contentName: "body", keyName: "premium", content: "Premium" },
-                { contentName: "sidebar", keyName: "premium", content: "Sidebar" },
-                { contentName: "teaser", keyName: "free", content: "Free" },
+                { contentName: "body", scope: "premium", content: "Premium" },
+                { contentName: "sidebar", scope: "premium", content: "Sidebar" },
+                { contentName: "teaser", scope: "free", content: "Free" },
             ],
             issuers: [{
                 issuerName: "premium-issuer",
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "sel-1",
                 unlockUrl: "https://sel.test/unlock",
-                keyNames: ["premium"], // only premium content
+                scopes: ["premium"], // only premium content
             }],
         });
 
-        // Only body and sidebar should be sealed (both have keyName "premium")
-        const sealedNames = result.dcaData.issuerData["premium-issuer"].contentEncryptionKeys.map(k => k.contentName);
+        // Only body and sidebar should be sealed (both have scope "premium")
+        const sealedNames = result.manifest.issuers["premium-issuer"].keys.map(k => k.contentName);
         expect(sealedNames.sort()).toEqual(["body", "sidebar"]);
 
         // "teaser" should not be in sealed data for this issuer
-        expect(result.dcaData.issuerData["premium-issuer"].contentEncryptionKeys.find(k => k.contentName === "teaser")).toBeUndefined();
+        expect(result.manifest.issuers["premium-issuer"].keys.find(k => k.contentName === "teaser")).toBeUndefined();
     });
 
-    it("grantedKeyNames resolves via entry keyName (defaults to contentName)", async () => {
+    it("grantedScopes resolves via entry scope (defaults to contentName)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "fb.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
-        // No explicit keyName → defaults to contentName "bodytext"
+        // No explicit scope → defaults to contentName "bodytext"
         const result = await publisher.render({
             resourceId: "fb-article",
             contentItems: [
@@ -2781,9 +2779,9 @@ describe("keyName (role-based access)", () => {
             }],
         });
 
-        // Verify entry has keyName defaulted to contentName
-        const entry = result.dcaData.issuerData["fb-issuer"].contentEncryptionKeys[0];
-        expect(entry.keyName).toBe("bodytext");
+        // Verify entry has scope defaulted to contentName
+        const entry = result.manifest.issuers["fb-issuer"].keys[0];
+        expect(entry.scope).toBe("bodytext");
 
         const issuer = createDcaIssuer({
             issuerName: "fb-issuer",
@@ -2794,49 +2792,49 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // grantedKeyNames resolves via entry.keyName
+        // grantedScopes resolves via entry.scope
         const response = await issuer.unlock(
             {
-                resourceJWT: result.dcaData.resourceJWT,
-                contentEncryptionKeys: result.dcaData.issuerData["fb-issuer"].contentEncryptionKeys,
+                resourceJWT: result.manifest.resourceJWT,
+                keys: result.manifest.issuers["fb-issuer"].keys,
             },
-            { grantedKeyNames: ["bodytext"], deliveryMode: "contentKey" },
+            { grantedScopes: ["bodytext"], deliveryMode: "direct" },
         );
 
         expect(findKey(response, "bodytext").contentKey).toBeDefined();
 
         const ck = fromBase64Url(findKey(response, "bodytext").contentKey!);
-        const seal = result.dcaData.contentSealData["bodytext"];
+        const contentEntry = result.manifest.content["bodytext"];
         const decrypted = await decryptContent(
-            fromBase64Url(result.sealedContent["bodytext"]),
+            fromBase64Url(contentEntry.ciphertext),
             ck,
-            fromBase64Url(seal.nonce),
-            encodeUtf8(seal.aad),
+            fromBase64Url(contentEntry.iv),
+            encodeUtf8(contentEntry.aad),
         );
         expect(decodeUtf8(decrypted)).toBe("Fallback content");
     });
 
-    it("rejects cross-tier key substitution (keyName AAD binding)", async () => {
+    it("rejects cross-tier key substitution (scope AAD binding)", async () => {
         const keys = await generateTestKeys();
 
         const publisher = createDcaPublisher({
             domain: "aad.example.com",
             signingKeyPem: keys.signingPems.privateKeyPem,
-            periodSecret: keys.periodSecret,
+            rotationSecret: keys.rotationSecret,
         });
 
         const result = await publisher.render({
             resourceId: "aad-article",
             contentItems: [
-                { contentName: "body", keyName: "premium", content: "Premium body" },
-                { contentName: "teaser", keyName: "free", content: "Free teaser" },
+                { contentName: "body", scope: "premium", content: "Premium body" },
+                { contentName: "teaser", scope: "free", content: "Free teaser" },
             ],
             issuers: [{
                 issuerName: "aad-issuer",
                 publicKeyPem: keys.issuerEcdhPems.publicKeyPem,
                 keyId: "aad-1",
                 unlockUrl: "https://aad.test/unlock",
-                keyNames: ["premium", "free"],
+                scopes: ["premium", "free"],
             }],
         });
 
@@ -2849,20 +2847,20 @@ describe("keyName (role-based access)", () => {
             },
         });
 
-        // Tamper: swap the "free" entry's keyName to "premium" to try to get it unsealed
-        const entries = result.dcaData.issuerData["aad-issuer"].contentEncryptionKeys;
+        // Tamper: swap the "free" entry's scope to "premium" to try to get it unsealed
+        const entries = result.manifest.issuers["aad-issuer"].keys;
         const tamperedEntries = entries.map(e =>
-            e.contentName === "teaser" ? { ...e, keyName: "premium" } : e,
+            e.contentName === "teaser" ? { ...e, scope: "premium" } : e,
         );
 
         // Unseal should fail — the sealed bytes were AAD-bound to "free", not "premium"
         await expect(
             issuer.unlock(
                 {
-                    resourceJWT: result.dcaData.resourceJWT,
-                    contentEncryptionKeys: tamperedEntries,
+                    resourceJWT: result.manifest.resourceJWT,
+                    keys: tamperedEntries,
                 },
-                { grantedKeyNames: ["premium"], deliveryMode: "contentKey" },
+                { grantedScopes: ["premium"], deliveryMode: "direct" },
             ),
         ).rejects.toThrow();
     });

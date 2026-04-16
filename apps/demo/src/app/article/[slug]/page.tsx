@@ -34,11 +34,11 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
         ============================================================
       */}
 
-      {/* DCA data script + sealed content template embedded as standard DCA HTML */}
+      {/* DCA manifest script embedded as standard DCA HTML */}
       {dcaResult && (
         <div
           dangerouslySetInnerHTML={{
-            __html: dcaResult.result.html.dcaDataScript + dcaResult.result.html.sealedContentTemplate,
+            __html: dcaResult.result.html.manifestScript,
           }}
         />
       )}

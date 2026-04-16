@@ -2,8 +2,8 @@
  * Server-side DCA content encryption for the demo.
  *
  * Uses createDcaPublisher to encrypt articles with:
- * - Local periodKey derivation (HKDF from periodSecret, zero network calls)
- * - ECDH P-256 key sealing for the issuer
+ * - Local wrapKey derivation (HKDF from rotationSecret, zero network calls)
+ * - ECDH P-256 key wrapping for the issuer
  * - ES256 JWT signing
  * - AAD (Additional Authenticated Data) binding
  */
@@ -44,9 +44,9 @@ function getCurrentHourBucket(): string {
  * Uses the DCA publisher to:
  * 1. Generate a random contentKey for this render
  * 2. Encrypt content with AES-256-GCM + AAD
- * 3. Derive periodKeys and wrap contentKey with them
- * 4. Seal contentKey and periodKeys for the demo issuer
- * 5. Sign resourceJWT and issuerJWT (ES256)
+ * 3. Derive wrapKeys and wrap contentKey with them
+ * 4. Wrap contentKey and wrapKeys for the demo issuer
+ * 5. Sign resourceJWT (ES256)
  *
  * Returns the full DcaRenderResult with HTML strings ready to embed.
  */
@@ -55,13 +55,11 @@ export async function renderDcaArticle(
 ): Promise<{ result: DcaRenderResult; tier: string } | null> {
   const hourBucket = getCurrentHourBucket();
 
-  // Check cache - reuse if same hour
   const cached = renderCache.get(resourceId);
   if (cached && cached.hourBucket === hourBucket) {
     return { result: cached.data, tier: cached.tier };
   }
 
-  // Import articles here to avoid circular dependency
   const { articles } = await import("./articles");
 
   const article = articles[resourceId];
@@ -79,7 +77,7 @@ export async function renderDcaArticle(
     contentItems: [
       {
         contentName: "bodytext",
-        keyName: article.tier,
+        scope: article.tier,
         content: article.premiumContent,
         contentType: "text/html",
       },
@@ -90,7 +88,7 @@ export async function renderDcaArticle(
         publicKeyPem: issuerPublicKeyPem,
         keyId: DEMO_KEY_ID,
         unlockUrl,
-        keyNames: [article.tier],
+        scopes: [article.tier],
       },
     ],
     resourceData: {
@@ -99,7 +97,6 @@ export async function renderDcaArticle(
     },
   });
 
-  // Cache for this hour
   renderCache.set(resourceId, {
     data: result,
     tier: article.tier,

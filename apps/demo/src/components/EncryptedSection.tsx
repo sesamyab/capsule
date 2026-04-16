@@ -39,7 +39,7 @@ export function EncryptedSection({
   const contentRef = useRef<HTMLDivElement>(null);
   const clientRef = useRef<InstanceType<typeof import("@sesamy/capsule").DcaClient> | null>(null);
   const pageRef = useRef<import("@sesamy/capsule").DcaParsedPage | null>(null);
-  const keyNameRef = useRef<string>(contentName);
+  const scopeRef = useRef<string>(contentName);
   const initRanRef = useRef(false);
   const { log } = useConsole();
 
@@ -85,9 +85,9 @@ export function EncryptedSection({
 
         const { DcaClient } = await import("@sesamy/capsule");
 
-        const periodKeyCache = createIdbPeriodKeyCache();
+        const wrapKeyCache = createIdbWrapKeyCache();
 
-        const client = new DcaClient({ clientBound: true, periodKeyCache });
+        const client = new DcaClient({ clientBound: true, wrapKeyCache });
         clientRef.current = client;
 
         // Eagerly generate the RSA key pair so it shows immediately in KeyManager
@@ -95,20 +95,20 @@ export function EncryptedSection({
         await client.getPublicKey();
         log("Client-bound transport enabled (RSA-OAEP key pair)", "crypto");
 
-        // Try to parse DCA data from the page
+        // Try to parse the manifest from the page
         try {
           const page = client.parsePage();
           pageRef.current = page;
 
-          // Resolve keyName from the current issuer's entries (falls back to contentName)
-          const issuerRecord = page.dcaData.issuerData[issuerName];
-          const issuerEntries = issuerRecord?.contentEncryptionKeys ?? [];
-          const resolvedKeyName = issuerEntries.find(e => (e.contentName ?? "default") === contentName)?.keyName ?? contentName;
-          keyNameRef.current = resolvedKeyName;
+          // Resolve scope from the current issuer's entries (falls back to contentName)
+          const issuerRecord = page.manifest.issuers[issuerName];
+          const issuerKeys = issuerRecord?.keys ?? [];
+          const resolvedScope = issuerKeys.find(e => (e.contentName ?? "default") === contentName)?.scope ?? contentName;
+          scopeRef.current = resolvedScope;
 
-          const contentNames = Object.keys(page.dcaData.contentSealData);
-          const issuerNames = Object.keys(page.dcaData.issuerData);
-          log(`DCA data parsed: ${contentNames.length} content item(s), ${issuerNames.length} issuer(s)`, "info");
+          const contentNames = Object.keys(page.manifest.content);
+          const issuerNames = Object.keys(page.manifest.issuers);
+          log(`Manifest parsed: ${contentNames.length} content item(s), ${issuerNames.length} issuer(s)`, "info");
           log(`Content items: ${contentNames.join(", ")}`, "info");
           log(`Issuers: ${issuerNames.join(", ")}`, "info");
 
@@ -121,11 +121,10 @@ export function EncryptedSection({
             setIsInitializing(false);
             setState("unlocking");
 
-            // Auto-unlock with share token
             const keys = await client.unlockWithShareToken(page, issuerName, shareToken);
-            const keyMode = keys.contentEncryptionKeys.some((k) => k.contentKey)
+            const keyMode = keys.keys.some((k) => k.contentKey)
               ? "contentKey (direct)"
-              : "periodKeys (cacheable)";
+              : "wrapKeys (cacheable)";
             log(`Share link unlock successful! Key mode: ${keyMode}`, "success");
 
             setState("decrypting");
@@ -133,16 +132,14 @@ export function EncryptedSection({
 
             const html = await client.decrypt(page, contentName, keys);
 
-            // Store content key metadata so KeyManager can display it
             await storeContentKeyRecord(resourceId);
-            await storeSubscriptionRecord(resolvedKeyName);
+            await storeSubscriptionRecord(resolvedScope);
 
             setDecryptedContent(html);
             setState("unlocked");
             log(`Content decrypted successfully (${html.length} chars)`, "success");
             log("✨ Article unlocked via share link!", "success");
 
-            // Clean up the share token from the URL (cosmetic)
             try {
               const url = new URL(window.location.href);
               url.searchParams.delete("share");
@@ -153,51 +150,50 @@ export function EncryptedSection({
             return;
           }
 
-          // Try auto-unlock from cached period keys.
-          // Period keys are shared across all articles (keyed by keyName + timeBucket),
-          // so any previously cached subscription key can unlock any article in the same tier.
-          const hasSubscription = await hasActiveSubscription(resolvedKeyName);
+          // Try auto-unlock from cached wrap keys.
+          // WrapKeys are shared across all articles in the same scope (keyed by scope + kid),
+          // so any previously cached subscription key can unlock any article in the same scope.
+          const hasSubscription = await hasActiveSubscription(resolvedScope);
 
           if (!hasSubscription) {
             log("No active subscription — skipping cached key auto-unlock", "info");
           }
 
           if (hasSubscription) try {
-            const sealedEntries = page.dcaData.sealedContentKeys[contentName] ?? [];
-            const bucketIds = sealedEntries.map((e) => e.t);
-            log(`Checking for cached period keys (buckets: ${bucketIds.join(", ") || "none"})...`, "crypto");
+            const wrappedContentKey = page.manifest.content[contentName]?.wrappedContentKey ?? [];
+            const kids = wrappedContentKey.map((e) => e.kid);
+            log(`Checking for cached wrap keys (kids: ${kids.join(", ") || "none"})...`, "crypto");
 
-            if (sealedEntries.length === 0) {
-              throw new Error(`No sealedContentKeys for ${contentName}`);
+            if (wrappedContentKey.length === 0) {
+              throw new Error(`No wrappedContentKey for ${contentName}`);
             }
 
-            // Verify cache has at least one matching key (keyed by keyName)
+            // Verify cache has at least one matching key (keyed by scope)
             let cacheHit = false;
-            for (const entry of sealedEntries) {
-              const cached = await periodKeyCache.get(`dca:pk:${resolvedKeyName}:${entry.t}`);
+            for (const entry of wrappedContentKey) {
+              const cached = await wrapKeyCache.get(`dca:wk:${resolvedScope}:${entry.kid}`);
               if (cached) {
-                log(`Cache hit for period bucket "${entry.t}" (keyName: ${resolvedKeyName})`, "crypto");
+                log(`Cache hit for wrap kid "${entry.kid}" (scope: ${resolvedScope})`, "crypto");
                 cacheHit = true;
                 break;
               }
             }
 
             if (!cacheHit) {
-              throw new Error("No cached period keys found for any bucket");
+              throw new Error("No cached wrap keys found for any kid");
             }
 
             // Build a synthetic unlock response with empty keys to trigger
-            // the cached-periodKey fallback path inside DcaClient.decrypt()
+            // the cached-wrapKey fallback path inside DcaClient.decrypt()
             const emptyKeys: import("@sesamy/capsule").DcaUnlockResponse = {
-              contentEncryptionKeys: contentNames.map((name) => ({ contentName: name, periodKeys: [] })),
+              keys: contentNames.map((name) => ({ contentName: name, wrapKeys: [] })),
             };
 
             const html = await client.decrypt(page, contentName, emptyKeys);
 
-            log("Cached period key found — decrypting automatically!", "success");
+            log("Cached wrap key found — decrypting automatically!", "success");
 
-            // Refresh subscription TTL (keyed by keyName/tier)
-            await storeSubscriptionRecord(resolvedKeyName);
+            await storeSubscriptionRecord(resolvedScope);
 
             setDecryptedContent(html);
             setState("unlocked");
@@ -207,7 +203,7 @@ export function EncryptedSection({
             return;
           } catch (cacheErr) {
             const msg = cacheErr instanceof Error ? cacheErr.message : String(cacheErr);
-            log(`Period key cache: ${msg}`, "info");
+            log(`Wrap key cache: ${msg}`, "info");
           }
 
           // Fallback: if we have an active subscription, re-call the issuer
@@ -224,7 +220,7 @@ export function EncryptedSection({
               log("Decrypting content with AES-256-GCM + AAD...", "crypto");
 
               const html = await client.decrypt(page, contentName, keys);
-              await storeSubscriptionRecord(resolvedKeyName);
+              await storeSubscriptionRecord(resolvedScope);
 
               setDecryptedContent(html);
               setState("unlocked");
@@ -269,7 +265,7 @@ export function EncryptedSection({
 
           log("Click 'Unlock' to request decryption keys from the issuer", "info");
         } catch {
-          log("No DCA data found on page", "info");
+          log("No DCA manifest found on page", "info");
         }
 
         setIsInitializing(false);
@@ -290,7 +286,7 @@ export function EncryptedSection({
   const handleUnlock = async (accessType: AccessType) => {
     const client = clientRef.current;
     const page = pageRef.current;
-    const keyName = keyNameRef.current;
+    const scope = scopeRef.current;
 
     if (!client || !page) {
       setError("Not ready");
@@ -301,14 +297,14 @@ export function EncryptedSection({
     setState("unlocking");
 
     const accessLabels: Record<AccessType, string> = {
-      article: "Single Article (contentKey — one-time, non-cacheable)",
-      tier: `Tier Subscription: ${keyName} (periodKey — cacheable for 1 hour across tier)`,
+      article: "Single Article (direct contentKey — one-time, non-cacheable)",
+      tier: `Tier Subscription: ${scope} (wrapKey — cacheable across scope)`,
     };
 
     try {
       log(`Access type: ${accessLabels[accessType]}`, "info");
       log(`Calling issuer "${issuerName}" unlock endpoint...`, "network");
-      log(`POST ${page.dcaData.issuerData[issuerName]?.unlockUrl ?? "/api/unlock"}`, "network");
+      log(`POST ${page.manifest.issuers[issuerName]?.unlockUrl ?? "/api/unlock"}`, "network");
 
       let currentPage = page;
       let keys: import("@sesamy/capsule").DcaUnlockResponse;
@@ -316,14 +312,14 @@ export function EncryptedSection({
       try {
         keys = await client.unlock(currentPage, issuerName, { accessType });
       } catch (unlockErr) {
-        // If 403 (e.g. stale JWTs after dev server restart), re-fetch page for fresh DCA data
+        // If 403 (e.g. stale JWTs after dev server restart), re-fetch page for fresh manifest
         if (unlockErr instanceof Error && unlockErr.message.includes("403")) {
-          log("Stale DCA data detected — refreshing page data...", "network");
-          const freshPage = await refreshDcaData(client);
+          log("Stale manifest detected — refreshing page data...", "network");
+          const freshPage = await refreshManifest(client);
           if (freshPage) {
             pageRef.current = freshPage;
             currentPage = freshPage;
-            log("DCA data refreshed, retrying unlock...", "network");
+            log("Manifest refreshed, retrying unlock...", "network");
             keys = await client.unlock(currentPage, issuerName, { accessType });
           } else {
             throw unlockErr;
@@ -333,9 +329,9 @@ export function EncryptedSection({
         }
       }
 
-      const keyMode = keys.contentEncryptionKeys.some((k) => k.contentKey)
+      const keyMode = keys.keys.some((k) => k.contentKey)
         ? "contentKey (direct)"
-        : "periodKeys (cacheable)";
+        : "wrapKeys (cacheable)";
       log(`Unlock successful! Key mode: ${keyMode}`, "success");
 
       if (keys.transport === "client-bound") {
@@ -349,11 +345,10 @@ export function EncryptedSection({
 
       const html = await client.decrypt(currentPage, contentName, keys);
 
-      // Store content key metadata so KeyManager can display it.
       if (accessType === "article") {
         await storeContentKeyRecord(resourceId);
       } else {
-        await storeSubscriptionRecord(keyName);
+        await storeSubscriptionRecord(scope);
       }
 
       setDecryptedContent(html);
@@ -370,7 +365,7 @@ export function EncryptedSection({
 
   // Handle share link generation
   const handleShare = async () => {
-    const keyName = keyNameRef.current;
+    const scope = scopeRef.current;
     setIsSharing(true);
     try {
       log("Generating share link token...", "network");
@@ -379,7 +374,7 @@ export function EncryptedSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           resourceId,
-          keyNames: [keyName],
+          scopes: [scope],
           expiresIn: 7 * 24 * 3600, // 7 days
         }),
       });
@@ -512,14 +507,14 @@ export function EncryptedSection({
               <button onClick={() => handleUnlock("tier")} className="secondary">
                 <span className="button-icon">🔑</span>
                 <span className="button-text">
-                  <strong>Unlock {keyNameRef.current}</strong>
-                  <small>periodKey — cacheable across {keyNameRef.current} articles</small>
+                  <strong>Unlock {scopeRef.current}</strong>
+                  <small>wrapKey — cacheable across {scopeRef.current} articles</small>
                 </span>
               </button>
             </div>
             <p className="hint">
               <strong>Article:</strong> returns a direct contentKey (non-cacheable).<br />
-              <strong>{keyNameRef.current}:</strong> returns periodKeys (cacheable for 1 hour, reusable across {keyNameRef.current} articles).
+              <strong>{scopeRef.current}:</strong> returns wrapKeys (cacheable per rotation, reusable across {scopeRef.current} articles).
             </p>
           </>
         )}
@@ -529,11 +524,11 @@ export function EncryptedSection({
 }
 
 // ---------------------------------------------------------------------------
-// Re-fetch the current page HTML and re-parse DCA data.
+// Re-fetch the current page HTML and re-parse the DCA manifest.
 // Used when the embedded JWTs are stale (e.g., after server key rotation / HMR).
 // ---------------------------------------------------------------------------
 
-async function refreshDcaData(
+async function refreshManifest(
   client: InstanceType<typeof import("@sesamy/capsule").DcaClient>,
 ): Promise<import("@sesamy/capsule").DcaParsedPage | null> {
   try {
@@ -611,7 +606,7 @@ async function storeSubscriptionRecord(contentName: string): Promise<void> {
     const record = {
       type: "subscription" as const,
       baseId: contentName,
-      encryptedContentKey: "(period keys in cache)",
+      encryptedContentKey: "(wrap keys in cache)",
       expiresAt: Date.now() + CONTENT_KEY_TTL_MS,
     };
 
@@ -685,25 +680,25 @@ function openContentKeyDb(): Promise<IDBDatabase> {
 }
 
 // ---------------------------------------------------------------------------
-// IndexedDB-backed period key cache for DcaClient.
+// IndexedDB-backed wrap key cache for DcaClient.
 //
-// Period keys are stored as simple key→value pairs so the DcaClient can
+// WrapKeys are stored as simple key→value pairs so the DcaClient can
 // reuse subscription keys across page navigations without a new unlock call.
 // ---------------------------------------------------------------------------
 
-const PERIOD_KEY_DB_NAME = "capsule-period-keys";
-const PERIOD_KEY_STORE_NAME = "period-keys";
+const WRAP_KEY_DB_NAME = "capsule-wrap-keys";
+const WRAP_KEY_STORE_NAME = "wrap-keys";
 
-function createIdbPeriodKeyCache(): import("@sesamy/capsule").DcaPeriodKeyCache {
+function createIdbWrapKeyCache(): import("@sesamy/capsule").DcaWrapKeyCache {
   let dbPromise: Promise<IDBDatabase> | null = null;
 
   function openDb(): Promise<IDBDatabase> {
     if (!dbPromise) {
       dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open(PERIOD_KEY_DB_NAME, 1);
+        const request = indexedDB.open(WRAP_KEY_DB_NAME, 1);
         request.onerror = () => reject(request.error);
         request.onupgradeneeded = () => {
-          request.result.createObjectStore(PERIOD_KEY_STORE_NAME);
+          request.result.createObjectStore(WRAP_KEY_STORE_NAME);
         };
         request.onsuccess = () => resolve(request.result);
       });
@@ -716,8 +711,8 @@ function createIdbPeriodKeyCache(): import("@sesamy/capsule").DcaPeriodKeyCache 
       try {
         const db = await openDb();
         return new Promise((resolve) => {
-          const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readonly");
-          const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
+          const tx = db.transaction(WRAP_KEY_STORE_NAME, "readonly");
+          const store = tx.objectStore(WRAP_KEY_STORE_NAME);
           const req = store.get(key);
           req.onsuccess = () => resolve((req.result as string) ?? null);
           req.onerror = () => resolve(null);
@@ -730,8 +725,8 @@ function createIdbPeriodKeyCache(): import("@sesamy/capsule").DcaPeriodKeyCache 
       try {
         const db = await openDb();
         await new Promise<void>((resolve, reject) => {
-          const tx = db.transaction(PERIOD_KEY_STORE_NAME, "readwrite");
-          const store = tx.objectStore(PERIOD_KEY_STORE_NAME);
+          const tx = db.transaction(WRAP_KEY_STORE_NAME, "readwrite");
+          const store = tx.objectStore(WRAP_KEY_STORE_NAME);
           store.put(value, key);
           tx.oncomplete = () => resolve();
           tx.onerror = () => reject(tx.error);

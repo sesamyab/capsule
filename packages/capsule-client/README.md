@@ -33,7 +33,7 @@ import { DcaClient } from "@sesamy/capsule";
 
 const client = new DcaClient();
 
-// Parse DCA data from the current page
+// Parse the DCA manifest from the current page
 const page = client.parsePage();
 
 // Unlock via an issuer
@@ -94,14 +94,14 @@ const content = await client.decrypt(page, "bodytext", keys);
 | ------ | ---- | ------- | ----------- |
 | `fetch` | `typeof fetch` | `globalThis.fetch` | Custom fetch function (e.g. for adding auth headers) |
 | `unlockFn` | `(url, body) => Promise<DcaUnlockResponse>` | — | Custom unlock function (replaces fetch-based unlock) |
-| `periodKeyCache` | `DcaPeriodKeyCache` | — | Key-value cache for period key reuse across pages |
+| `wrapKeyCache` | `DcaWrapKeyCache \| false` | IndexedDB-backed | Key-value cache for wrapKey reuse across pages. Pass `false` to disable, or supply a custom cache. |
 | `clientBound` | `boolean` | `false` | Enable client-bound transport (RSA-OAEP key wrapping) |
 | `rsaKeySize` | `2048 \| 4096` | `2048` | RSA key size for client-bound transport |
 | `keyDbName` | `string` | `"dca-keys"` | IndexedDB database name for key pair storage |
 
 ### `client.parsePage(root?)`
 
-Parses DCA data from the DOM. Looks for `<script class="dca-data">` and `<template class="dca-sealed-content">` elements.
+Parses the DCA manifest from the DOM. Looks for a single `<script class="dca-manifest">` element.
 
 ```typescript
 const page = client.parsePage(); // defaults to document
@@ -143,10 +143,10 @@ Calls the unlock endpoint with a share token attached.
 Decrypts a single content item using the keys from `unlock()`.
 
 Handles both delivery modes automatically:
-- **contentKey mode** — decrypts directly with AES-256-GCM
-- **periodKey mode** — unwraps the content key from `sealedContentKeys` first, then decrypts
+- **direct** — decrypts with the returned contentKey
+- **wrapKey** — unwraps the contentKey from `manifest.content[name].wrappedContentKey` first, then decrypts
 
-Also handles client-bound transport (RSA-OAEP unwrapping) and caches period keys when a `periodKeyCache` is configured.
+Also handles client-bound transport (RSA-OAEP unwrapping) and caches wrapKeys when a `wrapKeyCache` is configured (enabled by default).
 
 ### `client.decryptAll(page, unlockResponse)`
 
@@ -159,7 +159,7 @@ const all = await client.decryptAll(page, keys);
 
 ### `client.processPage(options?)`
 
-Convenience method: parse → unlock → decryptAll in one call. Auto-detects the issuer (first key in `issuerData`) and share token (from `?share=` URL parameter).
+Convenience method: parse → unlock → decryptAll in one call. Auto-detects the issuer (first key in `manifest.issuers`) and share token (from `?share=` URL parameter).
 
 ```typescript
 const content = await client.processPage();
@@ -185,7 +185,7 @@ const rendered = client.renderToPage(content);
 
 ### `DcaClient.hasDcaContent(root?)`
 
-Static method. Returns `true` if the page contains a `<script class="dca-data">` element. Also available as a standalone import:
+Static method. Returns `true` if the page contains a `<script class="dca-manifest">` element. Also available as a standalone import:
 
 ```typescript
 import { hasDcaContent } from "@sesamy/capsule";
@@ -212,20 +212,26 @@ Returns the client's RSA-OAEP public key as base64url-encoded SPKI. Generates an
 
 Checks if an RSA key pair already exists in IndexedDB.
 
-## Period Key Cache
+## Wrap Key Cache
 
-When the issuer returns period keys (instead of content keys), you can cache them for cross-page key reuse:
+When the issuer returns wrapKeys (instead of direct contentKeys), the client caches them so the next page navigation can decrypt without another unlock call. An IndexedDB-backed cache is enabled by default.
 
 ```typescript
-const cache: DcaPeriodKeyCache = {
+// Default: IndexedDB cache, no configuration needed
+const client = new DcaClient();
+
+// Custom cache (e.g. sessionStorage)
+const cache: DcaWrapKeyCache = {
   async get(key) { return sessionStorage.getItem(key); },
   async set(key, value) { sessionStorage.setItem(key, value); },
 };
+const client = new DcaClient({ wrapKeyCache: cache });
 
-const client = new DcaClient({ periodKeyCache: cache });
+// Disable caching
+const client = new DcaClient({ wrapKeyCache: false });
 ```
 
-Cache keys use the format `dca:pk:{keyName}:{timeBucket}`.
+Cache keys use the format `dca:wk:{scope}:{kid}` — scoped by `scope` and rotation version (`kid`), so wrapKeys from one unlock are reusable across every article in the same scope and rotation.
 
 ## Client-Bound Transport
 
@@ -240,7 +246,7 @@ const client = new DcaClient({
 
 ## Request Format
 
-The unlock request sends `resourceJWT` and `contentEncryptionKeys`. Each entry carries a `keyName` field that is AAD-bound — the issuer uses it directly for access tier resolution.
+The unlock request sends `resourceJWT` and `keys` (copied verbatim from `manifest.issuers[issuerName].keys`). Each entry carries a `scope` field that is AAD-bound — the issuer uses it directly for access scope resolution.
 
 ## Types
 
@@ -248,8 +254,8 @@ The unlock request sends `resourceJWT` and `contentEncryptionKeys`. Each entry c
 import type {
   DcaClientOptions,
   DcaParsedPage,
-  DcaPeriodKeyCache,
-  DcaData,
+  DcaWrapKeyCache,
+  DcaManifest,
   DcaUnlockResponse,
   DcaProcessPageOptions,
 } from "@sesamy/capsule";

@@ -2,10 +2,10 @@
  * Capsule Client — DCA (Delegated Content Access) browser client.
  *
  * Provides client-side DCA content decryption:
- * - Parse DCA data from the DOM or JSON API responses
+ * - Parse the DCA manifest from the DOM or JSON API responses
  * - Call issuer unlock endpoints to obtain keys
  * - AES-256-GCM content decryption with AAD support
- * - Period key caching for cross-page key reuse
+ * - WrapKey caching for cross-page key reuse
  * - Optional client-bound transport (RSA-OAEP key wrapping)
  *
  * @example
@@ -14,7 +14,7 @@
  *
  * const client = new DcaClient();
  *
- * // Parse DCA data from the current page
+ * // Parse the manifest from the current page
  * const page = client.parsePage();
  *
  * // Unlock via an issuer
@@ -35,8 +35,8 @@ export {
   type DcaAccessResult,
   type DcaClientOptions,
   type DcaParsedPage,
-  type DcaPeriodKeyCache,
-  type DcaData,
+  type DcaWrapKeyCache,
+  type DcaManifest,
   type DcaUnlockResponse,
   type DcaProcessPageOptions,
 } from "./dca-client";

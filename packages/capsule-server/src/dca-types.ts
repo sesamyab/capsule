@@ -6,24 +6,22 @@
  */
 
 // ============================================================================
-// dca-data JSON structure (goes in <script class="dca-data">)
+// dca-manifest JSON structure (goes in <script class="dca-manifest">)
 // ============================================================================
 
 /**
- * Top-level DCA data structure.
- * One per page — embedded in `<script type="application/json" class="dca-data">`.
+ * Top-level DCA manifest.
+ * One per page — embedded in `<script type="application/json" class="dca-manifest">`.
  */
-export interface DcaData {
+export interface DcaManifest {
     /** Format version */
-    version: "2";
+    version: "0.10";
     /** ES256 JWT signing the resource — authoritative for access decisions */
     resourceJWT: string;
-    /** Per content item: MIME type, nonce, and AAD for decryption */
-    contentSealData: Record<string, DcaContentSealData>;
-    /** Per content item: array of contentKeys sealed with periodKeys */
-    sealedContentKeys: Record<string, DcaSealedContentKey[]>;
-    /** Per issuer: sealed keys, unlock URL, and key ID */
-    issuerData: Record<string, DcaIssuerEntry>;
+    /** Per content item: MIME type, IV, AAD, ciphertext, and wrapped content key(s) */
+    content: Record<string, DcaContentEntry>;
+    /** Per issuer: wrapped-for-issuer key material + unlock URL */
+    issuers: Record<string, DcaIssuerEntry>;
 }
 
 /**
@@ -32,7 +30,7 @@ export interface DcaData {
  * claim names — see {@link DcaResourceJwtPayload}.
  */
 export interface DcaResource {
-    /** Random base64url string (min 8 bytes), used as seal AAD to bind blobs to this render */
+    /** Random base64url string (min 8 bytes), unique per render */
     renderId: string;
     /** Publisher domain (issuer uses for signing key lookup) */
     domain: string;
@@ -41,10 +39,10 @@ export interface DcaResource {
     /** Publisher's article/resource identifier */
     resourceId: string;
     /**
-     * Required entitlement key domains for this resource.
-     * Declares what keyNames (tiers/roles) are needed to unlock the content.
+     * Required access scopes for this resource.
+     * Declares which scopes (tiers/roles) are needed to unlock the content.
      */
-    keyNames: string[];
+    scopes: string[];
     /** Publisher-defined metadata for access decisions */
     data: Record<string, unknown>;
 }
@@ -57,6 +55,7 @@ export interface DcaResource {
  *   - `resourceId` → `sub` (JWT Subject — the resource being accessed)
  *   - `issuedAt`   → `iat` (JWT Issued At — Unix timestamp in seconds)
  *   - `renderId`   → `jti` (JWT ID — unique per-render token identifier)
+ *   - `scopes`     → `scopes` (custom claim — required access scopes)
  *   - `data`       → `data` (custom claim — publisher-defined metadata)
  */
 export interface DcaResourceJwtPayload {
@@ -69,127 +68,149 @@ export interface DcaResourceJwtPayload {
     /** Render ID (maps to DcaResource.renderId) */
     jti: string;
     /**
-     * Required entitlement key domains for this resource.
-     * Declares what keyNames (tiers/roles) are needed to unlock the content.
+     * Required access scopes for this resource.
+     * Declares which scopes (tiers/roles) are needed to unlock the content.
      * The issuer can compare against the user's entitlements without a
      * separate server-side lookup.
      */
-    keyNames?: string[];
+    scopes?: string[];
     /** Publisher-defined metadata for access decisions */
     data: Record<string, unknown>;
 }
 
 /**
- * Per-content-item decryption parameters.
+ * Per-content-item entry in the manifest.
+ *
+ * Contains everything needed to decrypt one content item:
+ *   - AEAD parameters for the body (iv, aad, contentType)
+ *   - The encrypted body (ciphertext)
+ *   - The contentKey wrapped under the rotation-versioned wrapKey (wrappedContentKey)
  */
-export interface DcaContentSealData {
+export interface DcaContentEntry {
     /** MIME type of the content (e.g., "text/html", "application/json") */
     contentType: string;
     /** base64url-encoded 12-byte AES-GCM IV for content decryption */
-    nonce: string;
+    iv: string;
     /** Opaque AAD string — pass as-is to AES-GCM via TextEncoder.encode() */
     aad: string;
+    /** base64url-encoded AES-GCM ciphertext (content body + auth tag) */
+    ciphertext: string;
+    /**
+     * The contentKey wrapped under one or more wrapKeys (typically current +
+     * next rotation). Each entry is keyed by `kid` so the client can match
+     * whichever wrapKey the issuer returns.
+     */
+    wrappedContentKey: DcaWrappedContentKeyEntry[];
 }
 
 /**
- * A contentKey sealed (wrapped) with a periodKey.
+ * A contentKey wrapped under a wrapKey (AES-256-GCM symmetric wrap).
  */
-export interface DcaSealedContentKey {
-    /** Period bucket label (e.g., "251023T13"). Bookkeeping — not validated. */
-    t: string;
-    /** base64url-encoded 12-byte nonce for unwrapping */
-    nonce: string;
-    /** base64url-encoded wrapped contentKey (AES-GCM ciphertext + tag, 48 bytes → 64 chars) */
-    key: string;
+export interface DcaWrappedContentKeyEntry {
+    /** Key identifier — rotation version (e.g., "251023T13"). Bookkeeping only. */
+    kid: string;
+    /** base64url-encoded 12-byte IV for unwrapping */
+    iv: string;
+    /** base64url-encoded wrapped contentKey (AES-GCM ciphertext + tag) */
+    ciphertext: string;
 }
 
 /**
- * Per-issuer entry in `issuerData`.
+ * Per-issuer entry in `issuers`.
  */
 export interface DcaIssuerEntry {
-    /** Sealed content keys for this issuer (wire format — both contentKey and periodKeys present) */
-    contentEncryptionKeys: DcaSealedContentEncryptionKey[];
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
     /** Identifies which issuer private key to use */
     keyId: string;
+    /**
+     * Wrapped-for-issuer key material (one entry per content item).
+     * The contentKey and each wrapKey are encrypted to the issuer's public
+     * key (ECDH-P256 or RSA-OAEP). Only the issuer can unwrap them.
+     */
+    keys: DcaIssuerKey[];
 }
 
 /**
- * Sealed encryption key material for one content item (wire format).
+ * Per-content-item key material wrapped for one issuer.
  *
- * Used in `issuerData` and unlock requests — the publisher seals both the
- * contentKey and its periodKeys with the issuer's public key. The issuer must
- * unseal the keys before returning them to the client.
+ * Both the contentKey (per-item, unique) and the wrapKeys (per-scope,
+ * per-rotation — shared across items sharing a scope) are included, letting
+ * the issuer choose `deliveryMode: "direct" | "wrapKey"` at unlock time.
  */
-export interface DcaSealedContentEncryptionKey {
+export interface DcaIssuerKey {
     /** Content item name. Defaults to "default" when omitted. */
     contentName?: string;
     /**
-     * Access tier for this entry. Sealed blobs are AAD-bound to this value —
-     * tampering with keyName causes unseal failure.
+     * Access scope for this entry. Wrapped values are AAD-bound to this
+     * scope — tampering with the scope causes unwrap to fail.
      */
-    keyName: string;
-    /** base64url-encoded sealed contentKey */
+    scope: string;
+    /** base64url-encoded contentKey wrapped for the issuer's public key */
     contentKey: string;
-    /** Sealed period keys for time-bucketed access (default: 1-hour buckets) */
-    periodKeys: DcaSealedPeriodKeyEntry[];
+    /** WrapKeys (per rotation) wrapped for the issuer's public key.
+     *  Omitted in name-granular mode (contentNames) to prevent scope-level key leakage. */
+    wrapKeys?: DcaWrappedIssuerWrapKey[];
 }
 
 /**
- * Unsealed contentKey delivery — issuer returns the contentKey directly.
+ * A wrapKey wrapped for one issuer's public key.
  */
-export interface DcaContentKeyDelivery {
+export interface DcaWrappedIssuerWrapKey {
+    /** Key identifier — rotation version (e.g., "251023T13") */
+    kid: string;
+    /** base64url-encoded wrapKey wrapped for the issuer */
+    key: string;
+}
+
+// ============================================================================
+// Unlock response types
+// ============================================================================
+
+/**
+ * Direct-key delivery — issuer returns the contentKey for immediate
+ * decryption. No client-side caching is possible in this mode.
+ */
+export interface DcaDirectKey {
     /** Content item name. Defaults to "default" when omitted. */
     contentName?: string;
-    /** Access tier for this entry (echoed from the sealed entry). */
-    keyName?: string;
-    /** base64url-encoded contentKey */
+    /** Access scope (echoed from the request). */
+    scope?: string;
+    /** base64url-encoded contentKey (plaintext or wrapped for client) */
     contentKey: string;
-    periodKeys?: never;
+    wrapKeys?: never;
 }
 
 /**
- * Unsealed periodKeys delivery — issuer returns period keys for client-side caching.
+ * WrapKey delivery — issuer returns wrapKeys so the client can unwrap
+ * contentKeys locally and cache wrapKeys for cross-item / cross-page reuse.
  */
-export interface DcaPeriodKeyDelivery {
+export interface DcaWrapKeyDelivery {
     /** Content item name. Defaults to "default" when omitted. */
     contentName?: string;
-    /** Access tier for this entry (echoed from the sealed entry). */
-    keyName?: string;
-    /** Period keys for time-bucketed access */
-    periodKeys: DcaPeriodKeyEntry[];
+    /** Access scope (echoed from the request). */
+    scope?: string;
+    /** One entry per rotation version */
+    wrapKeys: DcaUnlockedWrapKey[];
     contentKey?: never;
 }
 
 /**
- * Encryption key material in an unlock response.
+ * Key material in an unlock response.
  *
- * The issuer returns either a direct contentKey or period keys (never both):
- *   - `DcaContentKeyDelivery`: direct contentKey for immediate decryption
- *   - `DcaPeriodKeyDelivery`: period keys for cacheable time-bucketed access
+ * Issuer returns exactly one of:
+ *   - {@link DcaDirectKey}: raw contentKey (no caching)
+ *   - {@link DcaWrapKeyDelivery}: wrapKeys (cacheable, cross-item reuse)
  */
-export type DcaContentEncryptionKey = DcaContentKeyDelivery | DcaPeriodKeyDelivery;
+export type DcaUnlockedKey = DcaDirectKey | DcaWrapKeyDelivery;
 
 /**
- * A sealed period key entry — the key is ciphertext produced by the publisher
- * using the issuer's public key. Only the issuer can unseal it.
+ * An unwrapped (or client-wrapped) wrapKey entry in an unlock response.
  */
-export interface DcaSealedPeriodKeyEntry {
-    /** Period bucket label (e.g., "251023T13") */
-    bucket: string;
-    /** base64url-encoded sealed (encrypted) period key */
-    sealedKey: string;
-}
-
-/**
- * An unsealed period key entry — contains the raw (or client-bound re-encrypted)
- * period key returned by the issuer to the client.
- */
-export interface DcaPeriodKeyEntry {
-    /** Period bucket label (e.g., "251023T13") */
-    bucket: string;
-    /** base64url-encoded period key (plaintext or client-bound encrypted) */
+export interface DcaUnlockedWrapKey {
+    /** Key identifier — rotation version (e.g., "251023T13") */
+    kid: string;
+    /** base64url-encoded wrapKey (plaintext or client-wrapped) */
     key: string;
 }
 
@@ -198,23 +219,22 @@ export interface DcaPeriodKeyEntry {
 // ============================================================================
 
 /**
- * JSON API response — combines dca-data and sealed content in one object.
- * For headless CMS, mobile apps, SPAs.
+ * JSON API response — the manifest is already self-contained (ciphertext
+ * lives inside `content.{name}.ciphertext`), so this is just `DcaManifest`.
+ * Kept as an explicit alias for the JSON-oriented flow.
  */
-export interface DcaJsonApiResponse extends DcaData {
-    /** Map of contentName → base64url ciphertext */
-    sealedContent: Record<string, string>;
-}
+export type DcaJsonApiResponse = DcaManifest;
 
 // ============================================================================
-// sealed content in HTML
+// HTML embedding
 // ============================================================================
 
 /**
- * Sealed content is placed in:
- *   <template class="dca-sealed-content">
- *     <div data-dca-content-name="bodytext">base64url_ciphertext...</div>
- *   </template>
+ * The manifest is embedded inside:
+ *   <script type="application/json" class="dca-manifest">…</script>
+ *
+ * Target elements for decrypted content use `data-dca-content-name`:
+ *   <div data-dca-content-name="bodytext"></div>
  */
 
 // ============================================================================
@@ -229,10 +249,15 @@ export interface DcaPublisherConfig {
     domain: string;
     /** ES256 (ECDSA P-256) private key PEM — for signing resourceJWT */
     signingKeyPem: string;
-    /** Period secret for periodKey derivation (base64 string or raw bytes) */
-    periodSecret: Uint8Array | string;
-    /** Period duration in hours (default: 1). Determines the time bucket granularity */
-    periodDurationHours?: number;
+    /** Rotation secret for wrapKey derivation (base64 string or raw bytes) */
+    rotationSecret: Uint8Array | string;
+    /**
+     * Rotation interval in hours (default: 1). Determines the granularity
+     * of the kid (key id / rotation version). Rotation is purely an
+     * identifier for wrapKey derivation — it is not tied to client caching
+     * cadence beyond "how often a new wrapKey is minted".
+     */
+    rotationIntervalHours?: number;
 }
 
 /**
@@ -242,15 +267,15 @@ export interface DcaContentItem {
     /** Publisher-defined name, e.g., "bodytext". ASCII: [a-zA-Z][a-zA-Z0-9-]* */
     contentName: string;
     /**
-     * Key domain for periodKey derivation (HKDF salt).
+     * Access scope for wrapKey derivation (HKDF salt).
      * Defaults to `contentName` when omitted.
      *
-     * Content items sharing a keyName share the same periodKey, enabling:
-     *   - Role-based access: keyName "premium" covers multiple content items
-     *   - Efficient caching: one cached periodKey unlocks all items in the domain
-     *   - Clean separation: contentName identifies the item, keyName controls access
+     * Content items sharing a scope share the same wrapKey, enabling:
+     *   - Role-based access: scope "premium" covers multiple content items
+     *   - Efficient caching: one cached wrapKey unlocks all items in the scope
+     *   - Clean separation: contentName identifies the item, scope controls access
      */
-    keyName?: string;
+    scope?: string;
     /** Plaintext content to encrypt */
     content: string;
     /** MIME type (default: "text/html") */
@@ -271,17 +296,17 @@ export interface DcaIssuerConfig {
     keyId: string;
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
-    /** Which content items this issuer gets sealed keys for (by contentName) */
+    /** Which content items this issuer gets wrapped keys for (by contentName) */
     contentNames?: string[];
     /**
-     * Which key domains this issuer gets sealed keys for.
-     * All content items whose effective keyName is in this list are sealed
+     * Which scopes this issuer gets wrapped keys for.
+     * All content items whose effective scope is in this list are wrapped
      * for this issuer. Alternative to `contentNames` for role-based access.
      *
-     * When both `contentNames` and `keyNames` are provided, `keyNames` takes
+     * When both `contentNames` and `scopes` are provided, `scopes` takes
      * precedence.
      */
-    keyNames?: string[];
+    scopes?: string[];
 }
 
 /**
@@ -292,7 +317,7 @@ export interface DcaRenderOptions {
     resourceId: string;
     /** Content items to encrypt */
     contentItems: DcaContentItem[];
-    /** Issuers to seal keys for */
+    /** Issuers to wrap keys for */
     issuers: DcaIssuerConfig[];
     /** Publisher-defined metadata for access decisions (goes in resource.data) */
     resourceData?: Record<string, unknown>;
@@ -302,18 +327,14 @@ export interface DcaRenderOptions {
  * Result of a render operation.
  */
 export interface DcaRenderResult {
-    /** The complete dca-data JSON object */
-    dcaData: DcaData;
-    /** Sealed content: contentName → base64url ciphertext */
-    sealedContent: Record<string, string>;
-    /** Pre-built HTML strings for embedding */
+    /** The complete manifest */
+    manifest: DcaManifest;
+    /** Pre-built HTML string for embedding the manifest */
     html: {
-        /** `<script type="application/json" class="dca-data">...</script>` */
-        dcaDataScript: string;
-        /** `<template class="dca-sealed-content">...</template>` */
-        sealedContentTemplate: string;
+        /** `<script type="application/json" class="dca-manifest">…</script>` */
+        manifestScript: string;
     };
-    /** JSON API variant (dca-data + sealedContent combined) */
+    /** JSON API variant (same as {@link manifest}) */
     json: DcaJsonApiResponse;
 }
 
@@ -349,7 +370,7 @@ export interface DcaTrustedPublisher {
 export interface DcaIssuerServerConfig {
     /** This issuer's canonical name */
     issuerName: string;
-    /** Private key PEM (ECDH P-256 or RSA-OAEP) for unsealing */
+    /** Private key PEM (ECDH P-256 or RSA-OAEP) for unwrapping */
     privateKeyPem: string;
     /** Key ID that matches the publisher's keyId for this issuer */
     keyId: string;
@@ -368,9 +389,7 @@ export interface DcaIssuerServerConfig {
      * @example
      * ```ts
      * trustedPublisherKeys: {
-     *   // Simple: any resourceId from this domain is accepted
      *   "news.example.com": process.env.NEWS_ES256_PUB!,
-     *   // Extended: only specific resourceIds are allowed
      *   "blog.example.com": {
      *     signingKeyPem: process.env.BLOG_ES256_PUB!,
      *     allowedResourceIds: ["article-1", /^premium-/],
@@ -384,20 +403,20 @@ export interface DcaIssuerServerConfig {
 /**
  * Unlock request — what the client sends to the issuer.
  *
- * Contains `resourceJWT` + `contentEncryptionKeys` (sealed key material for one issuer).
- * Sealed blobs are AAD-bound to the keyName on each entry,
- * preventing cross-resource key substitution.
+ * Carries `resourceJWT` + `keys` (wrapped-for-issuer key material for one
+ * issuer's `keys` array from the manifest). Wrapped values are AAD-bound to
+ * their scope, preventing cross-scope key substitution.
  */
 export interface DcaUnlockRequest {
     /**
      * Signed resource JWT (publisher-signed, ES256).
      * Optional — the issuer no longer needs it for AAD reconstruction
-     * (AAD is bound to keyName on each entry). Issuers that want publisher
+     * (AAD is bound to scope on each entry). Issuers that want publisher
      * trust verification can still require it.
      */
     resourceJWT?: string;
-    /** This issuer's sealed content keys (wire format — both contentKey and periodKeys present) */
-    contentEncryptionKeys: DcaSealedContentEncryptionKey[];
+    /** Wrapped-for-issuer keys (copied verbatim from manifest `issuers.{name}.keys`) */
+    keys: DcaIssuerKey[];
     /**
      * Client's RSA-OAEP public key (base64url-encoded SPKI).
      * When present, the issuer wraps returned keys with this key
@@ -415,11 +434,11 @@ export interface DcaUnlockRequest {
 
 /**
  * Unlock response — what the issuer returns to the client.
- * Contains either contentKeys or periodKeys (issuer's choice per request).
+ * Contains either direct contentKeys or wrapKeys (issuer's choice per request).
  */
 export interface DcaUnlockResponse {
-    /** Key material for granted content items */
-    contentEncryptionKeys: DcaContentEncryptionKey[];
+    /** Unwrapped key material for granted content items */
+    keys: DcaUnlockedKey[];
     /**
      * Transport mode used for key delivery:
      *   - "direct": keys are plaintext base64url strings (default)
@@ -436,17 +455,17 @@ export interface DcaUnlockResponse {
  * Share Link Token payload — a publisher-signed JWT that grants
  * pre-authenticated access to specific content.
  *
- * DCA-compatible: the periodSecret never leaves the publisher.
+ * DCA-compatible: the rotationSecret never leaves the publisher.
  * The token is purely an authorization grant — key material flows
- * through the normal DCA seal/unseal channel.
+ * through the normal DCA wrap/unwrap channel.
  *
  * Flow:
  *   1. Publisher creates a share link token (ES256 JWT) granting access
- *   2. User clicks the share link, loads the page with DCA-sealed content
+ *   2. User clicks the share link, loads the page with DCA-wrapped content
  *   3. Client includes the share link token in the unlock request
  *   4. Issuer verifies the token signature (publisher-signed, trusted)
  *   5. Issuer grants access based on the token's claims (no subscription check)
- *   6. Issuer unseals keys from the normal DCA sealed data and returns them
+ *   6. Issuer unwraps keys from the normal DCA wrapped data and returns them
  */
 export interface DcaShareLinkTokenPayload {
     /** Token type discriminator */
@@ -458,12 +477,12 @@ export interface DcaShareLinkTokenPayload {
     /** Content items this token grants access to (by contentName) */
     contentNames: string[];
     /**
-     * Key domains this token grants access to (keyName-based).
-     * When present, the issuer resolves keyNames → contentNames
-     * using the keyName field on each contentEncryptionKeys entry.
-     * Takes precedence over `contentNames` when present.
+     * Scopes this token grants access to.
+     * When present, the issuer resolves scopes → contentNames
+     * using the `scope` field on each key entry.
+     * Mutually exclusive with `contentNames` — tokens that set both are rejected.
      */
-    keyNames?: string[];
+    scopes?: string[];
     /** Token issued-at (Unix timestamp, seconds) */
     iat: number;
     /** Token expiry (Unix timestamp, seconds) */
@@ -485,11 +504,11 @@ export interface DcaShareLinkOptions {
     /** Content items to grant access to (by contentName) */
     contentNames?: string[];
     /**
-     * Key domains to grant access to (keyName-based).
+     * Scopes to grant access to.
      * When present, the token grants access to all content items
-     * whose keyName is in this list.
+     * whose scope is in this list.
      */
-    keyNames?: string[];
+    scopes?: string[];
     /** Token lifetime in seconds (default: 7 days = 604800) */
     expiresIn?: number;
     /** Maximum number of uses (optional, advisory) */

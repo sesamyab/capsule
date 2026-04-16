@@ -1,8 +1,9 @@
 /**
- * DCA Seal — ECDH P-256 and RSA-OAEP key sealing / unsealing.
+ * DCA Wrap — ECDH P-256 and RSA-OAEP key wrapping for issuer delivery.
  *
- * Sealing wraps key material (contentKey or periodKey) so only the issuer
- * holding the matching private key can unseal it.
+ * Wraps key material (contentKey or wrapKey) so only the issuer holding the
+ * matching private key can unwrap it. This is WebCrypto-style key wrapping
+ * (the wrapping key is a public key), analogous to HPKE's Seal/Open.
  *
  * ECDH P-256 blob format (self-contained, no length prefixes):
  *   | Offset | Length    | Field                                    |
@@ -42,104 +43,90 @@ const ECDH_PUB_LEN = 65;
 const IV_LEN = 12;
 /** AES-GCM authentication tag length */
 const GCM_TAG_LEN = 16;
-/** Minimum sealed blob size: ephemeralPub + IV + GCM tag (zero-length plaintext) */
+/** Minimum wrapped blob size: ephemeralPub + IV + GCM tag (zero-length plaintext) */
 const MIN_ECDH_BLOB_LEN = ECDH_PUB_LEN + IV_LEN + GCM_TAG_LEN;
 
 // ============================================================================
-// ECDH P-256 sealing
+// ECDH P-256 wrap
 // ============================================================================
 
-/** HKDF salt for ECDH seal key derivation (domain separation) */
-const SEAL_HKDF_SALT = "dca-seal";
-/** HKDF info for ECDH seal key derivation */
-const SEAL_HKDF_INFO = "dca-seal-aes256gcm";
+/** HKDF salt for ECDH wrap key derivation (domain separation) */
+const WRAP_HKDF_SALT = "dca-wrap";
+/** HKDF info for ECDH wrap key derivation */
+const WRAP_HKDF_INFO = "dca-wrap-aes256gcm";
 
 /**
- * Seal (encrypt) key material with an issuer's ECDH P-256 public key.
+ * Wrap (encrypt) key material with an issuer's ECDH P-256 public key.
  *
- * For each seal, a fresh ephemeral keypair is generated. The raw ECDH
+ * For each wrap, a fresh ephemeral keypair is generated. The raw ECDH
  * shared secret is run through HKDF-SHA256 to derive the AES-256-GCM key
  * (NIST SP 800-56C compliant).
  *
- * @param plaintext - Key material to seal (e.g., a 32-byte AES key)
+ * @param plaintext - Key material to wrap (e.g., a 32-byte AES key)
  * @param issuerPublicKey - Issuer's ECDH P-256 public key (CryptoKey)
- * @returns Self-contained sealed blob (base64url-encoded)
+ * @returns Self-contained wrapped blob (base64url-encoded)
  */
-export async function sealEcdhP256(
+export async function wrapEcdhP256(
     plaintext: Uint8Array,
     issuerPublicKey: WebCryptoKey,
     aad?: Uint8Array,
 ): Promise<string> {
-    // Generate fresh ephemeral keypair
     const ephemeral = await generateEcdhP256KeyPair();
 
-    // ECDH shared secret → HKDF → AES-256-GCM key
     const sharedSecret = await ecdhDeriveBits(ephemeral.privateKey, issuerPublicKey);
-    const derivedKey = await hkdf(sharedSecret, SEAL_HKDF_SALT, SEAL_HKDF_INFO, 32);
+    const derivedKey = await hkdf(sharedSecret, WRAP_HKDF_SALT, WRAP_HKDF_INFO, 32);
     const aesKey = await importAesKey(derivedKey, ["encrypt"]);
 
-    // Encrypt key material
     const iv = generateIv();
     const { encryptedContent } = await aesGcmEncrypt(plaintext, aesKey, iv, aad);
 
-    // Export ephemeral public key as raw 65 bytes
     const ephemeralPubRaw = await exportEcdhP256PublicKeyRaw(ephemeral.publicKey);
 
-    // Assemble blob: ephemeralPub(65) || IV(12) || ciphertext+tag
     const blob = concatBytes(ephemeralPubRaw, iv, encryptedContent);
     return toBase64Url(blob);
 }
 
 /**
- * Unseal (decrypt) an ECDH P-256 sealed blob with the issuer's private key.
+ * Unwrap (decrypt) an ECDH P-256 wrapped blob with the issuer's private key.
  *
- * @param sealedBlob - base64url-encoded sealed blob
+ * @param wrappedBlob - base64url-encoded wrapped blob
  * @param issuerPrivateKey - Issuer's ECDH P-256 private key (CryptoKey)
  * @returns Decrypted key material
  */
-export async function unsealEcdhP256(
-    sealedBlob: string,
+export async function unwrapEcdhP256(
+    wrappedBlob: string,
     issuerPrivateKey: WebCryptoKey,
     aad?: Uint8Array,
 ): Promise<Uint8Array> {
-    const blob = fromBase64Url(sealedBlob);
+    const blob = fromBase64Url(wrappedBlob);
 
-    // Validate blob length before parsing fixed-offset fields
     if (blob.length < MIN_ECDH_BLOB_LEN) {
         throw new Error(
-            `Invalid ECDH-P256 sealed blob: expected at least ${MIN_ECDH_BLOB_LEN} bytes, got ${blob.length}`,
+            `Invalid ECDH-P256 wrapped blob: expected at least ${MIN_ECDH_BLOB_LEN} bytes, got ${blob.length}`,
         );
     }
 
-    // Parse blob
     const ephemeralPubRaw = blob.slice(0, ECDH_PUB_LEN);
     const iv = blob.slice(ECDH_PUB_LEN, ECDH_PUB_LEN + IV_LEN);
     const ciphertext = blob.slice(ECDH_PUB_LEN + IV_LEN);
 
-    // Import ephemeral public key
     const ephemeralPubKey = await importEcdhP256PublicKeyRaw(ephemeralPubRaw);
 
-    // ECDH shared secret → HKDF → AES-256-GCM key
     const sharedSecret = await ecdhDeriveBits(issuerPrivateKey, ephemeralPubKey);
-    const derivedKey = await hkdf(sharedSecret, SEAL_HKDF_SALT, SEAL_HKDF_INFO, 32);
+    const derivedKey = await hkdf(sharedSecret, WRAP_HKDF_SALT, WRAP_HKDF_INFO, 32);
     const aesKey = await importAesKey(derivedKey, ["decrypt"]);
 
-    // Decrypt
     return aesGcmDecrypt(ciphertext, aesKey, iv, aad);
 }
 
 // ============================================================================
-// RSA-OAEP sealing
+// RSA-OAEP wrap
 // ============================================================================
 
 /**
- * Seal key material with an issuer's RSA-OAEP public key.
- *
- * @param plaintext - Key material to seal
- * @param issuerPublicKey - Issuer's RSA-OAEP public key (CryptoKey)
- * @returns base64url-encoded RSA-OAEP ciphertext
+ * Wrap key material with an issuer's RSA-OAEP public key.
  */
-export async function sealRsaOaep(
+export async function wrapRsaOaep(
     plaintext: Uint8Array,
     issuerPublicKey: WebCryptoKey,
     aad?: Uint8Array,
@@ -149,18 +136,14 @@ export async function sealRsaOaep(
 }
 
 /**
- * Unseal RSA-OAEP sealed key material with the issuer's private key.
- *
- * @param sealedBlob - base64url-encoded RSA-OAEP ciphertext
- * @param issuerPrivateKey - Issuer's RSA-OAEP private key (CryptoKey)
- * @returns Decrypted key material
+ * Unwrap RSA-OAEP wrapped key material with the issuer's private key.
  */
-export async function unsealRsaOaep(
-    sealedBlob: string,
+export async function unwrapRsaOaep(
+    wrappedBlob: string,
     issuerPrivateKey: WebCryptoKey,
     aad?: Uint8Array,
 ): Promise<Uint8Array> {
-    const ciphertext = fromBase64Url(sealedBlob);
+    const ciphertext = fromBase64Url(wrappedBlob);
     return rsaOaepDecrypt(issuerPrivateKey, ciphertext, aad);
 }
 
@@ -168,36 +151,36 @@ export async function unsealRsaOaep(
 // Unified interface
 // ============================================================================
 
-export type DcaSealAlgorithm = "ECDH-P256" | "RSA-OAEP";
+export type DcaWrapAlgorithm = "ECDH-P256" | "RSA-OAEP";
 
 /**
- * Seal key material with an issuer's public key (auto-dispatches by algorithm).
+ * Wrap key material with an issuer's public key (auto-dispatches by algorithm).
  */
-export async function seal(
+export async function wrap(
     plaintext: Uint8Array,
     issuerPublicKey: WebCryptoKey,
-    algorithm: DcaSealAlgorithm,
+    algorithm: DcaWrapAlgorithm,
     aad?: Uint8Array,
 ): Promise<string> {
     if (algorithm === "ECDH-P256") {
-        return sealEcdhP256(plaintext, issuerPublicKey, aad);
+        return wrapEcdhP256(plaintext, issuerPublicKey, aad);
     }
-    return sealRsaOaep(plaintext, issuerPublicKey, aad);
+    return wrapRsaOaep(plaintext, issuerPublicKey, aad);
 }
 
 /**
- * Unseal key material with an issuer's private key (auto-dispatches by algorithm).
+ * Unwrap key material with an issuer's private key (auto-dispatches by algorithm).
  */
-export async function unseal(
-    sealedBlob: string,
+export async function unwrap(
+    wrappedBlob: string,
     issuerPrivateKey: WebCryptoKey,
-    algorithm: DcaSealAlgorithm,
+    algorithm: DcaWrapAlgorithm,
     aad?: Uint8Array,
 ): Promise<Uint8Array> {
     if (algorithm === "ECDH-P256") {
-        return unsealEcdhP256(sealedBlob, issuerPrivateKey, aad);
+        return unwrapEcdhP256(wrappedBlob, issuerPrivateKey, aad);
     }
-    return unsealRsaOaep(sealedBlob, issuerPrivateKey, aad);
+    return unwrapRsaOaep(wrappedBlob, issuerPrivateKey, aad);
 }
 
 /**
@@ -207,9 +190,8 @@ export async function unseal(
  */
 export async function importIssuerPublicKey(
     pem: string,
-    algorithmHint?: DcaSealAlgorithm,
-): Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }> {
-    // If hint provided, use it
+    algorithmHint?: DcaWrapAlgorithm,
+): Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }> {
     if (algorithmHint === "RSA-OAEP") {
         const key = await importRsaPublicKey(pem);
         return { key, algorithm: "RSA-OAEP" };
@@ -219,8 +201,6 @@ export async function importIssuerPublicKey(
         return { key, algorithm: "ECDH-P256" };
     }
 
-    // Auto-detect: RSA keys have "RSA" in the DER or are much larger
-    // Try ECDH first (smaller, more likely for DCA), fall back to RSA
     try {
         const key = await importEcdhP256PublicKey(pem);
         return { key, algorithm: "ECDH-P256" };
@@ -235,8 +215,8 @@ export async function importIssuerPublicKey(
  */
 export async function importIssuerPrivateKey(
     pem: string,
-    algorithmHint?: DcaSealAlgorithm,
-): Promise<{ key: WebCryptoKey; algorithm: DcaSealAlgorithm }> {
+    algorithmHint?: DcaWrapAlgorithm,
+): Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }> {
     if (algorithmHint === "RSA-OAEP") {
         const key = await importRsaPrivateKey(pem);
         return { key, algorithm: "RSA-OAEP" };

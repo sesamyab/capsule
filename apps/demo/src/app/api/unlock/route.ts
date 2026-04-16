@@ -6,7 +6,7 @@ import { articles } from "@/lib/articles";
 /**
  * POST /api/unlock
  *
- * DCA unlock endpoint. Requires resourceJWT and contentEncryptionKeys.
+ * DCA unlock endpoint. Requires resourceJWT and keys.
  *
  * The issuer:
  * 1. Verifies the publisher's JWT signature against the trusted-publisher allowlist
@@ -14,7 +14,7 @@ import { articles } from "@/lib/articles";
  *    - If shareToken is present: validates the publisher-signed token and grants
  *      access to the content names specified in the token
  *    - Otherwise: makes a normal access decision (in demo: always grant)
- * 3. Unseals and returns contentEncryptionKeys or periodKeys
+ * 3. Unwraps and returns contentKeys or wrapKeys
  */
 export async function POST(request: NextRequest) {
   try {
@@ -22,14 +22,14 @@ export async function POST(request: NextRequest) {
 
     if (
       !body.resourceJWT ||
-      !Array.isArray(body.contentEncryptionKeys) ||
-      body.contentEncryptionKeys.some(
+      !Array.isArray(body.keys) ||
+      body.keys.some(
         (k: unknown) =>
           typeof k !== "object" || k === null || typeof (k as Record<string, unknown>).contentKey !== "string",
       )
     ) {
       return NextResponse.json(
-        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, contentEncryptionKeys)" },
+        { error: "Invalid DCA unlock request — missing required fields (resourceJWT, keys)" },
         { status: 400 },
       );
     }
@@ -39,11 +39,10 @@ export async function POST(request: NextRequest) {
     // Share link token flow: the token IS the access decision
     if (body.shareToken) {
       const result = await issuer.unlockWithShareToken(body, {
-        deliveryMode: "contentKey",
+        deliveryMode: "direct",
         onShareToken: (payload) => {
-          // In production, you would check use counts, audit log, etc.
-          const scope = payload.keyNames
-            ? `keyNames=[${payload.keyNames.join(",")}]`
+          const scope = payload.scopes
+            ? `scopes=[${payload.scopes.join(",")}]`
             : `content=[${(payload.contentNames ?? []).join(",")}]`;
           console.log(
             `[share-link] Granting access via share token: resource=${payload.resourceId}, ` +
@@ -57,13 +56,9 @@ export async function POST(request: NextRequest) {
 
     // ── Access decision ────────────────────────────────────────────────
     // IMPORTANT: Derive scope from the *verified* resource (server-side),
-    // NOT from untrusted client fields. keyName on each entry is AAD-bound
-    // (tampering causes unseal failure), but the issuer should still
+    // NOT from untrusted client fields. scope on each entry is AAD-bound
+    // (tampering causes unwrap failure), but the issuer should still
     // determine the granted scope from its own data.
-    //
-    // 1. Verify the request JWTs to get the trusted resource.
-    // 2. Look up the article server-side to determine the entitled tier.
-    // 3. Pass only the server-authorised scope to issuer.unlock().
     const { resource } = await issuer.verify(body);
     const article = articles[resource.resourceId];
     if (!article) {
@@ -75,20 +70,20 @@ export async function POST(request: NextRequest) {
 
     // The article's tier is the server-side source of truth for key scope.
     // In production this would come from a subscription/entitlement check.
-    const grantedKeyNames = [article.tier];
+    const grantedScopes = [article.tier];
 
-    // accessType: "article" → contentKey (one-time, non-cacheable)
-    //             "tier" or "subscription" → periodKey (cacheable for 1 hour)
+    // accessType: "article" → direct contentKey (one-time, non-cacheable)
+    //             "tier" or "subscription" → wrapKey (cacheable for one rotation)
     const accessType = (body as unknown as Record<string, unknown>).accessType as string | undefined;
-    const deliveryMode = accessType === "article" ? "contentKey" : "periodKey";
+    const deliveryMode = accessType === "article" ? "direct" : "wrapKey";
 
     console.log(
       `[unlock] resource=${resource.resourceId}, tier=${article.tier}, ` +
-      `deliveryMode=${deliveryMode}, grantedKeyNames=[${grantedKeyNames.join(",")}]`,
+      `deliveryMode=${deliveryMode}, grantedScopes=[${grantedScopes.join(",")}]`,
     );
 
     const result = await issuer.unlock(body, {
-      grantedKeyNames,
+      grantedScopes,
       deliveryMode,
     });
 
@@ -97,7 +92,6 @@ export async function POST(request: NextRequest) {
     console.error("DCA unlock error:", error);
 
     if (error instanceof Error) {
-      // Surface verification/auth errors as 4xx
       if (
         error.message.includes("not trusted") ||
         error.message.includes("signature") ||

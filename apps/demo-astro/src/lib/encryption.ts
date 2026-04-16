@@ -23,7 +23,7 @@ type DcaIssuerServer = ReturnType<typeof createDcaIssuer>;
 const DEMO_DOMAIN = "capsule-astro-demo.sesamy.com";
 const DEMO_ISSUER_NAME = "sesamy-astro-demo";
 const DEMO_KEY_ID = "astro-demo-2026";
-const PERIOD_DURATION_HOURS = 1;
+const ROTATION_INTERVAL_HOURS = 1;
 
 const DEV_FALLBACK_SECRET = Buffer.from(
   "demo-secret-do-not-use-in-production!!",
@@ -39,24 +39,24 @@ let _issuerPublicKeyPem: string | null = null;
 // Secret helpers
 // ---------------------------------------------------------------------------
 
-let _periodSecret: string | undefined;
+let _rotationSecret: string | undefined;
 
-function getPeriodSecret(): string {
-  if (_periodSecret) return _periodSecret;
-  const secret = process.env.PERIOD_SECRET;
+function getRotationSecret(): string {
+  if (_rotationSecret) return _rotationSecret;
+  const secret = process.env.ROTATION_SECRET ?? process.env.PERIOD_SECRET;
   if (secret) {
-    _periodSecret = secret;
+    _rotationSecret = secret;
     return secret;
   }
   if (import.meta.env.DEV) {
     console.warn(
-      "[capsule] PERIOD_SECRET not set — using insecure demo fallback (dev only)",
+      "[capsule] ROTATION_SECRET not set — using insecure demo fallback (dev only)",
     );
-    _periodSecret = DEV_FALLBACK_SECRET;
-    return _periodSecret;
+    _rotationSecret = DEV_FALLBACK_SECRET;
+    return _rotationSecret;
   }
   throw new Error(
-    "PERIOD_SECRET environment variable is required in production",
+    "ROTATION_SECRET environment variable is required in production",
   );
 }
 
@@ -134,8 +134,8 @@ export async function getPublisher(): Promise<DcaPublisher> {
     _publisher = createDcaPublisher({
       domain: DEMO_DOMAIN,
       signingKeyPem: keys.signingPrivateKeyPem,
-      periodSecret: getPeriodSecret(),
-      periodDurationHours: PERIOD_DURATION_HOURS,
+      rotationSecret: getRotationSecret(),
+      rotationIntervalHours: ROTATION_INTERVAL_HOURS,
     });
   }
   return _publisher;
@@ -165,13 +165,16 @@ export async function getIssuerPublicKeyPem(): Promise<string> {
 interface CachedRender {
   data: DcaRenderResult;
   tier: string;
-  hourBucket: string;
+  rotationBucket: number;
 }
 const renderCache = new Map<string, CachedRender>();
 
-function getCurrentHourBucket(): string {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}`;
+/**
+ * Bucket aligned to the configured rotation interval. Re-renders happen when
+ * the bucket flips, so cache invalidation matches wrap-key rotation.
+ */
+function getCurrentRotationBucket(): number {
+  return Math.floor(Date.now() / (ROTATION_INTERVAL_HOURS * 60 * 60 * 1000));
 }
 
 /**
@@ -179,14 +182,14 @@ function getCurrentHourBucket(): string {
  *
  * Looks up the article by resourceId and uses:
  * - contentName: "bodytext" (stable content identity)
- * - keyName: article tier (access/key domain)
+ * - scope: article tier (access scope)
  */
 export async function renderDcaArticle(
   resourceId: string,
 ): Promise<{ result: DcaRenderResult; tier: string } | null> {
-  const hourBucket = getCurrentHourBucket();
+  const rotationBucket = getCurrentRotationBucket();
   const cached = renderCache.get(resourceId);
-  if (cached && cached.hourBucket === hourBucket) {
+  if (cached && cached.rotationBucket === rotationBucket) {
     return { result: cached.data, tier: cached.tier };
   }
 
@@ -202,7 +205,7 @@ export async function renderDcaArticle(
     contentItems: [
       {
         contentName: "bodytext",
-        keyName: article.tier,
+        scope: article.tier,
         content: article.premiumContent,
         contentType: "text/html",
       },
@@ -213,7 +216,7 @@ export async function renderDcaArticle(
         publicKeyPem: issuerPub,
         keyId: DEMO_KEY_ID,
         unlockUrl: "/api/unlock",
-        keyNames: [article.tier],
+        scopes: [article.tier],
       },
     ],
     resourceData: {
@@ -222,7 +225,7 @@ export async function renderDcaArticle(
     },
   });
 
-  renderCache.set(resourceId, { data: result, tier: article.tier, hourBucket });
+  renderCache.set(resourceId, { data: result, tier: article.tier, rotationBucket });
   return { result, tier: article.tier };
 }
 

@@ -59,9 +59,9 @@ function verifyBearer(request: NextRequest): NextResponse | null {
  * URL query parameter (e.g., ?share=<token>) and the client will send it
  * with the unlock request.
  *
- * DCA-compatible: the periodSecret never leaves the publisher.
+ * DCA-compatible: the rotationSecret never leaves the publisher.
  * The share token is purely an authorization grant — key material flows
- * through the normal DCA seal/unseal channel.
+ * through the normal DCA wrap/unwrap channel.
  *
  * Request body:
  *   - resourceId: string — which resource to share
@@ -84,9 +84,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // --- Validate contentNames / keyNames ------------------------------------
-    // Prefer keyNames if provided; fall back to contentNames for backwards compat
-    const rawKeyNames: unknown = body.keyNames;
+    // --- Validate contentNames / scopes ------------------------------------
+    // Prefer scopes if provided; fall back to contentNames for backwards compat
+    const rawScopes: unknown = body.scopes;
     const rawContentNames: unknown = body.contentNames;
 
     const isValidStringArray = (arr: unknown): arr is string[] =>
@@ -97,18 +97,18 @@ export async function POST(request: NextRequest) {
         (n: unknown) => typeof n === "string" && n.length > 0 && n.length <= 128,
       );
 
-    const keyNames: string[] | undefined = rawKeyNames && isValidStringArray(rawKeyNames)
-      ? rawKeyNames
+    const scopes: string[] | undefined = rawScopes && isValidStringArray(rawScopes)
+      ? rawScopes
       : undefined;
     const contentNames: string[] | undefined = rawContentNames && isValidStringArray(rawContentNames)
       ? rawContentNames
       : undefined;
 
-    if (!keyNames && !contentNames) {
+    if (!scopes && !contentNames) {
       return NextResponse.json(
         {
           error:
-            "keyNames or contentNames must be an array of 1–20 non-empty strings (max 128 chars each)",
+            "scopes or contentNames must be an array of 1–20 non-empty strings (max 128 chars each)",
         },
         { status: 400 },
       );
@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
 
     const token = await publisher.createShareLinkToken({
       resourceId,
-      ...(keyNames ? { keyNames } : { contentNames: contentNames! }),
+      ...(scopes ? { scopes } : { contentNames: contentNames! }),
       expiresIn,
       data: body.data,
     });
@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
       shareUrl,
       expiresIn,
       resourceId,
-      ...(keyNames ? { keyNames } : { contentNames }),
+      ...(scopes ? { scopes } : { contentNames }),
     });
   } catch (error) {
     console.error("Share link creation error:", error);
