@@ -691,6 +691,46 @@ export async function importEcdhP256PublicKey(key: Uint8Array | string): Promise
 }
 
 /**
+ * Export an ECDH P-256 public key as a JWK (RFC 7517).
+ */
+export async function exportEcdhP256PublicKeyAsJwk(
+    publicKey: WebCryptoKey,
+): Promise<WebJsonWebKey> {
+    const crypto = getCrypto();
+    return crypto.subtle.exportKey("jwk", publicKey) as Promise<WebJsonWebKey>;
+}
+
+/**
+ * Import an ECDH P-256 public key from a JWK (RFC 7517).
+ */
+export async function importEcdhP256PublicKeyFromJwk(jwk: WebJsonWebKey): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (crypto.subtle.importKey as any)(
+        "jwk",
+        jwk,
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        [],
+    );
+}
+
+/**
+ * Import an RSA-OAEP public key from a JWK (RFC 7517).
+ */
+export async function importRsaPublicKeyFromJwk(jwk: WebJsonWebKey): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (crypto.subtle.importKey as any)(
+        "jwk",
+        jwk,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        false,
+        ["encrypt"],
+    );
+}
+
+/**
  * Import an ECDH P-256 private key from PKCS8 PEM or DER.
  */
 export async function importEcdhP256PrivateKey(key: Uint8Array | string): Promise<WebCryptoKey> {

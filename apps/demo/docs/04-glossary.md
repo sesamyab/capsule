@@ -81,6 +81,8 @@ An ECDSA P-256 key pair used by the publisher to sign JWTs (ES256). The publishe
 - Storage: Publisher server (private key)
 - Purpose: JWT signing & verification
 
+The publisher holds **two independent secrets** -- this signing key (asymmetric, public half shared with issuers) and the [rotation secret](#rotation-secret) (symmetric, never shared). They serve different cryptographic roles and cannot be merged. See [Key Setup](/server#key-setup) for the side-by-side comparison and rationale.
+
 ## Encryption Algorithms
 
 ### AES-256-GCM

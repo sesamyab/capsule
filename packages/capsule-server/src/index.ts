@@ -107,6 +107,21 @@ export {
 } from "./dca-wrap";
 
 // ============================================================================
+// DCA JWKS (issuer public key resolution via .well-known)
+// ============================================================================
+
+export {
+  fetchJwks,
+  refreshJwks,
+  getActiveIssuerKeys,
+  selectActiveKeys,
+  clearJwksCache,
+  type Jwk,
+  type JwksDocument,
+  type ResolvedIssuerKey,
+} from "./dca-jwks";
+
+// ============================================================================
 // DCA Rotation (wrapKey identifiers and derivation)
 // ============================================================================
 

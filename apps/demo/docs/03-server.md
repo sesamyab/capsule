@@ -131,23 +131,33 @@ app.post('/api/unlock', async (req, res) => {
 
 ### Key Setup
 
-The publisher needs two secrets:
+The publisher needs **two independent secrets**. They serve different cryptographic roles and have different trust boundaries, so they cannot be merged into one.
 
-1. **ES256 signing key** (ECDSA P-256): for signing `resourceJWT` and share link tokens
-2. **Rotation secret**: for HKDF-based wrapKey derivation (never shared with the issuer)
+| Secret | Role | Primitive | Who sees it |
+| --- | --- | --- | --- |
+| `PUBLISHER_ES256_PRIVATE_KEY` (`signingKeyPem`) | Authentication -- "this manifest came from me" | ECDSA P-256 (asymmetric) | Private key: publisher only. **Public key is shared** with every issuer (they need it to verify JWTs). |
+| `ROTATION_SECRET` (`rotationSecret`) | WrapKey schedule -- publisher's internal key rotation | 256-bit symmetric HKDF input | **Publisher only.** Never leaves the publisher, never shared with issuers. |
+
+#### Why two separate secrets?
+
+- **Different primitives.** Signing requires an asymmetric key so issuers can verify JWTs without holding a shared secret. The rotation secret is symmetric because it is used as HKDF input keying material -- there is no asymmetric analogue for this role.
+- **Different trust boundaries.** The signing key's public half is *intentionally* published to issuers. The rotation secret is publisher-only by design -- if an issuer ever learned it, the issuer could derive every past and future wrapKey offline and bypass the rotation-based revocation model.
+- **Different rotation cadences.** Signing keys rotate periodically with overlap (issuers accept old and new public keys during transition -- see [JWKS](#jwt-signing--integrity-proofs)). The rotation secret almost never rotates, because changing it invalidates every derived wrapKey and forces re-encryption or re-issuance.
+- **Cryptographic domain separation.** Reusing one secret for two unrelated primitives (ECDSA signing *and* HKDF derivation) violates RFC 5869 / NIST SP 800-56C guidance and opens the door to key-confusion attacks. Distinct purposes use distinct keys.
 
 ```ts
 import { generateEcdsaP256KeyPair, exportP256KeyPairPem } from '@sesamy/capsule-server';
 
-// Generate an ES256 key pair (do this once, store securely)
+// 1. Signing key (ES256) — generate once, keep private in KMS, share public with issuers
 const keyPair = await generateEcdsaP256KeyPair();
 const pem = await exportP256KeyPairPem(keyPair);
-// pem.privateKeyPem → store in KMS / env var
-// pem.publicKeyPem  → share with issuers
+// pem.privateKeyPem → PUBLISHER_ES256_PRIVATE_KEY (KMS / env var, publisher only)
+// pem.publicKeyPem  → distribute to issuers (goes into their trustedPublisherKeys)
 
-// Generate a rotation secret (do this once, store securely)
+// 2. Rotation secret — generate once, keep in KMS, never share
 import crypto from 'crypto';
 const rotationSecret = crypto.randomBytes(32).toString('base64');
+// → ROTATION_SECRET (KMS / env var, publisher only)
 ```
 
 ### DcaPublisherConfig

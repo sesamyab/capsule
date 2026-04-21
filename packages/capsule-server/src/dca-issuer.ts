@@ -189,7 +189,7 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
             request: DcaUnlockRequest,
             accessDecision: DcaAccessDecision,
         ): Promise<DcaUnlockResponse> => {
-            return processUnlock(publisherMap, getPrivateKey, request, accessDecision);
+            return processUnlock(publisherMap, config.keyId, getPrivateKey, request, accessDecision);
         },
 
         /**
@@ -202,7 +202,7 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
             request: DcaUnlockRequest,
             options?: DcaShareLinkUnlockOptions,
         ): Promise<DcaUnlockResponse> => {
-            return processShareLinkUnlock(publisherMap, getPrivateKey, request, options);
+            return processShareLinkUnlock(publisherMap, config.keyId, getPrivateKey, request, options);
         },
 
         /**
@@ -297,7 +297,7 @@ async function verifyRequest(
         throw new Error("keys must not be empty");
     }
 
-    const seenContentNames = new Set<string>();
+    const seenPairs = new Set<string>();
     for (const entry of request.keys) {
         if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
             throw new Error("Each keys entry must be a plain object");
@@ -317,12 +317,18 @@ async function verifyRequest(
             throw new Error("keys entry contentName must not be empty");
         }
 
-        if (seenContentNames.has(effectiveName)) {
+        // Multiple entries with the same contentName are allowed when each
+        // carries a distinct `kid` (rotation overlap). Without `kid`, the
+        // legacy single-entry-per-contentName rule still holds.
+        const pairKey = `${effectiveName}\x00${entryObj.kid ?? ""}`;
+        if (seenPairs.has(pairKey)) {
             throw new Error(
-                `Duplicate contentName "${effectiveName}" in keys`,
+                entryObj.kid
+                    ? `Duplicate keys entry for contentName "${effectiveName}" kid "${entryObj.kid}"`
+                    : `Duplicate contentName "${effectiveName}" in keys`,
             );
         }
-        seenContentNames.add(effectiveName);
+        seenPairs.add(pairKey);
     }
 
     if (!request.resourceJWT) {
@@ -352,10 +358,39 @@ async function verifyRequest(
 }
 
 /**
+ * Pick the DcaIssuerKey entry for a given contentName from the request.
+ *
+ * When the publisher wraps for multiple issuer kids (JWKS rotation overlap),
+ * there can be multiple entries per contentName. We prefer the entry tagged
+ * with this issuer's own `keyId`. When no entry carries a kid (legacy
+ * single-key manifests), we fall back to the sole entry.
+ */
+function pickEntryForIssuer(
+    entries: DcaIssuerKey[],
+    contentName: string,
+    issuerKeyId: string,
+): DcaIssuerKey | undefined {
+    const matches = entries.filter(
+        (e) => (e.contentName ?? "default") === contentName,
+    );
+    if (matches.length === 0) return undefined;
+    if (matches.length === 1) return matches[0];
+
+    const byKid = matches.find((e) => e.kid === issuerKeyId);
+    if (byKid) return byKid;
+
+    // Multiple kid-tagged entries but none match — fall through to the first
+    // untagged entry if any, otherwise return undefined so the caller raises.
+    const untagged = matches.find((e) => e.kid === undefined);
+    return untagged;
+}
+
+/**
  * Shared unwrap-and-respond helper used by both the normal unlock path and the
  * share-link unlock path.
  */
 async function unwrapAndRespond(
+    issuerKeyId: string,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     grantedContentNames: string[],
@@ -370,17 +405,14 @@ async function unwrapAndRespond(
         clientRsaPubKey = await importRsaPublicKey(fromBase64Url(request.clientPublicKey!));
     }
 
-    const keysByName = new Map<string, DcaIssuerKey>();
-    for (const entry of request.keys) {
-        keysByName.set(entry.contentName ?? "default", entry);
-    }
-
     const keys: DcaUnlockedKey[] = [];
 
     for (const contentName of grantedContentNames) {
-        const keysEntry = keysByName.get(contentName);
+        const keysEntry = pickEntryForIssuer(request.keys, contentName, issuerKeyId);
         if (!keysEntry) {
-            throw new Error(`No keys data for content item "${contentName}"`);
+            throw new Error(
+                `No keys data for content item "${contentName}" matching issuer kid "${issuerKeyId}"`,
+            );
         }
 
         // AAD is bound to the scope — tampering with scope causes unwrap failure
@@ -433,6 +465,7 @@ async function unwrapAndRespond(
 
 async function processUnlock(
     publisherMap: NormalisedPublisherMap,
+    issuerKeyId: string,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     accessDecision: DcaAccessDecision,
@@ -444,6 +477,7 @@ async function processUnlock(
     const grantedContentNames = resolveGrantedContentNames(accessDecision, request);
 
     return unwrapAndRespond(
+        issuerKeyId,
         getPrivateKey,
         request,
         grantedContentNames,
@@ -474,9 +508,14 @@ function resolveGrantedContentNames(
     if (hasScopes) {
         const scopeSet = new Set(accessDecision.grantedScopes);
 
-        return request.keys
-            .filter(entry => scopeSet.has(entry.scope))
-            .map(entry => entry.contentName ?? "default");
+        // Dedup: multi-kid manifests have one entry per (contentName × kid).
+        return [
+            ...new Set(
+                request.keys
+                    .filter(entry => scopeSet.has(entry.scope))
+                    .map(entry => entry.contentName ?? "default"),
+            ),
+        ];
     }
 
     throw new Error("Access decision must specify grantedContentNames or grantedScopes");
@@ -538,6 +577,7 @@ async function verifyShareLinkToken(
 
 async function processShareLinkUnlock(
     publisherMap: NormalisedPublisherMap,
+    issuerKeyId: string,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     options?: DcaShareLinkUnlockOptions,
@@ -565,6 +605,7 @@ async function processShareLinkUnlock(
     }
 
     // Build access decision from the share token's claims.
+    // Deduplicate contentNames — multi-kid manifests have one entry per kid.
     const availableContentNames = new Set(
         request.keys.map(k => k.contentName ?? "default"),
     );
@@ -572,10 +613,14 @@ async function processShareLinkUnlock(
 
     if (sharePayload.scopes && sharePayload.scopes.length > 0) {
         const scopeSet = new Set(sharePayload.scopes);
-        grantedContentNames = request.keys
-            .filter(entry => scopeSet.has(entry.scope))
-            .map(entry => entry.contentName ?? "default")
-            .filter(name => availableContentNames.has(name));
+        grantedContentNames = [
+            ...new Set(
+                request.keys
+                    .filter(entry => scopeSet.has(entry.scope))
+                    .map(entry => entry.contentName ?? "default")
+                    .filter(name => availableContentNames.has(name)),
+            ),
+        ];
     } else {
         grantedContentNames = sharePayload.contentNames.filter(
             (name) => availableContentNames.has(name),
@@ -596,6 +641,7 @@ async function processShareLinkUnlock(
     const deliveryMode = options?.deliveryMode ?? "direct";
 
     return unwrapAndRespond(
+        issuerKeyId,
         getPrivateKey,
         request,
         grantedContentNames,
