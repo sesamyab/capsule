@@ -92,11 +92,18 @@ export interface DcaJwksOptions {
      * upstream fetch fails. Default: 30 days.
      */
     staleWindowSeconds?: number;
+    /**
+     * Milliseconds to wait for the JWKS HTTP response before aborting.
+     * Bounds publisher.render() latency when the issuer is unreachable.
+     * Default: 5000.
+     */
+    fetchTimeoutMs?: number;
 }
 
 const FALLBACK_MAX_AGE_SECONDS = 3600;
 /** 30 days — the default stale-if-error window. */
 const DEFAULT_STALE_WINDOW_SECONDS = 30 * 24 * 3600;
+const DEFAULT_FETCH_TIMEOUT_MS = 5000;
 
 class InMemoryJwksCache implements DcaJwksCache {
     private readonly map = new Map<string, DcaJwksCacheEntry>();
@@ -116,10 +123,15 @@ class InMemoryJwksCache implements DcaJwksCache {
 
 const defaultCache = new InMemoryJwksCache();
 
-function resolveOptions(opts?: DcaJwksOptions): { cache: DcaJwksCache; staleWindowSeconds: number } {
+function resolveOptions(opts?: DcaJwksOptions): {
+    cache: DcaJwksCache;
+    staleWindowSeconds: number;
+    fetchTimeoutMs: number;
+} {
     return {
         cache: opts?.cache ?? defaultCache,
         staleWindowSeconds: opts?.staleWindowSeconds ?? DEFAULT_STALE_WINDOW_SECONDS,
+        fetchTimeoutMs: opts?.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     };
 }
 
@@ -168,8 +180,23 @@ async function importJwkToCryptoKey(jwk: Jwk): Promise<ResolvedIssuerKey> {
     throw new Error(`Unsupported JWK kty="${jwk.kty}" crv="${jwk.crv ?? ""}"`);
 }
 
-async function doFetchJwks(url: string): Promise<{ jwks: JwksDocument; maxAgeSeconds: number }> {
-    const response = await fetch(url);
+async function doFetchJwks(
+    url: string,
+    timeoutMs: number,
+): Promise<{ jwks: JwksDocument; maxAgeSeconds: number }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+        response = await fetch(url, { signal: controller.signal });
+    } catch (err) {
+        if ((err as Error)?.name === "AbortError") {
+            throw new Error(`JWKS fetch for ${url} timed out after ${timeoutMs}ms`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
     if (!response.ok) {
         throw new Error(`JWKS fetch failed for ${url}: HTTP ${response.status}`);
     }
@@ -211,11 +238,12 @@ async function refreshAndCache(
     url: string,
     cache: DcaJwksCache,
     staleWindowSeconds: number,
+    fetchTimeoutMs: number,
     previouslyCached: DcaJwksCacheEntry | undefined,
 ): Promise<JwksDocument> {
     const now = Date.now();
     try {
-        const { jwks, maxAgeSeconds } = await doFetchJwks(url);
+        const { jwks, maxAgeSeconds } = await doFetchJwks(url, fetchTimeoutMs);
         const freshUntil = now + maxAgeSeconds * 1000;
         const staleUntil = freshUntil + staleWindowSeconds * 1000;
         await writeCache(cache, url, { jwks, freshUntil, staleUntil });
@@ -239,7 +267,7 @@ async function refreshAndCache(
  * the stale cached copy if it's within the configured stale window.
  */
 export async function fetchJwks(url: string, opts?: DcaJwksOptions): Promise<JwksDocument> {
-    const { cache, staleWindowSeconds } = resolveOptions(opts);
+    const { cache, staleWindowSeconds, fetchTimeoutMs } = resolveOptions(opts);
     const now = Date.now();
 
     const cached = await readCache(cache, url);
@@ -247,7 +275,7 @@ export async function fetchJwks(url: string, opts?: DcaJwksOptions): Promise<Jwk
         return cached.jwks;
     }
 
-    return refreshAndCache(url, cache, staleWindowSeconds, cached);
+    return refreshAndCache(url, cache, staleWindowSeconds, fetchTimeoutMs, cached);
 }
 
 /**
@@ -257,10 +285,10 @@ export async function fetchJwks(url: string, opts?: DcaJwksOptions): Promise<Jwk
  * happened after the last cache fetch.
  */
 export async function refreshJwks(url: string, opts?: DcaJwksOptions): Promise<JwksDocument> {
-    const { cache, staleWindowSeconds } = resolveOptions(opts);
+    const { cache, staleWindowSeconds, fetchTimeoutMs } = resolveOptions(opts);
 
     const previouslyCached = await readCache(cache, url);
-    return refreshAndCache(url, cache, staleWindowSeconds, previouslyCached);
+    return refreshAndCache(url, cache, staleWindowSeconds, fetchTimeoutMs, previouslyCached);
 }
 
 /**

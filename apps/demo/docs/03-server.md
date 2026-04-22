@@ -142,7 +142,7 @@ The publisher needs **two independent secrets**. They serve different cryptograp
 
 - **Different primitives.** Signing requires an asymmetric key so issuers can verify JWTs without holding a shared secret. The rotation secret is symmetric because it is used as HKDF input keying material -- there is no asymmetric analogue for this role.
 - **Different trust boundaries.** The signing key's public half is *intentionally* published to issuers. The rotation secret is publisher-only by design -- if an issuer ever learned it, the issuer could derive every past and future wrapKey offline and bypass the rotation-based revocation model.
-- **Different rotation cadences.** Signing keys rotate periodically with overlap (issuers accept old and new public keys during transition -- see [JWKS](#jwt-signing--integrity-proofs)). The rotation secret almost never rotates, because changing it invalidates every derived wrapKey and forces re-encryption or re-issuance.
+- **Different rotation cadences.** Signing keys rotate periodically with overlap (issuers accept old and new public keys during transition -- see [JWKS](#issuer-key-resolution-jwks)). The rotation secret almost never rotates, because changing it invalidates every derived wrapKey and forces re-encryption or re-issuance.
 - **Cryptographic domain separation.** Reusing one secret for two unrelated primitives (ECDSA signing *and* HKDF derivation) violates RFC 5869 / NIST SP 800-56C guidance and opens the door to key-confusion attacks. Distinct purposes use distinct keys.
 
 ```ts

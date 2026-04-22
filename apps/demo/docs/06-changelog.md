@@ -22,9 +22,11 @@ render time, passing neither also throws.
 - **`publicKeyPem`** (existing) -- single key, `keyId` required, identical
   behavior to before.
 - **`jwksUri`** (new) -- fetches a standard [RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517)
-  JWKS, caches in-memory honoring `Cache-Control: max-age` (1h fallback),
-  and wraps content for **every active key in the set**. Each manifest
-  `keys[]` entry is tagged with its own `kid`.
+  JWKS, cached via the configured `DcaPublisherConfig.jwksCache` backend
+  (default: in-memory; KV/Redis or other backends supported) honoring
+  `Cache-Control: max-age` (1h fallback), and wraps content for **every
+  active key in the set**. Each manifest `keys[]` entry is tagged with
+  its own `kid`.
 
 Each `DcaIssuerKey` in the manifest now carries an optional `kid` field --
 present when using `jwksUri` (echoes the JWKS key's `kid`) or when using
