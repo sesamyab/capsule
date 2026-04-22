@@ -7,10 +7,19 @@
  *   - status !== "retired" (custom, honored if present)
  *   - kid is required
  *
- * Results are cached in-memory per URL. Cache-Control: max-age is honored,
- * with a 1-hour fallback when no directive is present. When a refresh fails
- * but a cached copy exists, the cache is returned and a warning is logged —
- * availability is prioritised over freshness.
+ * Caching
+ * -------
+ * Freshness is driven by the response's `Cache-Control: max-age` directive
+ * (1 hour fallback). A fresh entry is served straight from cache with no
+ * network hop. When an entry is past its freshness window, we attempt a
+ * refresh. If the refresh fails but a cached copy exists and is still within
+ * the stale window (default 30 days past freshness), we serve it with a
+ * console warning — availability beats freshness for wrap operations, since
+ * issuer private-key rotation is rare.
+ *
+ * The cache backend is pluggable via {@link DcaJwksCache} so deployments on
+ * Cloudflare Workers, Redis, or similar can persist across process restarts.
+ * The default is an in-memory Map scoped to this module.
  */
 
 import {
@@ -47,15 +56,72 @@ export interface ResolvedIssuerKey {
     algorithm: DcaWrapAlgorithm;
 }
 
-interface CacheEntry {
+/**
+ * A cached JWKS document plus its lifetime bounds.
+ * Cache backends store and return this verbatim; all timestamps are unix ms.
+ */
+export interface DcaJwksCacheEntry {
     jwks: JwksDocument;
-    /** Unix ms — when the cache entry is no longer fresh */
-    expiresAt: number;
+    /** Unix ms — upstream `Cache-Control` says the document is fresh until this time. */
+    freshUntil: number;
+    /**
+     * Unix ms — hard cutoff after which the entry must not be served even on
+     * upstream failure. Set to `freshUntil + staleWindowSeconds * 1000` at
+     * write time.
+     */
+    staleUntil: number;
+}
+
+/**
+ * Pluggable cache backend for JWKS documents.
+ *
+ * Methods may be sync or async. `delete` is optional — when absent,
+ * {@link refreshJwks} just overwrites via `set` instead of deleting first.
+ */
+export interface DcaJwksCache {
+    get(url: string): Promise<DcaJwksCacheEntry | undefined | null> | DcaJwksCacheEntry | undefined | null;
+    set(url: string, entry: DcaJwksCacheEntry): Promise<void> | void;
+    delete?(url: string): Promise<void> | void;
+}
+
+export interface DcaJwksOptions {
+    /** Cache backend. Defaults to an in-memory Map scoped to this module. */
+    cache?: DcaJwksCache;
+    /**
+     * Seconds past freshness that a cached entry may be served when the
+     * upstream fetch fails. Default: 30 days.
+     */
+    staleWindowSeconds?: number;
 }
 
 const FALLBACK_MAX_AGE_SECONDS = 3600;
+/** 30 days — the default stale-if-error window. */
+const DEFAULT_STALE_WINDOW_SECONDS = 30 * 24 * 3600;
 
-const cache = new Map<string, CacheEntry>();
+class InMemoryJwksCache implements DcaJwksCache {
+    private readonly map = new Map<string, DcaJwksCacheEntry>();
+    get(url: string): DcaJwksCacheEntry | undefined {
+        return this.map.get(url);
+    }
+    set(url: string, entry: DcaJwksCacheEntry): void {
+        this.map.set(url, entry);
+    }
+    delete(url: string): void {
+        this.map.delete(url);
+    }
+    clear(): void {
+        this.map.clear();
+    }
+}
+
+const defaultCache = new InMemoryJwksCache();
+
+function resolveOptions(opts?: DcaJwksOptions): { cache: DcaJwksCache; staleWindowSeconds: number } {
+    return {
+        cache: opts?.cache ?? defaultCache,
+        staleWindowSeconds: opts?.staleWindowSeconds ?? DEFAULT_STALE_WINDOW_SECONDS,
+    };
+}
 
 /**
  * Parse Cache-Control max-age from a Response header.
@@ -115,28 +181,51 @@ async function doFetchJwks(url: string): Promise<{ jwks: JwksDocument; maxAgeSec
     return { jwks: body, maxAgeSeconds: maxAge };
 }
 
-/**
- * Fetch a JWKS document, honoring the in-memory cache. Returns the cached
- * copy when still fresh. Falls back to a stale cached copy if the refresh
- * fails (with a console warning); throws if no cache is available.
- */
-export async function fetchJwks(url: string): Promise<JwksDocument> {
-    const now = Date.now();
-    const cached = cache.get(url);
-    if (cached && cached.expiresAt > now) {
-        return cached.jwks;
+async function readCache(cache: DcaJwksCache, url: string): Promise<DcaJwksCacheEntry | undefined> {
+    try {
+        const entry = await cache.get(url);
+        return entry ?? undefined;
+    } catch (err) {
+        console.warn(`JWKS cache read failed for ${url}: ${(err as Error).message}`);
+        return undefined;
     }
+}
 
+async function writeCache(
+    cache: DcaJwksCache,
+    url: string,
+    entry: DcaJwksCacheEntry,
+): Promise<void> {
+    try {
+        await cache.set(url, entry);
+    } catch (err) {
+        console.warn(`JWKS cache write failed for ${url}: ${(err as Error).message}`);
+    }
+}
+
+/**
+ * Fetch, then write to cache. On fetch failure, fall back to a stale cached
+ * copy if it exists and is within the stale window.
+ */
+async function refreshAndCache(
+    url: string,
+    cache: DcaJwksCache,
+    staleWindowSeconds: number,
+    previouslyCached: DcaJwksCacheEntry | undefined,
+): Promise<JwksDocument> {
+    const now = Date.now();
     try {
         const { jwks, maxAgeSeconds } = await doFetchJwks(url);
-        cache.set(url, { jwks, expiresAt: now + maxAgeSeconds * 1000 });
+        const freshUntil = now + maxAgeSeconds * 1000;
+        const staleUntil = freshUntil + staleWindowSeconds * 1000;
+        await writeCache(cache, url, { jwks, freshUntil, staleUntil });
         return jwks;
     } catch (err) {
-        if (cached) {
+        if (previouslyCached && previouslyCached.staleUntil > now) {
             console.warn(
-                `JWKS fetch failed for ${url}; using cached copy. Error: ${(err as Error).message}`,
+                `JWKS fetch failed for ${url}; serving stale cached copy (fresh until ${new Date(previouslyCached.freshUntil).toISOString()}, stale until ${new Date(previouslyCached.staleUntil).toISOString()}). Error: ${(err as Error).message}`,
             );
-            return cached.jwks;
+            return previouslyCached.jwks;
         }
         throw new Error(
             `JWKS fetch failed for ${url} and no cached copy is available: ${(err as Error).message}`,
@@ -145,21 +234,44 @@ export async function fetchJwks(url: string): Promise<JwksDocument> {
 }
 
 /**
- * Force-refresh a cached JWKS entry (or populate the cache on first call).
+ * Fetch a JWKS document, honoring the cache. Returns the cached copy when
+ * still fresh. When stale, attempts a refresh; on failure, falls back to
+ * the stale cached copy if it's within the configured stale window.
+ */
+export async function fetchJwks(url: string, opts?: DcaJwksOptions): Promise<JwksDocument> {
+    const { cache, staleWindowSeconds } = resolveOptions(opts);
+    const now = Date.now();
+
+    const cached = await readCache(cache, url);
+    if (cached && cached.freshUntil > now) {
+        return cached.jwks;
+    }
+
+    return refreshAndCache(url, cache, staleWindowSeconds, cached);
+}
+
+/**
+ * Force a re-fetch, bypassing the freshness check. Still honors the stale
+ * fallback — a refresh failure with a valid stale entry returns that entry.
  * Useful when a "key not found" error from the issuer suggests a rotation
  * happened after the last cache fetch.
  */
-export async function refreshJwks(url: string): Promise<JwksDocument> {
-    cache.delete(url);
-    return fetchJwks(url);
+export async function refreshJwks(url: string, opts?: DcaJwksOptions): Promise<JwksDocument> {
+    const { cache, staleWindowSeconds } = resolveOptions(opts);
+
+    const previouslyCached = await readCache(cache, url);
+    return refreshAndCache(url, cache, staleWindowSeconds, previouslyCached);
 }
 
 /**
  * Fetch (or reuse cached) JWKS and return the active keys, imported as
  * CryptoKey instances.
  */
-export async function getActiveIssuerKeys(url: string): Promise<ResolvedIssuerKey[]> {
-    const jwks = await fetchJwks(url);
+export async function getActiveIssuerKeys(
+    url: string,
+    opts?: DcaJwksOptions,
+): Promise<ResolvedIssuerKey[]> {
+    const jwks = await fetchJwks(url, opts);
     const active = selectActiveKeys(jwks);
     if (active.length === 0) {
         throw new Error(`JWKS at ${url} contains no usable active keys`);
@@ -168,12 +280,14 @@ export async function getActiveIssuerKeys(url: string): Promise<ResolvedIssuerKe
 }
 
 /**
- * Test hook — clear all cached JWKS entries (or a single url).
+ * Test hook — clear the default in-memory cache (or a single url).
+ * Does nothing to user-supplied {@link DcaJwksCache} instances; those own
+ * their lifetime.
  */
 export function clearJwksCache(url?: string): void {
     if (url) {
-        cache.delete(url);
+        defaultCache.delete(url);
     } else {
-        cache.clear();
+        defaultCache.clear();
     }
 }

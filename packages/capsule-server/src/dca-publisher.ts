@@ -30,7 +30,7 @@ import { generateRenderId, getCurrentRotationVersions, deriveWrapKey } from "./d
 
 import { wrap, importIssuerPublicKey } from "./dca-wrap";
 
-import { getActiveIssuerKeys, type ResolvedIssuerKey } from "./dca-jwks";
+import { getActiveIssuerKeys, type DcaJwksOptions, type ResolvedIssuerKey } from "./dca-jwks";
 
 import { createResourceJwt, createJwt } from "./dca-jwt";
 
@@ -53,6 +53,7 @@ import type {
 
 async function resolveIssuerPublicKeys(
     issuerConfig: DcaIssuerConfig,
+    jwksOptions: DcaJwksOptions,
 ): Promise<ResolvedIssuerKey[]> {
     const hasPem = typeof issuerConfig.publicKeyPem === "string" && issuerConfig.publicKeyPem !== "";
     const hasJwks = typeof issuerConfig.jwksUri === "string" && issuerConfig.jwksUri !== "";
@@ -69,7 +70,7 @@ async function resolveIssuerPublicKeys(
     }
 
     if (hasJwks) {
-        return getActiveIssuerKeys(issuerConfig.jwksUri!);
+        return getActiveIssuerKeys(issuerConfig.jwksUri!, jwksOptions);
     }
 
     if (!issuerConfig.keyId) {
@@ -124,6 +125,13 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
 
     const rotationIntervalHours = config.rotationIntervalHours ?? 1;
 
+    const jwksOptions: DcaJwksOptions = {
+        ...(config.jwksCache !== undefined ? { cache: config.jwksCache } : {}),
+        ...(config.jwksStaleWindowSeconds !== undefined
+            ? { staleWindowSeconds: config.jwksStaleWindowSeconds }
+            : {}),
+    };
+
     let signingKeyPromise: Promise<WebCryptoKey> | null = null;
 
     function getSigningKey(): Promise<WebCryptoKey> {
@@ -134,7 +142,8 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
     }
 
     return {
-        render: (options: DcaRenderOptions) => render(config.domain, rotationSecret, rotationIntervalHours, getSigningKey, options),
+        render: (options: DcaRenderOptions) =>
+            render(config.domain, rotationSecret, rotationIntervalHours, getSigningKey, jwksOptions, options),
 
         /**
          * Create a share link token — a publisher-signed JWT that grants
@@ -194,6 +203,7 @@ async function render(
     rotationSecret: Uint8Array,
     rotationIntervalHours: number,
     getSigningKey: () => Promise<WebCryptoKey>,
+    jwksOptions: DcaJwksOptions,
     options: DcaRenderOptions,
 ): Promise<DcaRenderResult> {
     const { resourceId, contentItems, issuers, resourceData } = options;
@@ -272,7 +282,7 @@ async function render(
     const issuerData: Record<string, DcaIssuerEntry> = {};
 
     for (const issuerConfig of issuers) {
-        const resolvedIssuerKeys = await resolveIssuerPublicKeys(issuerConfig);
+        const resolvedIssuerKeys = await resolveIssuerPublicKeys(issuerConfig, jwksOptions);
 
         const issuerKeys: DcaIssuerKey[] = [];
 

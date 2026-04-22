@@ -168,6 +168,11 @@ interface DcaPublisherConfig {
   signingKeyPem: string;             // ES256 private key PEM
   rotationSecret: string | Uint8Array; // Rotation secret (base64 or raw bytes)
   rotationIntervalHours?: number;    // WrapKey rotation interval (default: 1 hour)
+
+  // JWKS-resolved issuer keys (see "Issuer Key Resolution" below).
+  // These apply to every issuer config that sets `jwksUri`.
+  jwksCache?: DcaJwksCache;          // Pluggable backend (default: in-memory)
+  jwksStaleWindowSeconds?: number;   // Stale-if-error window (default: 30 days)
 }
 ```
 
@@ -185,8 +190,11 @@ interface DcaRenderOptions {
   }>;
   issuers: Array<{
     issuerName: string;        // Issuer's canonical name
-    publicKeyPem: string;      // Issuer's ECDH P-256 public key PEM
-    keyId: string;             // Identifies which issuer private key matches
+    // Exactly one of publicKeyPem / jwksUri must be set (mutually exclusive).
+    publicKeyPem?: string;     // Issuer's ECDH P-256 / RSA-OAEP public key PEM
+    jwksUri?: string;          // Or: JWKS URL (e.g., "https://…/.well-known/jwks.json")
+    algorithm?: "ECDH-P256" | "RSA-OAEP"; // Auto-detected from PEM if omitted
+    keyId?: string;            // Required with publicKeyPem; ignored with jwksUri
     unlockUrl: string;         // Issuer's unlock endpoint URL
     contentNames?: string[];   // Which content items this issuer gets keys for
     scopes?: string[];         // Or: which scopes this issuer gets keys for
@@ -243,6 +251,7 @@ For reference, the manifest embedded in the `dca-manifest` script has this shape
         {
           "contentName": "bodytext",
           "scope": "bodytext",
+          "kid": "2025-10",
           "contentKey": "base64url_wrapped_for_issuer",
           "wrapKeys": [
             { "kid": "251023T13", "key": "base64url_wrapped_for_issuer" },
@@ -254,6 +263,9 @@ For reference, the manifest embedded in the `dca-manifest` script has this shape
   }
 }
 ```
+
+- `issuers[name].keyId` is echoed when the publisher uses `publicKeyPem`; omitted when the publisher resolves keys via `jwksUri`.
+- Each `issuers[name].keys[]` entry carries its own `kid` identifying which issuer public key wrapped the material. During JWKS rotation overlap, there will be multiple entries per `contentName` — one per active issuer kid. Note that this `kid` is the **issuer key id**, distinct from the rotation `kid` on `wrapKeys[]`.
 
 ## Issuer Configuration
 
@@ -407,6 +419,122 @@ The publisher derives **wrapKeys** locally using HKDF from the `rotationSecret`.
 | --- | --- | --- |
 | `rotationIntervalHours: 1` (default) | `251023T13` | Up to 1 hour |
 | `rotationIntervalHours: 24` | `251023T00` | Up to 24 hours |
+
+## Issuer Key Resolution (JWKS)
+
+The publisher wraps content keys with each issuer's public key. There are two ways to tell the publisher which key(s) to use:
+
+| Form | Use when |
+| --- | --- |
+| `publicKeyPem` + `keyId` | You manage one key per issuer out-of-band (env vars, KMS) and re-deploy on rotation. |
+| `jwksUri` | You want issuer key rotation to be a no-op for publishers -- the issuer publishes a JWKS, publishers fetch and cache it. |
+
+The two are mutually exclusive per issuer config. Mixing them throws at render time.
+
+### JWKS Format
+
+Standard [RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517) JWKS. The publisher selects keys where:
+
+- `kid` is present (required)
+- `kty` is `EC` with `crv: "P-256"` **or** `kty` is `RSA`
+- `use` is `"enc"` or absent (keys with `use: "sig"` are ignored)
+- `status` is not `"retired"` (a non-standard flag the publisher honors if present)
+
+```json
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "kid": "2026-04",
+      "use": "enc",
+      "x": "…",
+      "y": "…"
+    },
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "kid": "2026-01",
+      "use": "enc",
+      "status": "retired",
+      "x": "…",
+      "y": "…"
+    }
+  ]
+}
+```
+
+### Rotation Semantics
+
+The publisher wraps each content key for **every** active JWKS key -- typically two during an overlap window. Each emitted `issuers[name].keys[]` entry carries its own `kid`:
+
+```ts
+// Publisher side — JWKS with two active keys produces two wrapped entries per content item.
+const result = await publisher.render({
+  resourceId: "article-123",
+  contentItems: [{ contentName: "bodytext", content: "…" }],
+  issuers: [{
+    issuerName: "sesamy",
+    jwksUri: "https://sesamy.com/.well-known/dca-issuers.json",
+    unlockUrl: "https://api.sesamy.com/unlock",
+    contentNames: ["bodytext"],
+  }],
+});
+// result.manifest.issuers["sesamy"].keys has 2 entries — one per active kid.
+```
+
+The issuer selects the entry matching its configured `keyId`. Rotation is a no-op for publishers: the issuer adds the new key to the JWKS, publishers pick it up on their next refresh, and both keys are honored during the overlap.
+
+### Caching
+
+Freshness is driven by the JWKS response's `Cache-Control: max-age` header (fallback: 1 hour). Fresh entries are served from cache without a network hop.
+
+When an entry is past freshness and the upstream refresh fails, the publisher serves the stale cached copy for up to **30 days past freshness by default** (configurable via `jwksStaleWindowSeconds`). After that window, the next render throws with the URL in the error message. Availability beats freshness for wrap operations -- the private keys on the issuer side rotate rarely.
+
+By default the cache is an in-memory `Map` scoped to the process. For multi-worker or multi-pod deployments, plug in a persistent backend:
+
+```ts
+import type { DcaJwksCache, DcaJwksCacheEntry } from '@sesamy/capsule-server';
+
+const kvCache: DcaJwksCache = {
+  async get(url) {
+    const raw = await env.JWKS_KV.get(url);
+    return raw ? (JSON.parse(raw) as DcaJwksCacheEntry) : undefined;
+  },
+  async set(url, entry) {
+    // Use staleUntil as the KV expiration so entries self-evict after the
+    // stale window — no manual cleanup needed.
+    await env.JWKS_KV.put(url, JSON.stringify(entry), {
+      expiration: Math.floor(entry.staleUntil / 1000),
+    });
+  },
+};
+
+const publisher = createDcaPublisher({
+  domain: "news.example.com",
+  signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
+  rotationSecret: process.env.ROTATION_SECRET!,
+  jwksCache: kvCache,
+  jwksStaleWindowSeconds: 30 * 24 * 3600, // explicit is nice; this is the default
+});
+```
+
+`DcaJwksCache.get` / `set` may be sync or async -- use whatever fits your backend. `delete` is optional.
+
+### Force-Refresh
+
+If the issuer returns "unknown kid" on unlock, the publisher's cached JWKS is likely out of date. Force a refresh:
+
+```ts
+import { refreshJwks } from '@sesamy/capsule-server';
+
+await refreshJwks("https://sesamy.com/.well-known/dca-issuers.json", {
+  cache: kvCache,
+  staleWindowSeconds: 30 * 24 * 3600,
+});
+```
+
+`refreshJwks` bypasses the freshness check but still honors stale-fallback: if the refresh fails and a stale copy exists within the window, it's returned rather than throwing.
 
 ## Security Best Practices
 

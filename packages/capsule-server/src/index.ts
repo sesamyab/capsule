@@ -119,6 +119,9 @@ export {
   type Jwk,
   type JwksDocument,
   type ResolvedIssuerKey,
+  type DcaJwksCache,
+  type DcaJwksCacheEntry,
+  type DcaJwksOptions,
 } from "./dca-jwks";
 
 // ============================================================================

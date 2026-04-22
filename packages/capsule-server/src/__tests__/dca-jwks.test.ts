@@ -11,8 +11,11 @@ import { createDcaPublisher } from "../dca-publisher";
 import { createDcaIssuer } from "../dca-issuer";
 import {
     clearJwksCache,
+    fetchJwks,
     refreshJwks,
     selectActiveKeys,
+    type DcaJwksCache,
+    type DcaJwksCacheEntry,
     type Jwk,
     type JwksDocument,
 } from "../dca-jwks";
@@ -428,5 +431,232 @@ describe("refreshJwks", () => {
         const secondBody = await refreshJwks(jwksUri);
         expect(secondBody.keys[0].kid).toBe("k2");
         expect(call).toBe(2);
+    });
+});
+
+// ============================================================================
+// Cache-Control freshness
+// ============================================================================
+
+describe("Cache-Control freshness", () => {
+    function createCountingCache(): DcaJwksCache & { map: Map<string, DcaJwksCacheEntry>; gets: number; sets: number; deletes: number } {
+        const map = new Map<string, DcaJwksCacheEntry>();
+        const cache = {
+            map,
+            gets: 0,
+            sets: 0,
+            deletes: 0,
+            get(url: string) { cache.gets += 1; return map.get(url); },
+            set(url: string, entry: DcaJwksCacheEntry) { cache.sets += 1; map.set(url, entry); },
+            delete(url: string) { cache.deletes += 1; map.delete(url); },
+        };
+        return cache;
+    }
+
+    it("honors Cache-Control max-age — fresh entries avoid network", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+
+        let call = 0;
+        globalThis.fetch = vi.fn(async () => {
+            call += 1;
+            return new Response(JSON.stringify({ keys: [k.jwk] }), {
+                status: 200,
+                headers: { "Cache-Control": "max-age=3600", "Content-Type": "application/json" },
+            }) as unknown as Response;
+        }) as typeof globalThis.fetch;
+
+        const cache = createCountingCache();
+
+        await fetchJwks(jwksUri, { cache });
+        await fetchJwks(jwksUri, { cache });
+        await fetchJwks(jwksUri, { cache });
+
+        // Single network call — subsequent fetches hit the cache.
+        expect(call).toBe(1);
+        expect(cache.sets).toBe(1);
+        expect(cache.gets).toBe(3);
+    });
+
+    it("defaults to 1h freshness when no Cache-Control header is present", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+
+        stubJwksFetch(jwksUri, { keys: [k.jwk] }); // no cache-control
+
+        const cache = createCountingCache();
+        const before = Date.now();
+        await fetchJwks(jwksUri, { cache });
+        const entry = cache.map.get(jwksUri)!;
+
+        // freshUntil ≈ now + 3600s
+        const minutesFresh = (entry.freshUntil - before) / 1000 / 60;
+        expect(minutesFresh).toBeGreaterThan(55);
+        expect(minutesFresh).toBeLessThanOrEqual(60);
+    });
+});
+
+// ============================================================================
+// Pluggable cache backend
+// ============================================================================
+
+describe("Pluggable DcaJwksCache", () => {
+    it("routes get/set through the user-supplied cache", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+        stubJwksFetch(jwksUri, { keys: [k.jwk] }, { cacheControl: "max-age=600" });
+
+        const map = new Map<string, DcaJwksCacheEntry>();
+        const gets: string[] = [];
+        const sets: string[] = [];
+        const cache: DcaJwksCache = {
+            get(url) { gets.push(url); return map.get(url); },
+            set(url, entry) { sets.push(url); map.set(url, entry); },
+        };
+
+        await fetchJwks(jwksUri, { cache });
+
+        expect(sets).toEqual([jwksUri]);
+        const entry = map.get(jwksUri)!;
+        expect(entry.jwks.keys).toHaveLength(1);
+        expect(entry.freshUntil).toBeGreaterThan(Date.now());
+        expect(entry.staleUntil).toBeGreaterThan(entry.freshUntil);
+
+        // Second call should short-circuit on the cache get.
+        await fetchJwks(jwksUri, { cache });
+        expect(gets.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("defaults the stale window to 30 days", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+        stubJwksFetch(jwksUri, { keys: [k.jwk] }, { cacheControl: "max-age=3600" });
+
+        const map = new Map<string, DcaJwksCacheEntry>();
+        const cache: DcaJwksCache = {
+            get(url) { return map.get(url); },
+            set(url, entry) { map.set(url, entry); },
+        };
+
+        await fetchJwks(jwksUri, { cache });
+
+        const entry = map.get(jwksUri)!;
+        const staleAfterFresh = entry.staleUntil - entry.freshUntil;
+        const thirtyDaysMs = 30 * 24 * 3600 * 1000;
+        // Allow a tiny fudge factor for measurement jitter.
+        expect(staleAfterFresh).toBeGreaterThanOrEqual(thirtyDaysMs - 10);
+        expect(staleAfterFresh).toBeLessThanOrEqual(thirtyDaysMs + 10);
+    });
+
+    it("serves stale cache on fetch failure within the stale window", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+
+        // Pre-populate cache as if written 1 hour ago with max-age=60
+        // (so freshUntil is in the past but staleUntil is far in the future).
+        const now = Date.now();
+        const map = new Map<string, DcaJwksCacheEntry>();
+        map.set(jwksUri, {
+            jwks: { keys: [k.jwk] },
+            freshUntil: now - 60 * 1000,
+            staleUntil: now + 30 * 24 * 3600 * 1000,
+        });
+
+        stubJwksFetchFailure(jwksUri);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const cache: DcaJwksCache = {
+            get(url) { return map.get(url); },
+            set(url, entry) { map.set(url, entry); },
+        };
+
+        const body = await fetchJwks(jwksUri, { cache });
+        expect(body.keys).toHaveLength(1);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls[0][0]).toMatch(/stale cached copy/);
+    });
+
+    it("throws when fetch fails and the cache entry is past the stale window", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+
+        const now = Date.now();
+        const map = new Map<string, DcaJwksCacheEntry>();
+        map.set(jwksUri, {
+            jwks: { keys: [k.jwk] },
+            freshUntil: now - 40 * 24 * 3600 * 1000, // 40 days ago
+            staleUntil: now - 10 * 24 * 3600 * 1000, // staleness expired 10 days ago
+        });
+
+        stubJwksFetchFailure(jwksUri);
+
+        const cache: DcaJwksCache = {
+            get(url) { return map.get(url); },
+            set(url, entry) { map.set(url, entry); },
+        };
+
+        await expect(fetchJwks(jwksUri, { cache })).rejects.toThrow(/no cached copy is available/);
+    });
+
+    it("accepts a custom staleWindowSeconds", async () => {
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+        stubJwksFetch(jwksUri, { keys: [k.jwk] }, { cacheControl: "max-age=60" });
+
+        const map = new Map<string, DcaJwksCacheEntry>();
+        const cache: DcaJwksCache = {
+            get(url) { return map.get(url); },
+            set(url, entry) { map.set(url, entry); },
+        };
+
+        await fetchJwks(jwksUri, { cache, staleWindowSeconds: 120 });
+
+        const entry = map.get(jwksUri)!;
+        const staleAfterFresh = entry.staleUntil - entry.freshUntil;
+        expect(staleAfterFresh).toBeGreaterThanOrEqual(120 * 1000 - 10);
+        expect(staleAfterFresh).toBeLessThanOrEqual(120 * 1000 + 10);
+    });
+
+    it("publisher config threads jwksCache and jwksStaleWindowSeconds to fetchJwks", async () => {
+        const signingPair = await generateEcdsaP256KeyPair();
+        const signingPems = await exportP256KeyPairPem(signingPair.privateKey, signingPair.publicKey);
+        const rotationSecret = generateAesKeyBytes();
+
+        const k = await makeIssuerJwkBundle("k");
+        const jwksUri = "https://issuer.test/.well-known/jwks.json";
+        stubJwksFetch(jwksUri, { keys: [k.jwk] }, { cacheControl: "max-age=300" });
+
+        const map = new Map<string, DcaJwksCacheEntry>();
+        const cache: DcaJwksCache = {
+            get(url) { return map.get(url); },
+            set(url, entry) { map.set(url, entry); },
+        };
+
+        const publisher = createDcaPublisher({
+            domain: "cfg.example.com",
+            signingKeyPem: signingPems.privateKeyPem,
+            rotationSecret,
+            jwksCache: cache,
+            jwksStaleWindowSeconds: 7 * 24 * 3600, // 7 days
+        });
+
+        await publisher.render({
+            resourceId: "a",
+            contentItems: [{ contentName: "bodytext", content: "x" }],
+            issuers: [
+                {
+                    issuerName: "sesamy",
+                    jwksUri,
+                    unlockUrl: "https://issuer.test/unlock",
+                    contentNames: ["bodytext"],
+                },
+            ],
+        });
+
+        const entry = map.get(jwksUri)!;
+        expect(entry).toBeDefined();
+        const staleAfterFresh = entry.staleUntil - entry.freshUntil;
+        expect(staleAfterFresh).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 10);
+        expect(staleAfterFresh).toBeLessThanOrEqual(7 * 24 * 3600 * 1000 + 10);
     });
 });

@@ -271,6 +271,20 @@ export interface DcaPublisherConfig {
      * cadence beyond "how often a new wrapKey is minted".
      */
     rotationIntervalHours?: number;
+    /**
+     * Cache backend for JWKS documents resolved via an issuer's `jwksUri`.
+     * When omitted, an in-memory cache scoped to the module is used —
+     * fine for single-process deployments but lost on restart. Supply a
+     * persistent backend (KV, Redis, filesystem) to share across workers
+     * and survive restarts.
+     */
+    jwksCache?: import("./dca-jwks").DcaJwksCache;
+    /**
+     * Stale-if-error window in seconds. When an upstream JWKS refresh
+     * fails, a cached copy past its freshness window may still be served
+     * for this many seconds. Default: 30 days (2_592_000).
+     */
+    jwksStaleWindowSeconds?: number;
 }
 
 /**
