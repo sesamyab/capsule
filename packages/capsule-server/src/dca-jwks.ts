@@ -159,9 +159,14 @@ export function selectActiveKeys(jwks: JwksDocument): Jwk[] {
         if (k.status === "retired") return false;
         if (k.use !== undefined && k.use !== "enc") return false;
         if (k.kty === "EC") {
-            return k.crv === "P-256";
+            if (k.crv !== "P-256") return false;
+            if (typeof k.x !== "string" || k.x === "") return false;
+            if (typeof k.y !== "string" || k.y === "") return false;
+            return true;
         }
         if (k.kty === "RSA") {
+            if (typeof k.n !== "string" || k.n === "") return false;
+            if (typeof k.e !== "string" || k.e === "") return false;
             return true;
         }
         return false;
