@@ -3,7 +3,211 @@
 Protocol and library changes by version. Each entry describes what changed,
 why, and whether it's backwards compatible.
 
-## v0.10 (Latest)
+## v0.11 (Latest)
+
+v0.11 adds JWKS-based resolution of issuer public keys and a pluggable cache
+with stale-if-error semantics. Fully additive -- existing `publicKeyPem`
+callers keep working unchanged.
+
+### JWKS Support for Issuer Public Keys
+
+[Backwards compatible]
+
+#### What Changed
+
+`DcaIssuerConfig` now accepts a `jwksUri` as an alternative to `publicKeyPem`.
+The two are mutually exclusive per issuer config -- passing both throws at
+render time, passing neither also throws.
+
+- **`publicKeyPem`** (existing) -- single key, `keyId` required, identical
+  behavior to before.
+- **`jwksUri`** (new) -- fetches a standard [RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517)
+  JWKS, caches in-memory honoring `Cache-Control: max-age` (1h fallback),
+  and wraps content for **every active key in the set**. Each manifest
+  `keys[]` entry is tagged with its own `kid`.
+
+Each `DcaIssuerKey` in the manifest now carries an optional `kid` field --
+present when using `jwksUri` (echoes the JWKS key's `kid`) or when using
+`publicKeyPem` (echoes the config's `keyId`). `DcaIssuerEntry.keyId` is now
+optional (omitted when the publisher uses `jwksUri`).
+
+#### Why
+
+Issuer private-key rotation previously required a redeploy of every
+publisher (they each hold the current PEM in an env var). With JWKS, the
+issuer adds the new key to the JWKS and publishers pick it up on their next
+refresh. During the overlap window the publisher wraps content for **both**
+keys, so clients that hit either the old or new issuer instance unlock
+successfully -- rotation is a no-op for publishers.
+
+Wrapping for N keys (typically 2 during overlap) costs a few extra ECDH
+operations per render. Availability wins over the micro-optimisation.
+
+#### Key Selection Rules
+
+A JWKS key is active (and used for wrapping) when:
+
+- `kid` is present
+- `kty` is `EC` with `crv: "P-256"`, or `kty` is `RSA`
+- `use` is `"enc"` or absent (keys with `use: "sig"` are ignored)
+- `status` is not `"retired"` (non-standard flag, honored if present)
+
+#### Usage
+
+```ts
+await publisher.render({
+  resourceId: "article-123",
+  contentItems: [{ contentName: "bodytext", content: "..." }],
+  issuers: [
+    {
+      issuerName: "sesamy",
+      jwksUri: "https://sesamy.com/.well-known/dca-issuers.json",
+      unlockUrl: "https://api.sesamy.com/unlock",
+      contentNames: ["bodytext"],
+      // keyId is not required (and ignored) with jwksUri
+    },
+  ],
+});
+```
+
+#### Manifest Shape
+
+Each entry in `issuers[name].keys[]` now carries a `kid`:
+
+```jsonc
+{
+  "issuers": {
+    "sesamy": {
+      "unlockUrl": "https://api.sesamy.com/unlock",
+      // "keyId" omitted when publisher uses jwksUri
+      "keys": [
+        {
+          "contentName": "bodytext",
+          "scope": "premium",
+          "kid": "2026-04",                // new — issuer key id
+          "contentKey": "wrapped...",
+          "wrapKeys": [
+            { "kid": "260409T11", "key": "wrapped..." },
+            { "kid": "260409T12", "key": "wrapped..." }
+          ]
+        },
+        // During rotation overlap, a second entry with kid="2026-01"
+        // wrapping the same content for the old issuer key.
+      ]
+    }
+  }
+}
+```
+
+Note that `issuers[name].keys[*].kid` (issuer key id) is distinct from
+`wrapKeys[*].kid` (rotation version).
+
+### Pluggable JWKS Cache with 30-Day Stale-if-Error
+
+[Backwards compatible]
+
+#### What Changed
+
+Two new fields on `DcaPublisherConfig`:
+
+- `jwksCache?: DcaJwksCache` -- pluggable cache backend. Default is an
+  in-memory `Map` scoped to the module.
+- `jwksStaleWindowSeconds?: number` -- how long past freshness a cached
+  copy may be served when the upstream refresh fails. Default: **30 days**.
+
+The `DcaJwksCache` interface:
+
+```ts
+interface DcaJwksCache {
+  get(url: string): Promise<DcaJwksCacheEntry | undefined | null>
+                 | DcaJwksCacheEntry | undefined | null;
+  set(url: string, entry: DcaJwksCacheEntry): Promise<void> | void;
+  delete?(url: string): Promise<void> | void;
+}
+
+interface DcaJwksCacheEntry {
+  jwks: { keys: unknown[] };
+  freshUntil: number;   // unix ms — driven by Cache-Control max-age
+  staleUntil: number;   // unix ms — freshUntil + staleWindowSeconds
+}
+```
+
+Methods may be sync or async. `delete` is optional.
+
+#### Why
+
+The default in-memory cache is fine for single-process deployments, but
+loses state on restart. Multi-worker or serverless deployments benefit
+from a shared persistent backend (Cloudflare KV, Redis, etc.).
+
+The 30-day stale window is the "availability beats freshness" trade-off:
+if the issuer's JWKS host is down, we'd rather keep rendering with a
+recently-valid key set than fail every request. Issuer private keys
+rotate rarely; 30 days is far longer than any realistic outage.
+
+#### Behavior
+
+1. **Fresh cache hit** -- no network call; serve cached JWKS.
+2. **Cache stale, refresh succeeds** -- update cache (new `freshUntil`
+   from `Cache-Control`, new `staleUntil = freshUntil + staleWindowSeconds`),
+   return fresh JWKS.
+3. **Cache stale, refresh fails, within stale window** -- serve stale
+   cached copy, log `console.warn` with the URL.
+4. **Cache stale, refresh fails, past stale window** -- throw with the
+   URL in the error message.
+5. **No cache, refresh fails** -- throw with the URL.
+
+Cache read/write errors are swallowed with a warning -- a broken cache
+backend doesn't break rendering when upstream is healthy.
+
+#### Usage
+
+```ts
+import type { DcaJwksCache, DcaJwksCacheEntry } from '@sesamy/capsule-server';
+
+const kvCache: DcaJwksCache = {
+  async get(url) {
+    const raw = await env.JWKS_KV.get(url);
+    return raw ? (JSON.parse(raw) as DcaJwksCacheEntry) : undefined;
+  },
+  async set(url, entry) {
+    // KV expiration ≈ staleUntil — entries self-evict after the stale window
+    await env.JWKS_KV.put(url, JSON.stringify(entry), {
+      expiration: Math.floor(entry.staleUntil / 1000),
+    });
+  },
+};
+
+const publisher = createDcaPublisher({
+  domain: "news.example.com",
+  signingKeyPem: process.env.PUBLISHER_ES256_PRIVATE_KEY!,
+  rotationSecret: process.env.ROTATION_SECRET!,
+  jwksCache: kvCache,
+  jwksStaleWindowSeconds: 30 * 24 * 3600, // default
+});
+```
+
+### New Exports
+
+From `@sesamy/capsule-server`:
+
+- `fetchJwks(url, opts?)` -- fetch (or cache-hit) a JWKS document
+- `refreshJwks(url, opts?)` -- force-refresh; honors stale fallback on error
+- `getActiveIssuerKeys(url, opts?)` -- fetch + select + import to `CryptoKey`
+- `selectActiveKeys(jwks)` -- filter rule, pure function
+- `clearJwksCache(url?)` -- clear the default in-memory cache
+- Types: `Jwk`, `JwksDocument`, `ResolvedIssuerKey`, `DcaJwksCache`, `DcaJwksCacheEntry`, `DcaJwksOptions`
+
+### Migration
+
+| Component | Change |
+| --- | --- |
+| **Publisher** | None required. `publicKeyPem` continues to work. Opt into `jwksUri` per issuer when you want rotation-aware key resolution. |
+| **Issuer server** | None required. The issuer picks the `keys[]` entry whose `kid` matches its configured `keyId`; legacy single-entry manifests still work. |
+| **Client** | None required. The client forwards `issuers[name].keys` verbatim to the unlock endpoint. |
+| **Wire format** | Additive: `DcaIssuerKey.kid?` is optional, `DcaIssuerEntry.keyId?` is optional. Older clients that ignore `kid` still work against single-key manifests. |
+
+## v0.10
 
 v0.10 is a pre-release terminology and structure migration. Crypto vocabulary is
 aligned with WebCrypto, time-based naming is removed, access control is aligned
