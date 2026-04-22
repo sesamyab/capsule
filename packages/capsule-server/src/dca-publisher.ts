@@ -30,6 +30,8 @@ import { generateRenderId, getCurrentRotationVersions, deriveWrapKey } from "./d
 
 import { wrap, importIssuerPublicKey } from "./dca-wrap";
 
+import { getActiveIssuerKeys, type DcaJwksOptions, type ResolvedIssuerKey } from "./dca-jwks";
+
 import { createResourceJwt, createJwt } from "./dca-jwt";
 
 import type {
@@ -41,12 +43,48 @@ import type {
     DcaIssuerKey,
     DcaWrappedIssuerWrapKey,
     DcaPublisherConfig,
+    DcaIssuerConfig,
     DcaRenderOptions,
     DcaRenderResult,
     DcaJsonApiResponse,
     DcaShareLinkTokenPayload,
     DcaShareLinkOptions,
 } from "./dca-types";
+
+async function resolveIssuerPublicKeys(
+    issuerConfig: DcaIssuerConfig,
+    jwksOptions: DcaJwksOptions,
+): Promise<ResolvedIssuerKey[]> {
+    const hasPem = typeof issuerConfig.publicKeyPem === "string" && issuerConfig.publicKeyPem !== "";
+    const hasJwks = typeof issuerConfig.jwksUri === "string" && issuerConfig.jwksUri !== "";
+
+    if (hasPem && hasJwks) {
+        throw new Error(
+            `Issuer "${issuerConfig.issuerName}": publicKeyPem and jwksUri are mutually exclusive`,
+        );
+    }
+    if (!hasPem && !hasJwks) {
+        throw new Error(
+            `Issuer "${issuerConfig.issuerName}": must provide publicKeyPem or jwksUri`,
+        );
+    }
+
+    if (hasJwks) {
+        return getActiveIssuerKeys(issuerConfig.jwksUri!, jwksOptions);
+    }
+
+    if (!issuerConfig.keyId) {
+        throw new Error(
+            `Issuer "${issuerConfig.issuerName}": keyId is required when publicKeyPem is used`,
+        );
+    }
+
+    const { key, algorithm } = await importIssuerPublicKey(
+        issuerConfig.publicKeyPem!,
+        issuerConfig.algorithm,
+    );
+    return [{ kid: issuerConfig.keyId, key, algorithm }];
+}
 
 // ============================================================================
 // Publisher factory
@@ -87,6 +125,13 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
 
     const rotationIntervalHours = config.rotationIntervalHours ?? 1;
 
+    const jwksOptions: DcaJwksOptions = {
+        ...(config.jwksCache !== undefined ? { cache: config.jwksCache } : {}),
+        ...(config.jwksStaleWindowSeconds !== undefined
+            ? { staleWindowSeconds: config.jwksStaleWindowSeconds }
+            : {}),
+    };
+
     let signingKeyPromise: Promise<WebCryptoKey> | null = null;
 
     function getSigningKey(): Promise<WebCryptoKey> {
@@ -97,7 +142,8 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
     }
 
     return {
-        render: (options: DcaRenderOptions) => render(config.domain, rotationSecret, rotationIntervalHours, getSigningKey, options),
+        render: (options: DcaRenderOptions) =>
+            render(config.domain, rotationSecret, rotationIntervalHours, getSigningKey, jwksOptions, options),
 
         /**
          * Create a share link token — a publisher-signed JWT that grants
@@ -157,6 +203,7 @@ async function render(
     rotationSecret: Uint8Array,
     rotationIntervalHours: number,
     getSigningKey: () => Promise<WebCryptoKey>,
+    jwksOptions: DcaJwksOptions,
     options: DcaRenderOptions,
 ): Promise<DcaRenderResult> {
     const { resourceId, contentItems, issuers, resourceData } = options;
@@ -235,10 +282,7 @@ async function render(
     const issuerData: Record<string, DcaIssuerEntry> = {};
 
     for (const issuerConfig of issuers) {
-        const { key: issuerPubKey, algorithm } = await importIssuerPublicKey(
-            issuerConfig.publicKeyPem,
-            issuerConfig.algorithm,
-        );
+        const resolvedIssuerKeys = await resolveIssuerPublicKeys(issuerConfig, jwksOptions);
 
         const issuerKeys: DcaIssuerKey[] = [];
 
@@ -280,35 +324,49 @@ async function render(
             // AAD binds wrapped blobs to this scope — tampering with scope causes unwrap failure
             const wrapAad = encodeUtf8(scope);
 
-            // Wrap contentKey for issuer
-            const wrappedContentKey = await wrap(contentKey, issuerPubKey, algorithm, wrapAad);
+            for (const issuerKey of resolvedIssuerKeys) {
+                // Wrap contentKey for this issuer public key
+                const wrappedContentKey = await wrap(
+                    contentKey,
+                    issuerKey.key,
+                    issuerKey.algorithm,
+                    wrapAad,
+                );
 
-            // Wrap each rotation-version wrapKey for issuer.
-            // In name-granular mode (contentNames), wrapKeys are omitted to
-            // prevent a client from reusing a shared scope wrapKey to decrypt
-            // other items in the same scope that were not explicitly granted.
-            const wrappedWrapKeys: DcaWrappedIssuerWrapKey[] = [];
-            if (!isNameGranular) {
-                for (const version of [rotation.current, rotation.next]) {
-                    const wrapKey = await deriveWrapKey(rotationSecret, scope, version.kid);
-                    wrappedWrapKeys.push({
-                        kid: version.kid,
-                        key: await wrap(wrapKey, issuerPubKey, algorithm, wrapAad),
-                    });
+                // Wrap each rotation-version wrapKey for this issuer public key.
+                // In name-granular mode (contentNames), wrapKeys are omitted to
+                // prevent a client from reusing a shared scope wrapKey to decrypt
+                // other items in the same scope that were not explicitly granted.
+                const wrappedWrapKeys: DcaWrappedIssuerWrapKey[] = [];
+                if (!isNameGranular) {
+                    for (const version of [rotation.current, rotation.next]) {
+                        const wrapKey = await deriveWrapKey(rotationSecret, scope, version.kid);
+                        wrappedWrapKeys.push({
+                            kid: version.kid,
+                            key: await wrap(wrapKey, issuerKey.key, issuerKey.algorithm, wrapAad),
+                        });
+                    }
                 }
-            }
 
-            issuerKeys.push({
-                contentName,
-                scope,
-                contentKey: wrappedContentKey,
-                ...(wrappedWrapKeys.length > 0 ? { wrapKeys: wrappedWrapKeys } : {}),
-            });
+                issuerKeys.push({
+                    contentName,
+                    scope,
+                    ...(issuerKey.kid ? { kid: issuerKey.kid } : {}),
+                    contentKey: wrappedContentKey,
+                    ...(wrappedWrapKeys.length > 0 ? { wrapKeys: wrappedWrapKeys } : {}),
+                });
+            }
         }
+
+        // Single-key manifests echo the issuer's keyId at the entry level for
+        // backward compatibility; multi-key (JWKS) manifests carry the kid on
+        // each entry instead.
+        const entryKeyId =
+            !issuerConfig.jwksUri && issuerConfig.keyId ? { keyId: issuerConfig.keyId } : {};
 
         issuerData[issuerConfig.issuerName] = {
             unlockUrl: issuerConfig.unlockUrl,
-            keyId: issuerConfig.keyId,
+            ...entryKeyId,
             keys: issuerKeys,
         };
     }

@@ -121,12 +121,19 @@ export interface DcaWrappedContentKeyEntry {
 export interface DcaIssuerEntry {
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
-    /** Identifies which issuer private key to use */
-    keyId: string;
     /**
-     * Wrapped-for-issuer key material (one entry per content item).
-     * The contentKey and each wrapKey are encrypted to the issuer's public
-     * key (ECDH-P256 or RSA-OAEP). Only the issuer can unwrap them.
+     * Identifies which issuer private key to use.
+     * Omitted when the publisher resolves keys via a JWKS — each {@link DcaIssuerKey}
+     * entry carries its own `kid` in that case.
+     */
+    keyId?: string;
+    /**
+     * Wrapped-for-issuer key material. One entry per (contentName × issuer kid).
+     * When the publisher uses a single `publicKeyPem`, there is one entry per
+     * content item (the entry's `kid` echoes the issuer's `keyId`).
+     * When the publisher uses a JWKS with multiple active keys, there are
+     * multiple entries per content item — one per active kid — so the issuer
+     * can unwrap with whichever private key it currently holds.
      */
     keys: DcaIssuerKey[];
 }
@@ -146,6 +153,12 @@ export interface DcaIssuerKey {
      * scope — tampering with the scope causes unwrap to fail.
      */
     scope: string;
+    /**
+     * Issuer key identifier — matches a single JWKS / `publicKeyPem`-configured
+     * public key. Present when the publisher wraps for multiple issuer keys
+     * during a rotation overlap. Omitted for legacy single-key manifests.
+     */
+    kid?: string;
     /** base64url-encoded contentKey wrapped for the issuer's public key */
     contentKey: string;
     /** WrapKeys (per rotation) wrapped for the issuer's public key.
@@ -258,6 +271,20 @@ export interface DcaPublisherConfig {
      * cadence beyond "how often a new wrapKey is minted".
      */
     rotationIntervalHours?: number;
+    /**
+     * Cache backend for JWKS documents resolved via an issuer's `jwksUri`.
+     * When omitted, an in-memory cache scoped to the module is used —
+     * fine for single-process deployments but lost on restart. Supply a
+     * persistent backend (KV, Redis, filesystem) to share across workers
+     * and survive restarts.
+     */
+    jwksCache?: import("./dca-jwks").DcaJwksCache;
+    /**
+     * Stale-if-error window in seconds. When an upstream JWKS refresh
+     * fails, a cached copy past its freshness window may still be served
+     * for this many seconds. Default: 30 days (2_592_000).
+     */
+    jwksStaleWindowSeconds?: number;
 }
 
 /**
@@ -284,16 +311,35 @@ export interface DcaContentItem {
 
 /**
  * Issuer configuration for rendering.
+ *
+ * Exactly one of `publicKeyPem` or `jwksUri` must be provided. The two forms
+ * are mutually exclusive — the publisher throws at render time if both are set.
  */
 export interface DcaIssuerConfig {
     /** Canonical issuer identifier (stable ASCII token) */
     issuerName: string;
-    /** Issuer's public key PEM (ECDH P-256 or RSA-OAEP) */
-    publicKeyPem: string;
+    /**
+     * Issuer's public key PEM (ECDH P-256 or RSA-OAEP).
+     * Mutually exclusive with {@link jwksUri}.
+     */
+    publicKeyPem?: string;
+    /**
+     * JWKS URL to resolve issuer public keys from (RFC 7517).
+     * Fetched once per process, cached in-memory, honoring Cache-Control
+     * max-age (fallback 1 hour). The publisher wraps content for every
+     * currently-active key so rotation is a no-op for publishers.
+     * Mutually exclusive with {@link publicKeyPem}.
+     */
+    jwksUri?: string;
     /** Algorithm: "ECDH-P256" or "RSA-OAEP" (auto-detected from key if omitted) */
     algorithm?: "ECDH-P256" | "RSA-OAEP";
-    /** Identifies which issuer private key matches */
-    keyId: string;
+    /**
+     * Identifies which issuer private key matches.
+     * Required when {@link publicKeyPem} is used.
+     * Optional (and ignored) when {@link jwksUri} is used — each active
+     * JWKS key has its own `kid`.
+     */
+    keyId?: string;
     /** Issuer's unlock endpoint URL */
     unlockUrl: string;
     /** Which content items this issuer gets wrapped keys for (by contentName) */
