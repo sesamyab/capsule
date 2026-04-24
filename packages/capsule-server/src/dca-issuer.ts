@@ -11,8 +11,9 @@
  *   7. Unwraps and returns contentKeys or wrapKeys to the client
  */
 
-import { verifyJwt, decodeJwtPayload, resourceJwtPayloadToResource } from "./dca-jwt";
+import { verifyJwt, decodeJwtPayload, decodeJwtHeader, resourceJwtPayloadToResource } from "./dca-jwt";
 import { unwrap, importIssuerPrivateKey, type DcaWrapAlgorithm } from "./dca-wrap";
+import { resolvePublisherKey, type DcaJwksOptions } from "./dca-jwks";
 import {
     toBase64Url,
     fromBase64Url,
@@ -56,40 +57,70 @@ function normalizeDomain(raw: string): string {
     return d;
 }
 
-/**
- * Resolve a trustedPublisherKeys entry (string | DcaTrustedPublisher)
- * into a canonical `DcaTrustedPublisher` object.
- */
-function resolvePublisherEntry(entry: string | DcaTrustedPublisher): DcaTrustedPublisher {
-    if (typeof entry === "string") {
-        return { signingKeyPem: entry };
-    }
-    return entry;
-}
-
 // ============================================================================
 // Internal: normalised publisher map (built once at construction time)
 // ============================================================================
 
+/**
+ * Resolved trust entry — exactly one of `signingKeyPem` / `jwksUri` is set.
+ */
+interface ResolvedTrustedPublisher {
+    signingKeyPem?: string;
+    jwksUri?: string;
+    allowedResourceIds?: (string | RegExp)[];
+}
+
+/**
+ * Resolve a trustedPublisherKeys entry (string | DcaTrustedPublisher)
+ * into a canonical internal form. A bare string is treated as a signingKeyPem.
+ */
+function resolvePublisherEntry(
+    rawDomain: string,
+    entry: string | DcaTrustedPublisher,
+): ResolvedTrustedPublisher {
+    if (typeof entry === "string") {
+        if (entry === "") {
+            throw new Error(
+                `trustedPublisherKeys["${rawDomain}"]: signingKeyPem must be a non-empty PEM string`,
+            );
+        }
+        return { signingKeyPem: entry };
+    }
+
+    const hasPem = typeof entry.signingKeyPem === "string" && entry.signingKeyPem !== "";
+    const hasJwks = typeof entry.jwksUri === "string" && entry.jwksUri !== "";
+
+    if (hasPem && hasJwks) {
+        throw new Error(
+            `trustedPublisherKeys["${rawDomain}"]: signingKeyPem and jwksUri are mutually exclusive`,
+        );
+    }
+    if (!hasPem && !hasJwks) {
+        throw new Error(
+            `trustedPublisherKeys["${rawDomain}"]: must provide signingKeyPem or jwksUri`,
+        );
+    }
+
+    return {
+        ...(hasPem ? { signingKeyPem: entry.signingKeyPem } : {}),
+        ...(hasJwks ? { jwksUri: entry.jwksUri } : {}),
+        ...(entry.allowedResourceIds ? { allowedResourceIds: entry.allowedResourceIds } : {}),
+    };
+}
+
 interface NormalisedPublisherMap {
-    entries: Map<string, DcaTrustedPublisher>;
-    lookup(domain: string): DcaTrustedPublisher | undefined;
+    entries: Map<string, ResolvedTrustedPublisher>;
+    lookup(domain: string): ResolvedTrustedPublisher | undefined;
 }
 
 function buildPublisherMap(
     raw: Record<string, string | DcaTrustedPublisher>,
 ): NormalisedPublisherMap {
-    const entries = new Map<string, DcaTrustedPublisher>();
+    const entries = new Map<string, ResolvedTrustedPublisher>();
 
     for (const [rawDomain, value] of Object.entries(raw)) {
         const domain = normalizeDomain(rawDomain);
-        const publisher = resolvePublisherEntry(value);
-
-        if (!publisher.signingKeyPem || typeof publisher.signingKeyPem !== "string") {
-            throw new Error(
-                `trustedPublisherKeys["${rawDomain}"]: signingKeyPem must be a non-empty PEM string`,
-            );
-        }
+        const publisher = resolvePublisherEntry(rawDomain, value);
 
         if (entries.has(domain)) {
             throw new Error(
@@ -116,8 +147,39 @@ function buildPublisherMap(
     };
 }
 
+/**
+ * Verify a publisher-signed JWT using either the pinned PEM or the
+ * configured JWKS URL. When the publisher is JWKS-configured, the key is
+ * selected by the JWT header's `kid`; an unknown kid triggers a force
+ * refresh once before failing.
+ */
+async function verifyPublisherJwt<T>(
+    publisher: ResolvedTrustedPublisher,
+    jwksOptions: DcaJwksOptions,
+    jwt: string,
+): Promise<T> {
+    if (publisher.signingKeyPem) {
+        return verifyJwt<T>(jwt, publisher.signingKeyPem);
+    }
+    if (!publisher.jwksUri) {
+        // Should be unreachable — resolvePublisherEntry enforces exactly one.
+        throw new Error("Trusted publisher has neither signingKeyPem nor jwksUri");
+    }
+    const header = decodeJwtHeader(jwt);
+    const resolved = await resolvePublisherKey(publisher.jwksUri, header.kid, jwksOptions);
+    return verifyJwt<T>(jwt, resolved.key);
+}
+
+/**
+ * Equality check used to ensure the signed-domain resolves to the same
+ * trust entry as the raw request domain.
+ */
+function sameTrustEntry(a: ResolvedTrustedPublisher, b: ResolvedTrustedPublisher): boolean {
+    return a.signingKeyPem === b.signingKeyPem && a.jwksUri === b.jwksUri;
+}
+
 function checkResourceConstraints(
-    publisher: DcaTrustedPublisher,
+    publisher: ResolvedTrustedPublisher,
     domain: string,
     resourceId: string,
 ): void {
@@ -164,6 +226,16 @@ function checkResourceConstraints(
 export function createDcaIssuer(config: DcaIssuerServerConfig) {
     const publisherMap = buildPublisherMap(config.trustedPublisherKeys);
 
+    const jwksOptions: DcaJwksOptions = {
+        ...(config.jwksCache !== undefined ? { cache: config.jwksCache } : {}),
+        ...(config.jwksStaleWindowSeconds !== undefined
+            ? { staleWindowSeconds: config.jwksStaleWindowSeconds }
+            : {}),
+        ...(config.jwksFetchTimeoutMs !== undefined
+            ? { fetchTimeoutMs: config.jwksFetchTimeoutMs }
+            : {}),
+    };
+
     let privateKeyPromise: Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }> | null = null;
 
     function getPrivateKey() {
@@ -189,7 +261,7 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
             request: DcaUnlockRequest,
             accessDecision: DcaAccessDecision,
         ): Promise<DcaUnlockResponse> => {
-            return processUnlock(publisherMap, config.keyId, getPrivateKey, request, accessDecision);
+            return processUnlock(publisherMap, jwksOptions, config.keyId, getPrivateKey, request, accessDecision);
         },
 
         /**
@@ -202,7 +274,7 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
             request: DcaUnlockRequest,
             options?: DcaShareLinkUnlockOptions,
         ): Promise<DcaUnlockResponse> => {
-            return processShareLinkUnlock(publisherMap, config.keyId, getPrivateKey, request, options);
+            return processShareLinkUnlock(publisherMap, jwksOptions, config.keyId, getPrivateKey, request, options);
         },
 
         /**
@@ -212,7 +284,7 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
             shareToken: string,
             expectedDomain: string,
         ): Promise<DcaShareLinkTokenPayload> => {
-            return verifyShareLinkToken(publisherMap, shareToken, expectedDomain);
+            return verifyShareLinkToken(publisherMap, jwksOptions, shareToken, expectedDomain);
         },
 
         /**
@@ -222,7 +294,7 @@ export function createDcaIssuer(config: DcaIssuerServerConfig) {
          * but useful when you need the verified resource payload.
          */
         verify: async (request: DcaUnlockRequest): Promise<DcaVerifiedRequest> => {
-            return verifyRequest(publisherMap, request);
+            return verifyRequest(publisherMap, jwksOptions, request);
         },
     };
 }
@@ -287,6 +359,7 @@ export interface DcaVerifiedRequest {
 
 async function verifyRequest(
     publisherMap: NormalisedPublisherMap,
+    jwksOptions: DcaJwksOptions,
     request: DcaUnlockRequest,
 ): Promise<DcaVerifiedRequest> {
     if (!Array.isArray(request.keys)) {
@@ -342,11 +415,15 @@ async function verifyRequest(
         throw new Error(`Untrusted publisher domain: "${rawDomain}"`);
     }
 
-    const jwtPayload = await verifyJwt<DcaResourceJwtPayload>(request.resourceJWT, publisher.signingKeyPem);
+    const jwtPayload = await verifyPublisherJwt<DcaResourceJwtPayload>(
+        publisher,
+        jwksOptions,
+        request.resourceJWT,
+    );
     const resource = resourceJwtPayloadToResource(jwtPayload);
 
     const signedPublisher = publisherMap.lookup(resource.domain);
-    if (!signedPublisher || signedPublisher.signingKeyPem !== publisher.signingKeyPem) {
+    if (!signedPublisher || !sameTrustEntry(signedPublisher, publisher)) {
         throw new Error(
             `Signed domain "${resource.domain}" does not resolve to the same trusted publisher key`,
         );
@@ -465,13 +542,14 @@ async function unwrapAndRespond(
 
 async function processUnlock(
     publisherMap: NormalisedPublisherMap,
+    jwksOptions: DcaJwksOptions,
     issuerKeyId: string,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
     accessDecision: DcaAccessDecision,
 ): Promise<DcaUnlockResponse> {
     if (request.resourceJWT) {
-        await verifyRequest(publisherMap, request);
+        await verifyRequest(publisherMap, jwksOptions, request);
     }
 
     const grantedContentNames = resolveGrantedContentNames(accessDecision, request);
@@ -527,6 +605,7 @@ function resolveGrantedContentNames(
 
 async function verifyShareLinkToken(
     publisherMap: NormalisedPublisherMap,
+    jwksOptions: DcaJwksOptions,
     shareToken: string,
     expectedDomain: string,
 ): Promise<DcaShareLinkTokenPayload> {
@@ -535,7 +614,11 @@ async function verifyShareLinkToken(
         throw new Error(`Share token: untrusted publisher domain "${expectedDomain}"`);
     }
 
-    const payload = await verifyJwt<DcaShareLinkTokenPayload>(shareToken, publisher.signingKeyPem);
+    const payload = await verifyPublisherJwt<DcaShareLinkTokenPayload>(
+        publisher,
+        jwksOptions,
+        shareToken,
+    );
 
     if (payload.type !== "dca-share") {
         throw new Error(`Share token: invalid type "${payload.type}", expected "dca-share"`);
@@ -577,6 +660,7 @@ async function verifyShareLinkToken(
 
 async function processShareLinkUnlock(
     publisherMap: NormalisedPublisherMap,
+    jwksOptions: DcaJwksOptions,
     issuerKeyId: string,
     getPrivateKey: () => Promise<{ key: WebCryptoKey; algorithm: DcaWrapAlgorithm }>,
     request: DcaUnlockRequest,
@@ -586,10 +670,11 @@ async function processShareLinkUnlock(
         throw new Error("Share link unlock requires a shareToken in the request");
     }
 
-    const { resource } = await verifyRequest(publisherMap, request);
+    const { resource } = await verifyRequest(publisherMap, jwksOptions, request);
 
     const sharePayload = await verifyShareLinkToken(
         publisherMap,
+        jwksOptions,
         request.shareToken,
         resource.domain,
     );

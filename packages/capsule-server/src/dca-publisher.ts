@@ -143,7 +143,15 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
 
     return {
         render: (options: DcaRenderOptions) =>
-            render(config.domain, rotationSecret, rotationIntervalHours, getSigningKey, jwksOptions, options),
+            render(
+                config.domain,
+                rotationSecret,
+                rotationIntervalHours,
+                getSigningKey,
+                config.signingKeyId,
+                jwksOptions,
+                options,
+            ),
 
         /**
          * Create a share link token — a publisher-signed JWT that grants
@@ -189,7 +197,11 @@ export function createDcaPublisher(config: DcaPublisherConfig) {
             };
 
             const signingKey = await getSigningKey();
-            return createJwt(payload, signingKey);
+            return createJwt(
+                payload,
+                signingKey,
+                config.signingKeyId ? { kid: config.signingKeyId } : undefined,
+            );
         },
     };
 }
@@ -203,6 +215,7 @@ async function render(
     rotationSecret: Uint8Array,
     rotationIntervalHours: number,
     getSigningKey: () => Promise<WebCryptoKey>,
+    signingKeyId: string | undefined,
     jwksOptions: DcaJwksOptions,
     options: DcaRenderOptions,
 ): Promise<DcaRenderResult> {
@@ -386,7 +399,11 @@ async function render(
 
     // 7. Sign resourceJWT
     const signingKey = await getSigningKey();
-    const resourceJWT = await createResourceJwt(resource, signingKey);
+    const resourceJWT = await createResourceJwt(
+        resource,
+        signingKey,
+        signingKeyId ? { kid: signingKeyId } : undefined,
+    );
 
     // 8. Assemble manifest
     const manifest: DcaManifest = {

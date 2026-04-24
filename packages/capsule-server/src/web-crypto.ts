@@ -812,6 +812,31 @@ export async function importEcdsaP256PublicKey(key: Uint8Array | string): Promis
 }
 
 /**
+ * Import an ECDSA P-256 public key from a JWK (RFC 7517).
+ */
+export async function importEcdsaP256PublicKeyFromJwk(jwk: WebJsonWebKey): Promise<WebCryptoKey> {
+    const crypto = getCrypto();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (crypto.subtle.importKey as any)(
+        "jwk",
+        jwk,
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["verify"],
+    );
+}
+
+/**
+ * Export an ECDSA P-256 public key as a JWK (RFC 7517).
+ */
+export async function exportEcdsaP256PublicKeyAsJwk(
+    publicKey: WebCryptoKey,
+): Promise<WebJsonWebKey> {
+    const crypto = getCrypto();
+    return crypto.subtle.exportKey("jwk", publicKey) as Promise<WebJsonWebKey>;
+}
+
+/**
  * Sign data with ECDSA P-256 (ES256). Returns 64-byte IEEE P1363 signature (r || s).
  */
 export async function ecdsaP256Sign(

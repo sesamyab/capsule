@@ -81,6 +81,7 @@ app.post("/api/unlock", async (req, res) => {
 | `domain` | `string` | yes | Publisher domain (e.g. `"www.news-site.com"`) |
 | `signingKeyPem` | `string` | yes | ES256 (ECDSA P-256) private key PEM |
 | `rotationSecret` | `string \| Uint8Array` | yes | Base64-encoded 256-bit secret for wrapKey derivation |
+| `signingKeyId` | `string` | no | Identifier for the signing key. When set, emitted as the JWT header `kid`. Required for JWKS-based issuer verification — must match a `kid` in the publisher's JWKS. |
 | `rotationIntervalHours` | `number` | no | WrapKey rotation granularity in hours (default: `1`) |
 | `jwksCache` | `DcaJwksCache` | no | Pluggable cache for issuer JWKS documents (default: in-memory) |
 | `jwksStaleWindowSeconds` | `number` | no | Stale-if-error window for JWKS (default: 30 days) |
@@ -169,15 +170,28 @@ const token = await publisher.createShareLinkToken({
 | `issuerName` | `string` | yes | Issuer identifier |
 | `privateKeyPem` | `string` | yes | ECDH P-256 or RSA-OAEP private key PEM |
 | `keyId` | `string` | yes | Issuer's own key ID — matches a `kid` on manifest `keys[]` entries |
-| `trustedPublisherKeys` | `Record<string, string \| DcaTrustedPublisher>` | yes | Publisher domain → signing key PEM (or extended config) |
+| `trustedPublisherKeys` | `Record<string, string \| DcaTrustedPublisher>` | yes | Publisher domain → signing key PEM, JWKS URL, or extended config |
+| `jwksCache` | `DcaJwksCache` | no | Pluggable cache for publisher JWKS documents (default: in-memory) |
+| `jwksStaleWindowSeconds` | `number` | no | Stale-if-error window (default: 30 days) |
+| `jwksFetchTimeoutMs` | `number` | no | HTTP timeout for JWKS fetches (default: 5000 ms) |
 
-**Extended trusted-publisher config:**
+**Trusted-publisher config** — exactly one of `signingKeyPem` or `jwksUri` per entry. A bare string is shorthand for `{ signingKeyPem: "..." }`:
 
 ```typescript
 trustedPublisherKeys: {
-  "www.news-site.com": {
-    signingKeyPem: publisherPublicKeyPem,
-    allowedResourceIds: ["article-1", /^premium-/],
+  // Simplest: pinned PEM, out-of-band distribution.
+  "blog.example.com": process.env.BLOG_ES256_PUB!,
+
+  // JWKS-backed: picks up publisher rotation automatically (see "Publisher Key Resolution" below).
+  "news.example.com": {
+    jwksUri: "https://news.example.com/.well-known/dca-publishers.json",
+    allowedResourceIds: [/^premium-/],
+  },
+
+  // Extended form with a pinned PEM + resource constraints.
+  "other.example.com": {
+    signingKeyPem: process.env.OTHER_ES256_PUB!,
+    allowedResourceIds: ["article-1"],
   },
 }
 ```
@@ -305,6 +319,75 @@ await refreshJwks("https://sesamy.com/.well-known/dca-issuers.json", {
 });
 ```
 
+## Publisher Key Resolution (JWKS)
+
+Symmetrically to issuer encryption keys, publishers may publish their ES256 **signing** keys at `.well-known/dca-publishers.json` so JWKS-configured issuers can resolve them dynamically. This makes publisher key rotation transparent — no redeploy per issuer.
+
+### Publisher side
+
+Set `signingKeyId` on `createDcaPublisher` so every signed JWT carries a `kid` in its header. Serve the corresponding JWKS document from your own route:
+
+```typescript
+import {
+  createDcaPublisher,
+  buildPublisherJwksDocument,
+} from "@sesamy/capsule-server";
+
+const publisher = createDcaPublisher({
+  domain: "news.example.com",
+  signingKeyPem: process.env.PUBLISHER_SIGNING_KEY!,
+  signingKeyId: process.env.PUBLISHER_SIGNING_KEY_ID!, // e.g. "sig-2026-04"
+  rotationSecret: process.env.PERIOD_SECRET!,
+});
+
+// Serve at https://news.example.com/.well-known/dca-publishers.json
+const jwks = await buildPublisherJwksDocument([
+  {
+    publicKeyPem: process.env.PUBLISHER_PUBLIC_KEY!,
+    kid: process.env.PUBLISHER_SIGNING_KEY_ID!,
+  },
+]);
+app.get("/.well-known/dca-publishers.json", (_req, res) => {
+  res.set("Cache-Control", "public, max-age=3600").json(jwks);
+});
+```
+
+During rotation, include both keys in the JWKS and switch `signingKeyId` to the new one. Issuers pick up the new key on their next refresh (or immediately via force-refresh on unknown-kid).
+
+### Issuer side
+
+Replace the pinned PEM with `jwksUri`:
+
+```typescript
+const issuer = createDcaIssuer({
+  issuerName: "sesamy",
+  privateKeyPem: process.env.ISSUER_PRIVATE_KEY!,
+  keyId: process.env.ISSUER_KEY_ID!,
+  trustedPublisherKeys: {
+    "news.example.com": {
+      jwksUri: "https://news.example.com/.well-known/dca-publishers.json",
+    },
+  },
+});
+```
+
+The issuer selects a key from the JWKS by the `kid` on the JWT header. When the kid isn't in the current (cached) JWKS, the cache is force-refreshed once before failing — the usual case is a publisher rotation between cache fetches.
+
+### JWKS selection rules
+
+A JWKS entry is considered active when:
+
+- `kid` is present
+- `kty` is `EC` with `crv: "P-256"` (ES256)
+- `use` is `"sig"` or absent
+- `status` is not `"retired"` (non-standard, honored if present)
+
+RSA signing keys are not supported — DCA JWTs are fixed to ES256.
+
+### Recommended vs required
+
+JWKS is **recommended, not required**. Pinned `signingKeyPem` is fine for small deployments where you control both sides and publisher rotation is rare. Switch to JWKS when multiple issuers trust the same publisher, or when rotation automation matters more than the one-time setup cost.
+
 ## Key Generation
 
 ```typescript
@@ -333,9 +416,10 @@ const rotationSecret = toBase64(generateAesKeyBytes());
 ## Low-Level Exports
 
 - **Encryption:** `encryptContent`, `decryptContent`, `wrapContentKey`, `unwrapContentKey`, `generateContentKey`, `generateIv`
-- **JWT:** `createJwt`, `verifyJwt`, `decodeJwtPayload`, `createResourceJwt`, `resourceJwtPayloadToResource`, `computeProofHash`
+- **JWT:** `createJwt`, `verifyJwt`, `decodeJwtPayload`, `decodeJwtHeader`, `createResourceJwt`, `resourceJwtPayloadToResource`, `computeProofHash`
 - **Wrap (ECDH / RSA-OAEP):** `wrap`, `unwrap`, `wrapEcdhP256`, `unwrapEcdhP256`, `wrapRsaOaep`, `unwrapRsaOaep`, `importIssuerPublicKey`, `importIssuerPrivateKey`
-- **JWKS:** `fetchJwks`, `refreshJwks`, `getActiveIssuerKeys`, `selectActiveKeys`, `clearJwksCache`
+- **JWKS:** `fetchJwks`, `refreshJwks`, `getActiveIssuerKeys`, `selectActiveKeys`, `selectActivePublisherKeys`, `resolvePublisherKey`, `clearJwksCache`
+- **Publisher JWKS:** `buildPublisherJwk`, `buildPublisherJwksDocument`
 - **Rotation:** `formatTimeKid`, `getCurrentRotationVersions`, `deriveWrapKey`, `generateRenderId`
 - **Crypto primitives:** `sha256`, `hkdf`, ECDH/ECDSA/RSA key utilities, `toBase64Url`, `fromBase64Url`, `toBase64`, `fromBase64`
 

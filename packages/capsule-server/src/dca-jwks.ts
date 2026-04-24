@@ -24,6 +24,7 @@
 
 import {
     importEcdhP256PublicKeyFromJwk,
+    importEcdsaP256PublicKeyFromJwk,
     importRsaPublicKeyFromJwk,
     type WebCryptoKey,
 } from "./web-crypto";
@@ -54,6 +55,12 @@ export interface ResolvedIssuerKey {
     kid: string;
     key: WebCryptoKey;
     algorithm: DcaWrapAlgorithm;
+}
+
+/** A publisher signing key resolved from a JWKS — imported and ready for verify(). */
+export interface ResolvedPublisherKey {
+    kid: string;
+    key: WebCryptoKey;
 }
 
 /**
@@ -168,6 +175,23 @@ export function selectActiveKeys(jwks: JwksDocument): Jwk[] {
     });
 }
 
+/**
+ * Select JWKS keys suitable for publisher JWT verification: must carry a kid,
+ * must not be flagged retired, must have use="sig" or an absent use claim,
+ * and must be EC P-256 (ES256). RSA signing keys are not supported.
+ */
+export function selectActivePublisherKeys(jwks: JwksDocument): Jwk[] {
+    if (!Array.isArray(jwks.keys)) return [];
+    return jwks.keys.filter((k) => {
+        if (!k || typeof k !== "object") return false;
+        if (typeof k.kid !== "string" || k.kid === "") return false;
+        if (k.status === "retired") return false;
+        if (k.use !== undefined && k.use !== "sig") return false;
+        if (k.kty !== "EC" || k.crv !== "P-256") return false;
+        return true;
+    });
+}
+
 async function importJwkToCryptoKey(jwk: Jwk): Promise<ResolvedIssuerKey> {
     if (jwk.kty === "EC" && jwk.crv === "P-256") {
         const key = await importEcdhP256PublicKeyFromJwk(jwk);
@@ -178,6 +202,16 @@ async function importJwkToCryptoKey(jwk: Jwk): Promise<ResolvedIssuerKey> {
         return { kid: jwk.kid!, key, algorithm: "RSA-OAEP" };
     }
     throw new Error(`Unsupported JWK kty="${jwk.kty}" crv="${jwk.crv ?? ""}"`);
+}
+
+async function importPublisherJwk(jwk: Jwk): Promise<ResolvedPublisherKey> {
+    if (jwk.kty !== "EC" || jwk.crv !== "P-256") {
+        throw new Error(
+            `Unsupported publisher JWK kty="${jwk.kty}" crv="${jwk.crv ?? ""}" (expected EC P-256)`,
+        );
+    }
+    const key = await importEcdsaP256PublicKeyFromJwk(jwk);
+    return { kid: jwk.kid!, key };
 }
 
 async function doFetchJwks(
@@ -305,6 +339,46 @@ export async function getActiveIssuerKeys(
         throw new Error(`JWKS at ${url} contains no usable active keys`);
     }
     return Promise.all(active.map(importJwkToCryptoKey));
+}
+
+/**
+ * Resolve a publisher signing key from a JWKS by kid. Fetches (or reuses
+ * cached) the JWKS; if the requested kid is not in the active set, a force
+ * refresh is attempted once before failing — this handles the case where
+ * the publisher rotated after the last fetch.
+ *
+ * Pass `kid === undefined` to require that the JWKS contains exactly one
+ * active key (convenience for JWTs without a `kid` header).
+ */
+export async function resolvePublisherKey(
+    url: string,
+    kid: string | undefined,
+    opts?: DcaJwksOptions,
+): Promise<ResolvedPublisherKey> {
+    const pick = (jwks: JwksDocument): Jwk | undefined => {
+        const active = selectActivePublisherKeys(jwks);
+        if (active.length === 0) return undefined;
+        if (kid === undefined) {
+            return active.length === 1 ? active[0] : undefined;
+        }
+        return active.find((k) => k.kid === kid);
+    };
+
+    let jwks = await fetchJwks(url, opts);
+    let match = pick(jwks);
+    if (!match) {
+        jwks = await refreshJwks(url, opts);
+        match = pick(jwks);
+    }
+    if (!match) {
+        if (kid === undefined) {
+            throw new Error(
+                `JWKS at ${url}: expected exactly one active signing key but found ${selectActivePublisherKeys(jwks).length}`,
+            );
+        }
+        throw new Error(`JWKS at ${url}: no active signing key with kid="${kid}"`);
+    }
+    return importPublisherJwk(match);
 }
 
 /**

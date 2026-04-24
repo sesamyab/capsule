@@ -85,9 +85,11 @@ export {
   createJwt,
   verifyJwt,
   decodeJwtPayload,
+  decodeJwtHeader,
   createResourceJwt,
   computeProofHash,
   resourceJwtPayloadToResource,
+  type DcaJwtHeader,
 } from "./dca-jwt";
 
 // ============================================================================
@@ -115,14 +117,23 @@ export {
   refreshJwks,
   getActiveIssuerKeys,
   selectActiveKeys,
+  selectActivePublisherKeys,
+  resolvePublisherKey,
   clearJwksCache,
   type Jwk,
   type JwksDocument,
   type ResolvedIssuerKey,
+  type ResolvedPublisherKey,
   type DcaJwksCache,
   type DcaJwksCacheEntry,
   type DcaJwksOptions,
 } from "./dca-jwks";
+
+export {
+  buildPublisherJwk,
+  buildPublisherJwksDocument,
+  type PublisherJwkInput,
+} from "./dca-publisher-jwks";
 
 // ============================================================================
 // DCA Rotation (wrapKey identifiers and derivation)
@@ -200,6 +211,8 @@ export {
   importEcdsaP256PublicKey,
   ecdsaP256Sign,
   ecdsaP256Verify,
+  importEcdsaP256PublicKeyFromJwk,
+  exportEcdsaP256PublicKeyAsJwk,
   exportP256KeyPairPem,
   parsePem,
   importRsaPublicKey,

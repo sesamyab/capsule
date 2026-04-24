@@ -3,7 +3,140 @@
 Protocol and library changes by version. Each entry describes what changed,
 why, and whether it's backwards compatible.
 
-## v0.11 (Latest)
+## v0.12 (Latest)
+
+v0.12 completes the JWKS story. v0.11 let publishers discover **issuer**
+encryption keys via JWKS; v0.12 lets issuers discover **publisher** signing
+keys the same way. Publisher key rotation becomes transparent to issuers --
+no config redeploy required.
+
+### JWKS Support for Publisher Signing Keys
+
+[Backwards compatible]
+
+#### What Changed
+
+`trustedPublisherKeys` entries on `DcaIssuerServerConfig` now accept a
+`jwksUri` as an alternative to `signingKeyPem`:
+
+```ts
+trustedPublisherKeys: {
+  "news.example.com": {
+    jwksUri: "https://news.example.com/.well-known/dca-publishers.json",
+  },
+  "blog.example.com": process.env.BLOG_ES256_PUB!,  // still works
+}
+```
+
+The two are mutually exclusive per entry -- passing both or neither throws
+at construction time. Bare strings remain shorthand for
+`{ signingKeyPem: "..." }`.
+
+On the publisher side, `DcaPublisherConfig.signingKeyId` (new, optional)
+is emitted as the JWT header `kid`. Issuers use that kid to select the
+matching key from the JWKS. Publishers that don't set `signingKeyId`
+produce kid-less JWTs that fall back to "the only active JWKS key" --
+fine for single-key setups, ambiguous during rotation overlap.
+
+A new helper, `buildPublisherJwksDocument`, assembles the document the
+publisher serves at `.well-known/dca-publishers.json`:
+
+```ts
+import { buildPublisherJwksDocument } from '@sesamy/capsule-server';
+
+const jwks = await buildPublisherJwksDocument([
+  { publicKeyPem: currentPublicPem, kid: "sig-2026-04" },
+  { publicKeyPem: previousPublicPem, kid: "sig-2026-03", status: "retired" },
+]);
+// Serve from your own route handler -- the library does not own HTTP.
+```
+
+#### Why
+
+Previously, publisher signing keys were pinned statically into each
+trusting issuer's config (a PEM string per domain). Rotating that key
+was an O(N-issuers) coordination exercise: every issuer had to update
+config and redeploy before the old key could be retired. Meanwhile,
+issuer-side encryption key rotation (added in v0.11) was already a no-op
+for publishers via JWKS. v0.12 closes the asymmetry.
+
+The cost: an HTTP lookup the first time a given publisher's JWKS is
+needed. After that, the existing `fetchJwks` cache (pluggable backend,
+stale-if-error, `Cache-Control: max-age`) is shared between both
+directions -- so the hot path is still in-process.
+
+#### Key Selection Rules
+
+A JWKS key is active for publisher signing when:
+
+- `kid` is present
+- `kty` is `EC` with `crv: "P-256"` (ES256)
+- `use` is `"sig"` or absent (keys with `use: "enc"` are ignored)
+- `status` is not `"retired"` (non-standard flag, honored if present)
+
+RSA signing keys are not supported -- DCA JWTs are fixed to ES256.
+
+#### Force-Refresh on Unknown Kid
+
+When a JWT arrives with a `kid` that isn't in the cached JWKS, the cache
+is force-refreshed once before failing -- mirrors the issuer-key unknown-
+kid handling added in v0.11. Covers the race where a publisher rotated
+between cache fetches.
+
+#### Usage
+
+Publisher:
+
+```ts
+const publisher = createDcaPublisher({
+  domain: "news.example.com",
+  signingKeyPem: process.env.PUBLISHER_SIGNING_KEY!,
+  signingKeyId: "sig-2026-04",
+  rotationSecret: process.env.PERIOD_SECRET!,
+});
+
+// Build the JWKS once at startup, serve from your own route.
+const jwks = await buildPublisherJwksDocument([{
+  publicKeyPem: process.env.PUBLISHER_PUBLIC_KEY!,
+  kid: "sig-2026-04",
+}]);
+app.get("/.well-known/dca-publishers.json", (_, res) =>
+  res.set("Cache-Control", "public, max-age=3600").json(jwks),
+);
+```
+
+Issuer:
+
+```ts
+const issuer = createDcaIssuer({
+  issuerName: "sesamy",
+  privateKeyPem: process.env.ISSUER_PRIVATE_KEY!,
+  keyId: process.env.ISSUER_KEY_ID!,
+  trustedPublisherKeys: {
+    "news.example.com": {
+      jwksUri: "https://news.example.com/.well-known/dca-publishers.json",
+    },
+  },
+});
+```
+
+#### New Exports
+
+- `buildPublisherJwk(input)` -- one JWK from a public PEM.
+- `buildPublisherJwksDocument(inputs)` -- wraps one or more JWKs in `{ keys: [...] }`.
+- `selectActivePublisherKeys(jwks)` -- filter helper used by the resolver.
+- `resolvePublisherKey(url, kid, opts)` -- fetch + pick + import + force-refresh on miss.
+- `decodeJwtHeader(jwt)` -- header peek for kid extraction (issuer-side).
+- `importEcdsaP256PublicKeyFromJwk`, `exportEcdsaP256PublicKeyAsJwk` -- low-level crypto.
+
+#### Recommended, Not Required
+
+JWKS is recommended for any deployment where multiple issuers trust the
+same publisher or where rotation automation matters. Small, controlled
+deployments where both sides are operated by the same team can keep
+using pinned `signingKeyPem` -- simpler, no network hop on verify.
+
+## v0.11
 
 v0.11 adds JWKS-based resolution of issuer public keys and a pluggable cache
 with stale-if-error semantics. Fully additive -- existing `publicKeyPem`
