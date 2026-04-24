@@ -1,5 +1,13 @@
 # @sesamy/capsule-server
 
+## 0.13.0
+
+### Minor Changes
+
+- [`723651d`](https://github.com/sesamyab/capsule/commit/723651dfa446baf5553e0d35cc6744d8489d182a) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Add a publisher jwks
+
+- [#34](https://github.com/sesamyab/capsule/pull/34) [`ae6651d`](https://github.com/sesamyab/capsule/commit/ae6651ddb645c92041de6efddc2841c7c9344f04) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Add cli for creating keys
+
 ## 0.12.0
 
 ### Minor Changes

@@ -1,5 +1,16 @@
 # @sesamy/demo-astro
 
+## 0.8.0
+
+### Minor Changes
+
+- [`723651d`](https://github.com/sesamyab/capsule/commit/723651dfa446baf5553e0d35cc6744d8489d182a) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Add a publisher jwks
+
+### Patch Changes
+
+- Updated dependencies [[`723651d`](https://github.com/sesamyab/capsule/commit/723651dfa446baf5553e0d35cc6744d8489d182a), [`ae6651d`](https://github.com/sesamyab/capsule/commit/ae6651ddb645c92041de6efddc2841c7c9344f04)]:
+  - @sesamy/capsule-server@0.13.0
+
 ## 0.7.1
 
 ### Patch Changes
