@@ -305,7 +305,42 @@ await refreshJwks("https://sesamy.com/.well-known/dca-issuers.json", {
 });
 ```
 
-## Key Generation
+## Generating keys
+
+The package ships with a small CLI that prints keys and secrets to stdout. Nothing is written to disk — pipe or redirect yourself.
+
+```bash
+# Publisher ECDSA P-256 keypair (PEM). Private for signing, public shared with issuers.
+npx @sesamy/capsule-server generate-publisher-keys
+
+# Issuer ECDH P-256 keypair. Private as PEM, public as a JWK
+# (use: "enc", alg: "ECDH-ES", kid: "enc-<unix-ms>") ready for .well-known/dca-issuers.json.
+npx @sesamy/capsule-server generate-issuer-keys
+
+# 32 random bytes, base64. Publisher-only rotation secret.
+npx @sesamy/capsule-server generate-period-secret
+
+# Publisher keys (private + public) + period secret, formatted as .env lines.
+npx @sesamy/capsule-server generate-all
+```
+
+Every subcommand accepts `--json` for machine-readable output:
+
+```bash
+npx @sesamy/capsule-server generate-issuer-keys --json | jq -r .privateKeyPem > issuer.pem
+```
+
+End-to-end first-time setup:
+
+```bash
+# Publisher side: seed .env.local. PUBLISHER_PUBLIC_KEY in there is what you hand to issuers.
+npx @sesamy/capsule-server generate-all >> .env.local
+
+# Issuer side: keep the private PEM, publish the JWK at .well-known/dca-issuers.json.
+npx @sesamy/capsule-server generate-issuer-keys
+```
+
+### Programmatic equivalent
 
 ```typescript
 import {
