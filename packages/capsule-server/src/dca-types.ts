@@ -262,6 +262,13 @@ export interface DcaPublisherConfig {
     domain: string;
     /** ES256 (ECDSA P-256) private key PEM — for signing resourceJWT */
     signingKeyPem: string;
+    /**
+     * Optional identifier for the signing key.
+     * When set, added as the JWT header `kid` and required by JWKS-based
+     * issuer verification. Match this value to a `kid` in the JWKS the
+     * publisher publishes at `.well-known/dca-publishers.json`.
+     */
+    signingKeyId?: string;
     /** Rotation secret for wrapKey derivation (base64 string or raw bytes) */
     rotationSecret: Uint8Array | string;
     /**
@@ -394,10 +401,28 @@ export interface DcaRenderResult {
  * Allows fine-grained control over what each publisher is permitted to claim
  * in unlock requests. Every publisher MUST be explicitly listed — there is no
  * fallback / wildcard lookup.
+ *
+ * Exactly one of `signingKeyPem` or `jwksUri` must be provided:
+ *  - `signingKeyPem` — static pinned ES256 public key. Simpler, no network
+ *     hops at verify time, but publisher key rotation requires redeploying
+ *     every issuer.
+ *  - `jwksUri` — JWKS URL (typically `https://<publisher>/.well-known/dca-publishers.json`).
+ *     Publisher rotation is picked up automatically via cache refresh.
  */
 export interface DcaTrustedPublisher {
-    /** ES256 public key PEM for JWT verification */
-    signingKeyPem: string;
+    /**
+     * ES256 public key PEM for JWT verification.
+     * Mutually exclusive with {@link jwksUri}.
+     */
+    signingKeyPem?: string;
+    /**
+     * JWKS URL resolving publisher signing keys (RFC 7517). Active keys
+     * must have `kty: "EC"`, `crv: "P-256"`, and either `use: "sig"` or
+     * an absent `use` claim. The issuer selects a key by `kid` from the
+     * JWT header (with force-refresh on miss).
+     * Mutually exclusive with {@link signingKeyPem}.
+     */
+    jwksUri?: string;
     /**
      * Optional allowlist of resourceId patterns this publisher may claim.
      *
@@ -420,6 +445,20 @@ export interface DcaIssuerServerConfig {
     privateKeyPem: string;
     /** Key ID that matches the publisher's keyId for this issuer */
     keyId: string;
+    /**
+     * Cache backend for JWKS documents resolved via a trusted publisher's
+     * `jwksUri`. Shared by all JWKS-configured publishers in this issuer.
+     * When omitted, an in-memory cache scoped to the module is used.
+     */
+    jwksCache?: import("./dca-jwks").DcaJwksCache;
+    /**
+     * Stale-if-error window in seconds for publisher JWKS. Default: 30 days.
+     */
+    jwksStaleWindowSeconds?: number;
+    /**
+     * Timeout in milliseconds for JWKS HTTP fetches. Default: 5000.
+     */
+    jwksFetchTimeoutMs?: number;
     /**
      * Trusted-publisher allowlist.
      *

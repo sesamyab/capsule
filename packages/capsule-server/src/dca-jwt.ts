@@ -34,29 +34,45 @@ import type {
 // JWT creation / verification
 // ============================================================================
 
-/** Fixed JWT header for DCA (ES256) */
-const JWT_HEADER = toBase64Url(encodeUtf8(JSON.stringify({ alg: "ES256", typ: "JWT" })));
+/** DCA JWT header fields (ES256). `kid` is included when signed by a
+ *  publisher configured with a signing key id. */
+export interface DcaJwtHeader {
+  alg: "ES256";
+  typ: "JWT";
+  kid?: string;
+}
+
+/** Default header for backwards compatibility (no kid). */
+const DEFAULT_HEADER_B64 = toBase64Url(encodeUtf8(JSON.stringify({ alg: "ES256", typ: "JWT" })));
+
+function encodeHeader(kid: string | undefined): string {
+  if (!kid) return DEFAULT_HEADER_B64;
+  return toBase64Url(encodeUtf8(JSON.stringify({ alg: "ES256", typ: "JWT", kid })));
+}
 
 /**
  * Create an ES256 JWT from a payload object.
  *
  * @param payload - Any JSON-serializable object
  * @param privateKey - ECDSA P-256 private key (CryptoKey or PEM string)
+ * @param opts - Optional header fields (e.g. kid to help JWKS-based verifiers pick a key)
  * @returns Signed JWT string (header.payload.signature)
  */
 export async function createJwt(
   payload: unknown,
   privateKey: WebCryptoKey | string,
+  opts?: { kid?: string },
 ): Promise<string> {
   const key = typeof privateKey === "string"
     ? await importEcdsaP256PrivateKey(privateKey)
     : privateKey;
 
+  const headerB64 = encodeHeader(opts?.kid);
   const payloadB64 = toBase64Url(encodeUtf8(JSON.stringify(payload)));
-  const signingInput = encodeUtf8(`${JWT_HEADER}.${payloadB64}`);
+  const signingInput = encodeUtf8(`${headerB64}.${payloadB64}`);
   const signature = await ecdsaP256Sign(key, signingInput);
 
-  return `${JWT_HEADER}.${payloadB64}.${toBase64Url(signature)}`;
+  return `${headerB64}.${payloadB64}.${toBase64Url(signature)}`;
 }
 
 /**
@@ -113,6 +129,18 @@ export function decodeJwtPayload<T = unknown>(jwt: string): T {
   return JSON.parse(decodeUtf8(fromBase64Url(parts[1]))) as T;
 }
 
+/**
+ * Decode a JWT header without verifying the signature.
+ * Used on the issuer side to extract `kid` before JWKS-based key lookup.
+ */
+export function decodeJwtHeader(jwt: string): DcaJwtHeader {
+  const parts = jwt.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Malformed JWT: expected 3 parts");
+  }
+  return JSON.parse(decodeUtf8(fromBase64Url(parts[0]))) as DcaJwtHeader;
+}
+
 // ============================================================================
 // SHA-256 integrity proofs
 // ============================================================================
@@ -138,6 +166,7 @@ export async function computeProofHash(wrappedBlobBase64Url: string): Promise<st
 export async function createResourceJwt(
   resource: DcaResource,
   signingKey: WebCryptoKey | string,
+  opts?: { kid?: string },
 ): Promise<string> {
   const payload: DcaResourceJwtPayload = {
     iss: resource.domain,
@@ -147,7 +176,7 @@ export async function createResourceJwt(
     scopes: resource.scopes,
     data: resource.data,
   };
-  return createJwt(payload, signingKey);
+  return createJwt(payload, signingKey, opts);
 }
 
 /**

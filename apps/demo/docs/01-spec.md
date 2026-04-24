@@ -141,7 +141,7 @@ The DCA manifest is embedded in a single `<script>` tag. It holds all metadata, 
 
 When the client calls the issuer's unlock endpoint, the issuer performs a multi-step verification before returning keys:
 
-1. Optionally verify `resourceJWT` signature (ES256) using the publisher's public key, looked up by `resource.domain`.
+1. Optionally verify `resourceJWT` signature (ES256) using the publisher's public key, looked up by `resource.domain`. The lookup is either a pinned PEM keyed by domain, or — when the issuer is JWKS-configured — a `kid`-indexed lookup against the JWKS at the publisher's `.well-known/dca-publishers.json` (see [Publisher Key Resolution](#publisher-key-resolution-jwks)).
 2. Read `scope` from each `keys` entry.
 3. Unwrap keys using the issuer's ECDH private key, providing `scope` as AAD (GCM auth tag validates the blob was wrapped for this access tier).
 4. Return keys to the client -- either as plaintext (direct) or RSA-OAEP wrapped (client-bound).
@@ -320,6 +320,62 @@ observer.observe(document.body, {
   subtree: true 
 });
 ```
+
+## Publisher Key Resolution (JWKS)
+
+The issuer needs the publisher's ES256 public key to verify `resourceJWT` (and share link tokens). Two resolution strategies are supported, symmetric to how publishers resolve issuer encryption keys:
+
+| Strategy | When it fits |
+| -------- | ------------ |
+| `signingKeyPem` (pinned) | Small deployments where you control both sides. Publisher key rotation requires updating every issuer's config. |
+| `jwksUri` (discovery) | Multiple issuers trust the same publisher, or rotation automation matters. Issuer fetches the JWKS once, caches it, and force-refreshes on unknown kid. |
+
+### Publisher JWKS Endpoint
+
+Publishers publishing via JWKS serve an [RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517) document at `.well-known/dca-publishers.json` on their domain. A typical document:
+
+```json
+{
+  "keys": [
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "use": "sig",
+      "alg": "ES256",
+      "kid": "sig-2026-04",
+      "x": "…",
+      "y": "…"
+    }
+  ]
+}
+```
+
+When publishing via JWKS, the publisher also sets a `kid` header on every signed JWT so the issuer can pick the right key:
+
+```
+{"alg":"ES256","typ":"JWT","kid":"sig-2026-04"}
+```
+
+During a rotation, the publisher includes both keys in the JWKS (old + new) and switches signing to the new `kid`. Issuers verify against whichever kid the JWT advertises.
+
+### JWKS Selection Rules
+
+A JWKS entry is considered active for publisher signing when:
+
+- `kid` is present
+- `kty` is `EC` with `crv: "P-256"` (ES256)
+- `use` is `"sig"` or absent
+- `status` is not `"retired"` (non-standard, honored if present)
+
+RSA signing keys are not supported -- DCA signatures are fixed to ES256.
+
+### Force-Refresh on Unknown Kid
+
+When the JWT header carries a `kid` that isn't in the issuer's cached JWKS, the issuer force-refreshes the JWKS once before failing. This handles the common case where a publisher rotated between the last cache fetch and now. If the kid is still missing after refresh, verification fails with a clear error.
+
+### Backwards Compatibility
+
+JWTs without a `kid` header continue to work against `signingKeyPem`-pinned publishers unchanged. JWKS-configured publishers that don't set `signingKeyId` on their publisher instance produce kid-less JWTs too, which fall back to "the only active key in the JWKS" -- handy for single-key setups but ambiguous during rotation overlap. Setting `signingKeyId` is strongly recommended for any JWKS-configured publisher.
 
 ## Share Link Tokens
 
