@@ -16,6 +16,11 @@ jobs:
         run: |
           curl -fsSL -XPOST \
             -H 'content-type:application/json' \
+            -H 'User-Agent: sesamyab-capsule (https://github.com/sesamyab/capsule)' \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5 \
+            --retry-connrefused \
             "https://packagist.org/api/update-package?username=${PACKAGIST_USERNAME}&apiToken=${PACKAGIST_API_TOKEN}" \
             -d '{"repository":{"url":"https://github.com/sesamyab/capsule"}}'
         env:
