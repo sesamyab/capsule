@@ -93,7 +93,15 @@ final class Publisher
             if (isset($issuerData[$issuerConfig->issuerName])) {
                 throw new PublisherException("Duplicate issuerName \"{$issuerConfig->issuerName}\" in issuers");
             }
-            $resolvedKeys = $this->resolveIssuerKeys($issuerConfig);
+            try {
+                $resolvedKeys = $this->resolveIssuerKeys($issuerConfig);
+            } catch (\InvalidArgumentException $e) {
+                throw new PublisherException(
+                    "Error resolving keys for issuer \"{$issuerConfig->issuerName}\": " . $e->getMessage(),
+                    0,
+                    $e,
+                );
+            }
             [$contentNamesToWrap, $isNameGranular] = $this->resolveContentNamesForIssuer(
                 $issuerConfig,
                 $options->contentItems,
@@ -110,12 +118,7 @@ final class Publisher
                 $wrapAad = $scope;
 
                 foreach ($resolvedKeys as $issuerKey) {
-                    $wrappedContentKey = Wrap::wrap(
-                        $contentKey,
-                        $issuerKey['publicKeyPem'],
-                        $issuerKey['algorithm'],
-                        $wrapAad,
-                    );
+                    $wrappedContentKey = $this->wrapForIssuer($contentKey, $issuerKey, $wrapAad, $issuerConfig);
 
                     $entry = [
                         'contentName' => $contentName,
@@ -136,12 +139,7 @@ final class Publisher
                             );
                             $wrapKeysOut[] = [
                                 'kid' => $version['kid'],
-                                'key' => Wrap::wrap(
-                                    $wrapKey,
-                                    $issuerKey['publicKeyPem'],
-                                    $issuerKey['algorithm'],
-                                    $wrapAad,
-                                ),
+                                'key' => $this->wrapForIssuer($wrapKey, $issuerKey, $wrapAad, $issuerConfig),
                             ];
                         }
                         $entry['wrapKeys'] = $wrapKeysOut;
@@ -247,6 +245,31 @@ final class Publisher
     }
 
     /**
+     * Wrap key material for an issuer, normalising InvalidArgumentException
+     * (malformed PEM, unknown algorithm, etc.) to PublisherException with the
+     * issuer name attached.
+     *
+     * @param array{kid:?string, algorithm:string, publicKeyPem:string} $issuerKey
+     */
+    private function wrapForIssuer(string $plaintext, array $issuerKey, ?string $aad, IssuerConfig $issuerConfig): string
+    {
+        try {
+            return Wrap::wrap(
+                $plaintext,
+                $issuerKey['publicKeyPem'],
+                $issuerKey['algorithm'],
+                $aad,
+            );
+        } catch (\InvalidArgumentException $e) {
+            throw new PublisherException(
+                "Error wrapping key for issuer \"{$issuerConfig->issuerName}\": " . $e->getMessage(),
+                0,
+                $e,
+            );
+        }
+    }
+
+    /**
      * Resolve the issuer's encryption key(s) — either the pinned PEM or the
      * active set from a JWKS URL.
      *
@@ -261,6 +284,11 @@ final class Publisher
                 );
             }
             $resolved = $this->config->issuerJwksResolver->getActiveIssuerKeys($issuerConfig->jwksUri);
+            if (empty($resolved)) {
+                throw new PublisherException(
+                    "Issuer \"{$issuerConfig->issuerName}\" jwksUri \"{$issuerConfig->jwksUri}\" returned no active keys",
+                );
+            }
             // Normalise shape (kid is non-null for JWKS-resolved keys).
             return array_map(
                 static fn (array $k): array => [

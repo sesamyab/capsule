@@ -48,6 +48,10 @@ final class CurlHttpClient implements HttpClient
             CURLOPT_CONNECTTIMEOUT_MS => $timeoutMs,
             CURLOPT_HTTPHEADER => $headerLines,
             CURLOPT_HEADERFUNCTION => function ($_ch, string $line) use (&$responseHeaders): int {
+                if (stripos($line, 'HTTP/') === 0) {
+                    $responseHeaders = [];
+                    return strlen($line);
+                }
                 $colon = strpos($line, ':');
                 if ($colon !== false) {
                     $name = strtolower(trim(substr($line, 0, $colon)));
