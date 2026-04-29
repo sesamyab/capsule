@@ -38,7 +38,7 @@ final class CurlHttpClient implements HttpClient
 
         $allowedProtocols = CURLPROTO_HTTP | CURLPROTO_HTTPS;
         $responseHeaders = [];
-        curl_setopt_array($ch, [
+        $optionsSet = curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
@@ -57,6 +57,10 @@ final class CurlHttpClient implements HttpClient
                 return strlen($line);
             },
         ]);
+        if ($optionsSet === false) {
+            curl_close($ch);
+            throw new PublisherException("CurlHttpClient: failed to configure cURL options for $url");
+        }
 
         $body = curl_exec($ch);
         if ($body === false) {

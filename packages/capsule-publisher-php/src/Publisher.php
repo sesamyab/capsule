@@ -189,23 +189,32 @@ final class Publisher
             'issuers' => (object) $issuerData,
         ];
 
-        // The PHP json_encode default escapes "/" too; force the JS-style behavior
-        // (only </ → <\/ as a script-breakout XSS guard) by passing
-        // JSON_UNESCAPED_SLASHES and then re-applying the </ → <\/ replacement.
+        // Canonical (non-HTML) JSON for RenderResult::jsonString() — preserves
+        // the (object) casts so empty content/issuers maps serialise as {}.
         $manifestJson = json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if ($manifestJson === false) {
             throw new PublisherException('Failed to JSON-encode manifest: ' . json_last_error_msg());
         }
-        $escapedForScript = str_replace('</', '<\\/', $manifestJson);
-        $manifestScript = '<script type="application/json" class="dca-manifest">' . $escapedForScript . '</script>';
+
+        // JSON_HEX_TAG hex-escapes every "<" and ">" byte, which makes the
+        // payload safe to embed inside a <script> element regardless of case
+        // or surrounding context (e.g. </Script>, <!--, <script).
+        $manifestScriptJson = json_encode(
+            $manifest,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG,
+        );
+        if ($manifestScriptJson === false) {
+            throw new PublisherException('Failed to JSON-encode manifest: ' . json_last_error_msg());
+        }
+        $manifestScript = '<script type="application/json" class="dca-manifest">' . $manifestScriptJson . '</script>';
 
         // Drop stdClass wrappers from the returned array shape so callers see a
-        // plain associative array (the (object) cast was only to force {} for
-        // empty maps in the JSON encoding, which is no longer needed downstream).
+        // plain associative array. The canonical JSON (with empty maps as {})
+        // is preserved in $manifestJson and surfaced via RenderResult::jsonString().
         $manifest['content'] = $content;
         $manifest['issuers'] = $issuerData;
 
-        return new RenderResult($manifest, $manifestScript);
+        return new RenderResult($manifest, $manifestScript, $manifestJson);
     }
 
     /**

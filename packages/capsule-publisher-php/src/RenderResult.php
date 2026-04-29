@@ -17,15 +17,12 @@ final class RenderResult
     public function __construct(
         public readonly array $manifest,
         public readonly string $manifestScript,
+        private readonly string $manifestJson,
     ) {
     }
 
     public function jsonString(): string
     {
-        $json = json_encode($this->manifest, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-        if ($json === false) {
-            throw new \RuntimeException('Failed to JSON-encode manifest: ' . json_last_error_msg());
-        }
-        return $json;
+        return $this->manifestJson;
     }
 }
