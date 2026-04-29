@@ -53,6 +53,12 @@ final class Aes
      */
     public static function gcmDecrypt(string $ciphertextWithTag, string $key, string $iv, ?string $aad = null): string
     {
+        if (strlen($key) !== Random::AES_KEY_SIZE) {
+            throw new \InvalidArgumentException('AES-256-GCM key must be 32 bytes');
+        }
+        if (strlen($iv) !== Random::GCM_IV_SIZE) {
+            throw new \InvalidArgumentException('AES-GCM IV must be 12 bytes');
+        }
         if (strlen($ciphertextWithTag) < Random::GCM_TAG_LENGTH) {
             throw new \InvalidArgumentException('ciphertext shorter than GCM tag');
         }

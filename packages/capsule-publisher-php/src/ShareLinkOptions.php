@@ -25,6 +25,15 @@ final class ShareLinkOptions
         public readonly ?string $jti = null,
         public readonly ?array $data = null,
     ) {
+        if ($resourceId === '') {
+            throw new \InvalidArgumentException('resourceId must be a non-empty string');
+        }
+        if ($expiresIn <= 0) {
+            throw new \InvalidArgumentException('expiresIn must be > 0');
+        }
+        if ($maxUses !== null && $maxUses <= 0) {
+            throw new \InvalidArgumentException('maxUses must be > 0');
+        }
         $hasNames = $contentNames !== null && $contentNames !== [];
         $hasScopes = $scopes !== null && $scopes !== [];
         if (!$hasNames && !$hasScopes) {

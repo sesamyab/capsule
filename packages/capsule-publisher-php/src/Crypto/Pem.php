@@ -11,6 +11,9 @@ final class Pem
      */
     public static function parse(string $pem): string
     {
+        if (preg_match('/-----BEGIN ([A-Z 0-9]+)-----[\s\S]*?-----END ([A-Z 0-9]+)-----/', $pem, $m) !== 1 || $m[1] !== $m[2]) {
+            throw new \InvalidArgumentException('Invalid PEM input');
+        }
         $stripped = preg_replace('/-----BEGIN [A-Z 0-9]+-----|-----END [A-Z 0-9]+-----|\s+/', '', $pem);
         if ($stripped === null || $stripped === '') {
             throw new \InvalidArgumentException('Invalid PEM input');

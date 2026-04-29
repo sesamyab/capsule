@@ -90,6 +90,9 @@ final class Publisher
         // For each issuer: wrap contentKey + (optionally) wrapKeys for each issuer key.
         $issuerData = [];
         foreach ($options->issuers as $issuerConfig) {
+            if (isset($issuerData[$issuerConfig->issuerName])) {
+                throw new PublisherException("Duplicate issuerName \"{$issuerConfig->issuerName}\" in issuers");
+            }
             $resolvedKeys = $this->resolveIssuerKeys($issuerConfig);
             [$contentNamesToWrap, $isNameGranular] = $this->resolveContentNamesForIssuer(
                 $issuerConfig,

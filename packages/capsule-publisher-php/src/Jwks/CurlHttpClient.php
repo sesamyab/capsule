@@ -18,6 +18,14 @@ final class CurlHttpClient implements HttpClient
             throw new PublisherException('CurlHttpClient requires the curl extension');
         }
 
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        if ($scheme !== 'http' && $scheme !== 'https') {
+            throw new PublisherException("CurlHttpClient: only http(s) URLs are allowed, got: $url");
+        }
+        if ($timeoutMs <= 0) {
+            throw new PublisherException("CurlHttpClient: timeoutMs must be positive, got: $timeoutMs");
+        }
+
         $ch = curl_init($url);
         if ($ch === false) {
             throw new PublisherException("curl_init failed for $url");
@@ -28,11 +36,14 @@ final class CurlHttpClient implements HttpClient
             $headerLines[] = $name . ': ' . $value;
         }
 
+        $allowedProtocols = CURLPROTO_HTTP | CURLPROTO_HTTPS;
         $responseHeaders = [];
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
+            CURLOPT_PROTOCOLS => $allowedProtocols,
+            CURLOPT_REDIR_PROTOCOLS => $allowedProtocols,
             CURLOPT_TIMEOUT_MS => $timeoutMs,
             CURLOPT_CONNECTTIMEOUT_MS => $timeoutMs,
             CURLOPT_HTTPHEADER => $headerLines,

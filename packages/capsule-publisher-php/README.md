@@ -11,7 +11,7 @@ Mirrors the `createDcaPublisher` surface from the JS package:
 
 ## Installation
 
-```
+```bash
 composer require sesamy/capsule-publisher
 ```
 
@@ -91,7 +91,7 @@ The existing JS [.github/workflows/unit-tests.yml](../../.github/workflows/unit-
 
 Run the whole loop locally and commit the regenerated fixtures with the change:
 
-```
+```bash
 composer test:interop
 ```
 
@@ -101,7 +101,7 @@ This rebuilds `@sesamy/capsule-server`, regenerates the JS-emitted fixtures, has
 
 Run from the repo root (composer.json lives there so the JS workspace and PHP package can stay in lockstep):
 
-```
+```bash
 composer install
 composer test                  # PHPUnit only (uses committed fixtures)
 composer test:interop          # full PHP ↔ JS loop with fresh fixtures
@@ -116,7 +116,7 @@ To cut a PHP release:
 1. Make sure `composer test:interop` is green on `main`.
 2. Decide the next version following SemVer (`vMAJOR.MINOR.PATCH`).
 3. Tag and push:
-   ```
+   ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```

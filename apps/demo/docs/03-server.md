@@ -869,10 +869,23 @@ use Sesamy\Capsule\Publisher\{
     IssuerConfig,
 };
 
+function requireEnv(string $name): string
+{
+    $value = getenv($name);
+    if (!is_string($value) || $value === '') {
+        throw new RuntimeException("Missing required environment variable: $name");
+    }
+    return $value;
+}
+
+$signingKeyPem = requireEnv('PUBLISHER_ES256_PRIVATE_KEY');
+$rotationSecret = requireEnv('ROTATION_SECRET');
+$issuerPublicKeyPem = requireEnv('SESAMY_ECDH_PUBLIC_KEY');
+
 $publisher = new Publisher(new PublisherConfig(
     domain: 'news.example.com',
-    signingKeyPem: getenv('PUBLISHER_ES256_PRIVATE_KEY'),
-    rotationSecret: getenv('ROTATION_SECRET'),     // base64
+    signingKeyPem: $signingKeyPem,
+    rotationSecret: $rotationSecret,     // base64
     signingKeyId: '2025-10',
 ));
 
@@ -885,7 +898,7 @@ $result = $publisher->render(new RenderOptions(
         new IssuerConfig(
             issuerName: 'sesamy',
             unlockUrl: 'https://api.sesamy.com/unlock',
-            publicKeyPem: getenv('SESAMY_ECDH_PUBLIC_KEY'),
+            publicKeyPem: $issuerPublicKeyPem,
             keyId: '2025-10',
             scopes: ['premium'],
         ),
@@ -930,14 +943,19 @@ use Sesamy\Capsule\Publisher\Jwks\PublisherJwks;
 header('Content-Type: application/json');
 header('Cache-Control: max-age=3600');
 
+$publicKeyPem = getenv('PUBLISHER_ES256_PUBLIC_KEY');
+if (!is_string($publicKeyPem) || $publicKeyPem === '') {
+    throw new RuntimeException('Missing PUBLISHER_ES256_PUBLIC_KEY');
+}
+
 echo json_encode(PublisherJwks::buildPublisherJwksDocument([
     [
-        'publicKeyPem' => getenv('PUBLISHER_ES256_PUBLIC_KEY'),
+        'publicKeyPem' => $publicKeyPem,
         'kid' => '2025-10',
     ],
     // During rotation, list both keys; mark the old one as retired:
     // [
-    //     'publicKeyPem' => getenv('PUBLISHER_ES256_PUBLIC_KEY_PREV'),
+    //     'publicKeyPem' => $previousPublicKeyPem, // validated with is_string() the same way
     //     'kid' => '2025-09',
     //     'status' => 'retired',
     // ],

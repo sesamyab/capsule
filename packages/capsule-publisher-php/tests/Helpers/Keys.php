@@ -17,10 +17,16 @@ final class Keys
     {
         $kp = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC, 'curve_name' => 'prime256v1']);
         if ($kp === false) {
-            throw new \RuntimeException('Failed to generate ECDSA P-256 keypair');
+            throw new \RuntimeException('Failed to generate ECDSA P-256 keypair: ' . (openssl_error_string() ?: 'unknown error'));
         }
-        openssl_pkey_export($kp, $privatePem);
-        $publicPem = openssl_pkey_get_details($kp)['key'];
+        if (!openssl_pkey_export($kp, $privatePem) || !is_string($privatePem) || $privatePem === '') {
+            throw new \RuntimeException('Failed to export ECDSA P-256 private key: ' . (openssl_error_string() ?: 'unknown error'));
+        }
+        $details = openssl_pkey_get_details($kp);
+        if ($details === false || !isset($details['key'])) {
+            throw new \RuntimeException('Failed to read ECDSA P-256 public key details: ' . (openssl_error_string() ?: 'unknown error'));
+        }
+        $publicPem = $details['key'];
         return ['privatePem' => $privatePem, 'publicPem' => $publicPem];
     }
 
@@ -40,10 +46,16 @@ final class Keys
     {
         $kp = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_RSA, 'private_key_bits' => $bits]);
         if ($kp === false) {
-            throw new \RuntimeException('Failed to generate RSA keypair');
+            throw new \RuntimeException('Failed to generate RSA keypair: ' . (openssl_error_string() ?: 'unknown error'));
         }
-        openssl_pkey_export($kp, $privatePem);
-        $publicPem = openssl_pkey_get_details($kp)['key'];
+        if (!openssl_pkey_export($kp, $privatePem) || !is_string($privatePem) || $privatePem === '') {
+            throw new \RuntimeException('Failed to export RSA private key: ' . (openssl_error_string() ?: 'unknown error'));
+        }
+        $details = openssl_pkey_get_details($kp);
+        if ($details === false || !isset($details['key'])) {
+            throw new \RuntimeException('Failed to read RSA public key details: ' . (openssl_error_string() ?: 'unknown error'));
+        }
+        $publicPem = $details['key'];
         return ['privatePem' => $privatePem, 'publicPem' => $publicPem];
     }
 }

@@ -41,8 +41,8 @@ final class PublisherJwks
             throw new \InvalidArgumentException('Publisher signing key must be on P-256');
         }
 
-        $x = self::leftPad((string) ($details['ec']['x'] ?? ''), 32);
-        $y = self::leftPad((string) ($details['ec']['y'] ?? ''), 32);
+        $x = self::normalizeCoordinate($details['ec']['x'] ?? null, 'x');
+        $y = self::normalizeCoordinate($details['ec']['y'] ?? null, 'y');
 
         $jwk = [
             'kty' => 'EC',
@@ -87,11 +87,17 @@ final class PublisherJwks
         return ['keys' => $built];
     }
 
-    private static function leftPad(string $bytes, int $length): string
+    private static function normalizeCoordinate(mixed $coord, string $name): string
     {
-        if (strlen($bytes) >= $length) {
-            return $bytes;
+        if (!is_string($coord) || $coord === '') {
+            throw new \InvalidArgumentException("EC coordinate '$name' is missing or empty");
         }
-        return str_repeat("\x00", $length - strlen($bytes)) . $bytes;
+        if (strlen($coord) > 32) {
+            throw new \InvalidArgumentException("EC coordinate '$name' exceeds 32 bytes for P-256");
+        }
+        if (strlen($coord) === 32) {
+            return $coord;
+        }
+        return str_repeat("\x00", 32 - strlen($coord)) . $coord;
     }
 }
