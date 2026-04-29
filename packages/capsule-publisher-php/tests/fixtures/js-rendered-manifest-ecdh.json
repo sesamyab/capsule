@@ -1,0 +1,54 @@
+{
+  "resourceId": "article-interop-1",
+  "plaintext": "<p>Premium body — interop fixture</p>",
+  "issuerName": "interop",
+  "issuerAlgorithm": "ECDH-P256",
+  "manifest": {
+    "version": "0.10",
+    "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1pbnRlcm9wLTEiLCJpYXQiOjE3Nzc0NDc1MjksImp0aSI6IjV6dER2SERaMnlieVNMVkZVX25zV1EiLCJzY29wZXMiOlsicHJlbWl1bSJdLCJkYXRhIjp7fX0.pm2-I1nacoVUFNDYG1LYypEsvlWPic6ecEuOfwoh4tR4x-dTJ65xwpZAASmi23kXG3j7a5h1oUs3OgjVTWySWw",
+    "content": {
+      "bodytext": {
+        "contentType": "text/html",
+        "iv": "04IyvSuzMUdggZIQ",
+        "aad": "interop.example.com|article-interop-1|bodytext|premium",
+        "ciphertext": "Oov_rX2lKbPTuN8NLHaekFQUwSC-sFnc0lpczUrMRtYOFSmYh62G4LEleEll3x8ILP7MB3GdHQ",
+        "wrappedContentKey": [
+          {
+            "kid": "260429T07",
+            "iv": "ZKqaQqMsPeLu2wCf",
+            "ciphertext": "p7hvLnAB28bqdpbow5e4hQG2p4ulDwWKtr8VR4uWKoQ7uyL-HcWX0LwSouypUnf6"
+          },
+          {
+            "kid": "260429T08",
+            "iv": "RRqPq81Q4Po3XTV1",
+            "ciphertext": "Rg24dh68dHPVk09IGSc8ug9XSjhw-_r_cJZUGrGm8_ROjmlmpu3iS-5zZ0KIa5om"
+          }
+        ]
+      }
+    },
+    "issuers": {
+      "interop": {
+        "unlockUrl": "https://issuer.example/unlock",
+        "keyId": "iss-ecdh-1",
+        "keys": [
+          {
+            "contentName": "bodytext",
+            "scope": "premium",
+            "kid": "iss-ecdh-1",
+            "contentKey": "BA8h0u6GCsvr1Wg2yDk-F76BpT4O8aDRkqZZbzMYboggDtirjL4JjJZLRLmMWWRGqQ4b1Y6ooqfZp2kklStQalQ5MbWdpdU7zCU021PXqnxJpWlzDZHDonm5fKd7DwYkEXD2NKTySuZkEpM9vH9UrPvm3EZUWNbN_hHd_Pw",
+            "wrapKeys": [
+              {
+                "kid": "260429T07",
+                "key": "BMvPLPjWmNI8CHSkwNv8tlzj-wMrbivkbNiNwih1lvH8p6wYnlnX-Fk_N0grc90gy78UuOcJabu98Xyl69xULhWirhDRA4HPi54quQzQkaJXUdF9zEJfsZ0PxOk8WfNZsfZwxSZWVCgA8K0teSwq4bB-guahUCOOB0QWpnc"
+              },
+              {
+                "kid": "260429T08",
+                "key": "BLQ8ez_oXuluvQt2mTPz-Ufev3sOuBwZvquVzkQgyZHhi8bR14kjHL2ZYeIWfYeZfqEaUm12qVnxNW93R3MVAKj-50RKcZfpZ6cm90aK533yHJxBhV_x6rM5S2ViWWqbQSi3jR7kXbVjGnGy9eUmoQJYsqp6cMR1gRoRQcg"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

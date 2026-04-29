@@ -1,0 +1,31 @@
+# Controls what `git archive` ships in the dist Packagist serves to
+# `composer require sesamy/capsule-publisher` consumers.
+#
+# Strategy: list what to EXCLUDE rather than whitelist what to include —
+# negation (`-export-ignore`) of a blanket `* export-ignore` is unreliable in
+# git archive across versions, while explicit per-path export-ignore is
+# rock-solid.
+
+# JS workspace — never goes to PHP consumers.
+/apps                                       export-ignore
+/packages/capsule-client                    export-ignore
+/packages/capsule-server                    export-ignore
+/package.json                               export-ignore
+/pnpm-workspace.yaml                        export-ignore
+/pnpm-lock.yaml                             export-ignore
+/vercel.json                                export-ignore
+/scripts                                    export-ignore
+
+# Repo tooling
+/.changeset                                 export-ignore
+/.github                                    export-ignore
+/.husky                                     export-ignore
+/.gitattributes                             export-ignore
+/.gitignore                                 export-ignore
+/.npmrc                                     export-ignore
+/.nvmrc                                     export-ignore
+
+# PHP package internals not needed at install time.
+/packages/capsule-publisher-php/tests       export-ignore
+/packages/capsule-publisher-php/scripts     export-ignore
+/packages/capsule-publisher-php/phpunit.xml.dist export-ignore

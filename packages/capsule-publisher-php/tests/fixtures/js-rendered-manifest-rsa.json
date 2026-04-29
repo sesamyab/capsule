@@ -1,0 +1,54 @@
+{
+  "resourceId": "article-interop-1",
+  "plaintext": "<p>Premium body — interop fixture</p>",
+  "issuerName": "interop",
+  "issuerAlgorithm": "RSA-OAEP",
+  "manifest": {
+    "version": "0.10",
+    "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1pbnRlcm9wLTEiLCJpYXQiOjE3Nzc0NDc1MjksImp0aSI6IkV6RE9QVHFfajdnN1R3ZVpMR2pjTUEiLCJzY29wZXMiOlsicHJlbWl1bSJdLCJkYXRhIjp7fX0.DOWmj0vg6bciqf3PdaN499rAI89lDdE7OfJil8viGuX7ftyN4qR1kJAfDV64UrFAA_shlDQsF6Ih9natrdB57w",
+    "content": {
+      "bodytext": {
+        "contentType": "text/html",
+        "iv": "FZqfh2CfHbtQnf9y",
+        "aad": "interop.example.com|article-interop-1|bodytext|premium",
+        "ciphertext": "49UzD_OL_Dm5khroyUp7hyF6lQeGL-1p0sME0tT_2JF3_3aSix0uq1W_5Ec4xfWNIXGq2_6xSw",
+        "wrappedContentKey": [
+          {
+            "kid": "260429T07",
+            "iv": "xZAt2g9QViCH-P6W",
+            "ciphertext": "vXdgjuLqNNkoccy9gk7NkaTs89GIeJX7GUL_VjA-3LymMfx84tdqsufnT-itHzTh"
+          },
+          {
+            "kid": "260429T08",
+            "iv": "mijSRaLcS_cBJRNu",
+            "ciphertext": "jL9moRIu1UqNMW0ZNZSwQSlznF7QBq118OXN-Fdq9dc1XAqhx-o-NlVQjMHZhJO4"
+          }
+        ]
+      }
+    },
+    "issuers": {
+      "interop": {
+        "unlockUrl": "https://issuer.example/unlock",
+        "keyId": "iss-rsa-1",
+        "keys": [
+          {
+            "contentName": "bodytext",
+            "scope": "premium",
+            "kid": "iss-rsa-1",
+            "contentKey": "5m0fMDhJLIcJI6Ibk4bPU1IBs9N_r7IAzMXlSqJVzDXIyks5nvcIf6ZsxHDQFA2YcP3rs7A-R0LA0poM46n_egF3gE_-ym5tskixGsYSRfTvoKJp5pDjewxzf0jjRaapZek3I4pLloQxpCJFxWy-vX2o7IYxL4ArLP6aY6fT6jxSFLvXtk_CYtsOhEzzNjm5DYUazXxX_tfdd0C8PIlezWJ-I9tdSHJb-n_XsikudPs8Pd2SMCsXnHhsRrMp0Kp5Tj-WHCkU_0J4K9JSygbOrul8mK8e_2Xc3-l8422u8CN6eE-QlN2jtRe7AdGGjftUEHyIUG54dLNR4Y-SR9vsfA",
+            "wrapKeys": [
+              {
+                "kid": "260429T07",
+                "key": "AeCxY7lW_pubLaRrcS2wlPEp_ScVnP-_W52PfDEWawRoCtcKonc-dVJw_Alz7GtN7TpgR_XXW-350tT9b7dkXEVAeV7B0Z_h53x7aLei9iJZ5OoLljDC8nD7K9F3hUQNrmJIMYvrxCn4y3X1Tz5OXqtqkRxPLPQSz2Qzz13-IFvbyrWI9Tx_LSAKUY6-eRa0X8adGsnK5sUIgzZUN2WLW4CMaasKNQTNq0e_4UgDdzr3klwk4C28a3NPoee6om76hXwe4JRZpVCrwi3aym2LBU-sFGlUsASD3DsyyTQB0bp_DxhPWAU_VsurXx5Yv_jPNdZIMCqyBuiIImcXvcNSwA"
+              },
+              {
+                "kid": "260429T08",
+                "key": "VfmKorgguDLKDwYMBoGkkHQJ7p333pDL_pcdjhelH8TVhbfJilZ8u7cskqwZXgXiGfZrxQ2AQDrpCt-PJ2EbdlJUPb8um8suY6XVUgg-4Jvycx8zssmSwW_O6gGbx4qbEpVbISlfr1SATftC1t62gTC83aMjgGAUPr3meg3f0R7ciS5a28Hg_RNZ_WqryuBoZoJhI4s7PMR-Hdv2BFoI5bflJpfvMfEaU2KEriGgabfWXMVPn9_SRZY14RZQqD_issPE8NWeM38tVbeonCZTH_gXg8keCkCa-qk0JgkodhBYXw7UwFh9-5pbHRZ-g_TfhKFf8voBUZMN1nIFxt2XkA"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

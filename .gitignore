@@ -1,6 +1,12 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+vendor/
+composer.lock
+
+# PHP
+.phpunit.cache/
+.phpunit.result.cache
 
 # Build outputs
 dist/
