@@ -148,20 +148,22 @@ This is a pnpm workspace monorepo containing:
 ```
 capsule/
 ├── apps/
-│   └── demo/              # Next.js demo application
+│   └── demo/                   # Next.js demo application
 ├── packages/
-│   ├── capsule-client/    # Browser decryption library
-│   └── capsule-server/    # Server-side encryption & token management
-├── package.json           # Workspace root
+│   ├── capsule-client/         # Browser decryption library
+│   ├── capsule-server/         # Server-side encryption & token management
+│   └── capsule-publisher-php/  # PHP port of the CMS publisher (for WordPress)
+├── package.json                # Workspace root
 └── pnpm-workspace.yaml
 ```
 
 ### Packages
 
-| Package                  | Description                            | Location                                             |
-| ------------------------ | -------------------------------------- | ---------------------------------------------------- |
-| `@sesamy/capsule`        | Browser client-side decryption library | [packages/capsule-client](./packages/capsule-client) |
-| `@sesamy/capsule-server` | Server encryption, tokens & unlock     | [packages/capsule-server](./packages/capsule-server) |
+| Package                     | Language   | Description                                                       | Location                                                       |
+| --------------------------- | ---------- | ----------------------------------------------------------------- | -------------------------------------------------------------- |
+| `@sesamy/capsule`           | TypeScript | Browser client-side decryption library                            | [packages/capsule-client](./packages/capsule-client)           |
+| `@sesamy/capsule-server`    | TypeScript | Server encryption, tokens & unlock                                | [packages/capsule-server](./packages/capsule-server)           |
+| `sesamy/capsule-publisher`  | PHP        | PHP port of the CMS publisher — for WordPress plugins (Composer)  | [packages/capsule-publisher-php](./packages/capsule-publisher-php) |
 
 ### Apps
 

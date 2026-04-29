@@ -1,0 +1,54 @@
+{
+    "resourceId": "article-php-interop",
+    "plaintext": "<p>Premium body \u2014 interop fixture (php-rendered)</p>",
+    "issuerName": "interop",
+    "issuerAlgorithm": "ECDH-P256",
+    "manifest": {
+        "version": "0.10",
+        "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1waHAtaW50ZXJvcCIsImlhdCI6MTc3NzQ0NzUyOSwianRpIjoiNFpjNVFvLV9EbGxvLWpON29JUlJCdyIsInNjb3BlcyI6WyJwcmVtaXVtIl0sImRhdGEiOnsidGl0bGUiOiJIZWxsbyBmcm9tIFBIUCJ9fQ.E-JDpZwSpEDD8biQynbxZF_0cxp9apZCadhNFv4QZdOwBUq3gFEudGKNS9vDbpmYZzBW7_W8dy9udsuVk-vR4Q",
+        "content": {
+            "bodytext": {
+                "contentType": "text/html",
+                "iv": "VmKML-3jhIejTS4x",
+                "aad": "interop.example.com|article-php-interop|bodytext|premium",
+                "ciphertext": "9CfnO031uZBVJi5BM39nW_n0mh6kMK2hyC9z30mc6hd8xi0c5msuR-Bi5V7GILdgF0ChmLTh6yleZ323owyMnZSx4a9HYg",
+                "wrappedContentKey": [
+                    {
+                        "kid": "260429T07",
+                        "iv": "4utUodnnx3Gilieo",
+                        "ciphertext": "rkAVEGCsQvT2KZp8uEy7yctzAM6DJRWYXkQn3Hnx7HlDNylSk8CAz8oSodVCVQmD"
+                    },
+                    {
+                        "kid": "260429T08",
+                        "iv": "ylNtiKwM-jpSeIKu",
+                        "ciphertext": "JurddfmlxyxOjsPvPiehq-AZJ0xzeIFU9Q7WdP08W2q6JuPmZfkvFNuxXCyp9zCH"
+                    }
+                ]
+            }
+        },
+        "issuers": {
+            "interop": {
+                "unlockUrl": "https://issuer.example/unlock",
+                "keyId": "iss-ecdh-1",
+                "keys": [
+                    {
+                        "contentName": "bodytext",
+                        "scope": "premium",
+                        "kid": "iss-ecdh-1",
+                        "contentKey": "BJK3Xhem0B_dKO8Qym1a9qblyMpceDrGMenuHM9DuE7reHXisWQGEvmeF7tQYU37heQ4oUEMzZoDp9LSj4yVc9CCovrgvjzBOOin2CbBKz6rDlZWC5v_4KbdjkugwOckNhVUFzmwhwNBWUWXN9hVITzQYTJvDPj3xv54ewE",
+                        "wrapKeys": [
+                            {
+                                "kid": "260429T07",
+                                "key": "BAxY6BL7veeCWygIjtGr6jqzBfsA6oZlsbBiaS3kFE8It5wQ-EbrGtTeo937_fZeyYwtaru2rOKOCDgSzQ0JKrjXVPSyibE-14LLTWrczAh4dIi53Zu2cZ94_1UVFvMROc_k_nBcd0RoOcSIt_MImOQpVeWY49rOAlrFtxA"
+                            },
+                            {
+                                "kid": "260429T08",
+                                "key": "BC2_N3c1o9bl1s6NnSQK9mAd57SJY4P8x3jI4-vA-Ks1vc_4Bjqui2ecgfx_BrSmuWKBOeGk3jLhv9xj6-1kpBOXMp4T9fiyykUKPKE1eekezduG84jZThVdlOStkRaV3IAP6sduilQ0KIkOp_z5WoKRjBZmvlx38DruL_k"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+}

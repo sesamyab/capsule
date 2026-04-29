@@ -840,74 +840,108 @@ import {
 } from '@sesamy/capsule-server';
 ```
 
-## Other Languages
+## PHP
 
-The DCA protocol uses standard cryptographic primitives (AES-256-GCM, ECDH P-256, ES256, HKDF) available in all major languages. Below are low-level reference examples for the raw encryption and key-wrapping operations. A full DCA implementation would also need JWT signing, ECDH wrapping, and the DCA manifest format -- see the [specification](/spec) for details.
+The `sesamy/capsule-publisher` package is a first-class PHP port of the DCA publisher — primarily intended for WordPress plugins that need to encrypt premium content from PHP. It produces the exact same DCA v0.10 wire format as `@sesamy/capsule-server`, so any DCA-compatible issuer (including the JS one in this repo) can unlock manifests it generates.
 
-### PHP
+Compatibility is verified in both directions on every PR: the PHP suite consumes JS-emitted fixtures, and the JS suite consumes PHP-rendered manifests. See [Compatibility tests](https://github.com/sesamyab/capsule/tree/main/packages/capsule-publisher-php#compatibility-tests) for details.
 
-```php
-<?php
+> The PHP package is **publisher-only** at the moment — it covers the CMS side (encrypt content, wrap for issuers, sign resourceJWT, build the publisher JWKS, mint share link tokens). The unlock endpoint still runs in Node.js.
 
-// Encrypt content
-$contentKey = random_bytes(32); // AES-256 key
-$iv = random_bytes(12);  // GCM IV
+### Installation
 
-$encrypted = openssl_encrypt(
-    $content,
-    'aes-256-gcm',
-    $contentKey,
-    OPENSSL_RAW_DATA,
-    $iv,
-    $tag
-);
-
-$result = [
-    'encryptedContent' => base64_encode($encrypted . $tag),
-    'iv' => base64_encode($iv),
-    'contentId' => 'premium'
-];
+```bash
+composer require sesamy/capsule-publisher
 ```
 
-### Key Exchange Endpoint
+Requires PHP 8.1+ with `ext-openssl`, `ext-json`, `ext-hash`. RSA-OAEP-SHA256 wrapping uses `phpseclib/phpseclib` v3 (PHP's bundled OpenSSL only exposes OAEP-SHA1).
+
+### Complete Publisher Example
 
 ```php
 <?php
 
-// api/unlock.php
+use Sesamy\Capsule\Publisher\{
+    Publisher,
+    PublisherConfig,
+    RenderOptions,
+    ContentItem,
+    IssuerConfig,
+};
+
+$publisher = new Publisher(new PublisherConfig(
+    domain: 'news.example.com',
+    signingKeyPem: getenv('PUBLISHER_ES256_PRIVATE_KEY'),
+    rotationSecret: getenv('ROTATION_SECRET'),     // base64
+    signingKeyId: '2025-10',
+));
+
+$result = $publisher->render(new RenderOptions(
+    resourceId: 'article-123',
+    contentItems: [
+        new ContentItem('bodytext', '<p>Premium article body…</p>', scope: 'premium'),
+    ],
+    issuers: [
+        new IssuerConfig(
+            issuerName: 'sesamy',
+            unlockUrl: 'https://api.sesamy.com/unlock',
+            publicKeyPem: getenv('SESAMY_ECDH_PUBLIC_KEY'),
+            keyId: '2025-10',
+            scopes: ['premium'],
+        ),
+    ],
+    resourceData: ['title' => 'Hello'],
+));
+
+// Embed in your HTML template:
+echo $result->manifestScript;   // <script type="application/json" class="dca-manifest">…</script>
+$json = $result->jsonString();  // canonical manifest JSON for an API endpoint
+```
+
+The publisher derives wrapKeys locally via HKDF — no network calls during `render()`. Issuer keys can also be resolved dynamically from a JWKS URL by passing `jwksUri` instead of `publicKeyPem` on the `IssuerConfig`, with a pluggable cache (`IssuerJwksResolver` / `JwksCache`) so issuer key rotation is invisible to the publisher.
+
+### Share Link Tokens
+
+```php
+use Sesamy\Capsule\Publisher\ShareLinkOptions;
+
+$token = $publisher->createShareLinkToken(new ShareLinkOptions(
+    resourceId: 'article-123',
+    contentNames: ['bodytext'],
+    expiresIn: 7 * 24 * 3600,
+    maxUses: 1000,
+));
+
+$shareUrl = "https://example.com/article/123?share={$token}";
+```
+
+The token is a publisher-signed ES256 JWT — DCA-compatible: the rotation secret stays on the publisher, key material still flows through the normal wrap/unwrap channel.
+
+### Publisher JWKS Endpoint
+
+Serve the publisher's signing key as a JWKS document so JWKS-configured issuers pick up rotation automatically.
+
+```php
+<?php
+
+use Sesamy\Capsule\Publisher\Jwks\PublisherJwks;
+
+// /.well-known/dca-publishers.json
 header('Content-Type: application/json');
+header('Cache-Control: max-age=3600');
 
-$input = json_decode(file_get_contents('php://input'), true);
-$contentId = $input['contentId'];
-$publicKey = $input['publicKey'];
-
-// Get content key for contentId
-$contentKey = getContentKeyForContentId($contentId);
-
-// Convert SPKI to PEM
-$publicKeyPem = convertSpkiToPem($publicKey);
-
-// Wrap content key with RSA-OAEP
-$encryptedContentKey = '';
-openssl_public_encrypt(
-    $contentKey,
-    $encryptedContentKey,
-    $publicKeyPem,
-    OPENSSL_PKCS1_OAEP_PADDING
-);
-
-echo json_encode([
-    'encryptedContentKey' => base64_encode($encryptedContentKey),
-    'contentId' => $contentId
-]);
-
-function convertSpkiToPem($base64Spki) {
-    $der = base64_decode($base64Spki);
-    $pem = "-----BEGIN PUBLIC KEY-----\n";
-    $pem .= chunk_split(base64_encode($der), 64);
-    $pem .= "-----END PUBLIC KEY-----";
-    return $pem;
-}
+echo json_encode(PublisherJwks::buildPublisherJwksDocument([
+    [
+        'publicKeyPem' => getenv('PUBLISHER_ES256_PUBLIC_KEY'),
+        'kid' => '2025-10',
+    ],
+    // During rotation, list both keys; mark the old one as retired:
+    // [
+    //     'publicKeyPem' => getenv('PUBLISHER_ES256_PUBLIC_KEY_PREV'),
+    //     'kid' => '2025-09',
+    //     'status' => 'retired',
+    // ],
+]));
 ```
 
 ## Python
