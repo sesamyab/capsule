@@ -322,7 +322,16 @@ final class Publisher
         array $contentItems,
         array $resolvedScopes,
     ): array {
-        if ($issuerConfig->scopes !== null && $issuerConfig->scopes !== []) {
+        $hasScopes = $issuerConfig->scopes !== null && $issuerConfig->scopes !== [];
+        $hasContentNames = $issuerConfig->contentNames !== null && $issuerConfig->contentNames !== [];
+
+        if ($hasScopes && $hasContentNames) {
+            throw new PublisherException(
+                "Issuer \"{$issuerConfig->issuerName}\" must specify either contentNames or scopes, not both",
+            );
+        }
+
+        if ($hasScopes) {
             $scopeSet = array_flip($issuerConfig->scopes);
             $names = [];
             foreach ($contentItems as $item) {
@@ -333,7 +342,7 @@ final class Publisher
                 }
             }
             $isNameGranular = false;
-        } elseif ($issuerConfig->contentNames !== null && $issuerConfig->contentNames !== []) {
+        } elseif ($hasContentNames) {
             $names = array_values(array_unique($issuerConfig->contentNames));
             $isNameGranular = true;
         } else {
