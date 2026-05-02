@@ -1,0 +1,7 @@
+{
+  "issuerPrivateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgHBVhFsmE/7At7354\ntgXeB9eb3DMEhBq5dz34DXRXb++hRANCAARhmq1l30/rG0evBHtJW0Zr7F5qU0YT\n5QoBZl6akgew4CJJ4c+CqAShn6l+hoDWNe57GARCCevCKt9dH1qs3NwE\n-----END PRIVATE KEY-----",
+  "issuerPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYZqtZd9P6xtHrwR7SVtGa+xealNG\nE+UKAWZempIHsOAiSeHPgqgEoZ+pfoaA1jXuexgEQgnrwirfXR9arNzcBA==\n-----END PUBLIC KEY-----",
+  "aad": "premium",
+  "wrappedBlob": "BFtVMetFOZTjNfMtCRM0amYy0VnznfEbu10NUyAP_g_vVz2PckAy4L_zSwUspU4lITrUXiNKgOmf8CDfszydQfXY6mfb9NZw0FojUp8XRPcVM1yCAz3UOBniti4MgqcRs7EgYLBZwHLTkShB-Yk49wWTp4KQiurO8Clg1Eo",
+  "expectedPlaintextHex": "3f2db40c51166085508a4647a277089b4fe5dbffa29dd165b323db5b593ae4fc"
+}

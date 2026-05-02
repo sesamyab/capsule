@@ -1,0 +1,9 @@
+{
+    "domain": "interop.example.com",
+    "resourceId": "php-share-1",
+    "signingKid": "sign-2025-10",
+    "tokens": {
+        "contentNames": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJ0eXBlIjoiZGNhLXNoYXJlIiwiZG9tYWluIjoiaW50ZXJvcC5leGFtcGxlLmNvbSIsInJlc291cmNlSWQiOiJwaHAtc2hhcmUtMSIsImNvbnRlbnROYW1lcyI6WyJib2R5dGV4dCJdLCJpYXQiOjE3Nzc3MjQzMTYsImV4cCI6MTc3NzcyNzkxNiwibWF4VXNlcyI6NSwianRpIjoiMGRlY2E2NDM4YjBhMWU2ZTAwMWE3MWZiZGViODlhNjIiLCJkYXRhIjp7ImNhbXBhaWduIjoiZmFsbCJ9fQ.cfdzoObc7pnWNytO_mYTBBHlhesuENcz3aT3ugizORQaNa8V9DDQlyC7N5WA0eUWlOV-hi785kDoxX4vdWf_sg",
+        "scopes": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJ0eXBlIjoiZGNhLXNoYXJlIiwiZG9tYWluIjoiaW50ZXJvcC5leGFtcGxlLmNvbSIsInJlc291cmNlSWQiOiJwaHAtc2hhcmUtMSIsImNvbnRlbnROYW1lcyI6W10sImlhdCI6MTc3NzcyNDMxNiwiZXhwIjoxNzc3NzMxNTE2LCJqdGkiOiI5M2ZjNmEzNTAyMGNkODllOTdmYjA4MmM3MzNkZjM1OSIsInNjb3BlcyI6WyJwcmVtaXVtIl19.Xi792OmXOWzdvXpowp6fv-IoipmbIGTwbzMQSHSAy6LtqvG8dUvGCrHxCcetfHDnneLbLvk7iCTbCJDoRjGfMg"
+    }
+}

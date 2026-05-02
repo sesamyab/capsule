@@ -1,0 +1,26 @@
+[
+  {
+    "rotationSecretHex": "7b935ba21f8568200fa926385a759f5eb30c134480ba463e3975764f52c66ad8",
+    "scope": "premium",
+    "kid": "260501T14",
+    "wrapKeyHex": "cf1fddc2385adbe5f5da1b29d90507730bf5a24167f1bce69d41819d447d11f4"
+  },
+  {
+    "rotationSecretHex": "7b935ba21f8568200fa926385a759f5eb30c134480ba463e3975764f52c66ad8",
+    "scope": "premium",
+    "kid": "260501T15",
+    "wrapKeyHex": "2b3b18e06924b81b1e08aec49fdb4e8d9ddbebcffc92b4ee1d12d65ca6469921"
+  },
+  {
+    "rotationSecretHex": "7b935ba21f8568200fa926385a759f5eb30c134480ba463e3975764f52c66ad8",
+    "scope": "free",
+    "kid": "260101T00",
+    "wrapKeyHex": "6b536d15cedd6f6fd72bc35e3f99c68e246e92b0319fad04667f43789bcad68e"
+  },
+  {
+    "rotationSecretHex": "7b935ba21f8568200fa926385a759f5eb30c134480ba463e3975764f52c66ad8",
+    "scope": "tier-a",
+    "kid": "251023T13",
+    "wrapKeyHex": "54ec2462351a889a0851261e055dcc283ab56566cb75869615c378adc34ef4a8"
+  }
+]

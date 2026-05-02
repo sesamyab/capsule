@@ -540,9 +540,16 @@ export interface DcaUnlockResponse {
  * Share Link Token payload — a publisher-signed JWT that grants
  * pre-authenticated access to specific content.
  *
- * DCA-compatible: the rotationSecret never leaves the publisher.
- * The token is purely an authorization grant — key material flows
- * through the normal DCA wrap/unwrap channel.
+ * In the OSS issuer (this package), the rotationSecret never leaves the
+ * publisher: the publisher derives wrapKeys via HKDF, wraps them with the
+ * issuer's public key, and the issuer unwraps with its private key.
+ * Multi-tenant deployments (e.g. the Sesamy hosted issuer at
+ * api2.sesamy.com/capsule/vendors/{vendor}/unlock) may instead derive
+ * wrapKeys server-side from a vendor-scoped rotationSecret stored alongside
+ * the vendor's keys; in that mode the publisher and issuer must share the
+ * same secret out of band, and the publisher's wrapped wrapKey blobs are
+ * ignored on the wire. The token is purely an authorization grant — key
+ * material flows through the normal DCA wrap/unwrap channel either way.
  *
  * Flow:
  *   1. Publisher creates a share link token (ES256 JWT) granting access

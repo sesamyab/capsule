@@ -1,0 +1,10 @@
+{
+  "domain": "interop.example.com",
+  "resourceId": "article-interop-1",
+  "signingKid": "sign-2025-10",
+  "publisherSigningPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbme9El+6OSshdp0eXiawCrQtP5/p\njMUTWvCgGFwOJwuoihQVeWE8Mb/WaUHn7XqcKTe2YKIVw0KVs5sA8NUNZA==\n-----END PUBLIC KEY-----",
+  "tokens": {
+    "contentNames": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJ0eXBlIjoiZGNhLXNoYXJlIiwiZG9tYWluIjoiaW50ZXJvcC5leGFtcGxlLmNvbSIsInJlc291cmNlSWQiOiJhcnRpY2xlLWludGVyb3AtMSIsImNvbnRlbnROYW1lcyI6WyJib2R5dGV4dCJdLCJpYXQiOjE3Nzc3MjQzMTYsImV4cCI6MTc3NzcyNzkxNiwibWF4VXNlcyI6NSwianRpIjoiYzVlM2M5NzdlZDRjNDg0MDNlOGI5MDdhYWYxNWUxNTciLCJkYXRhIjp7ImNhbXBhaWduIjoic3ByaW5nIn19.hXNKLDzC3CcucXF0msFoFklh87OcOcAD7Lm9ACKkdxF9SSChfuI1LNgzBbzGLBCcHK132uslnP8eeik6eIdFVQ",
+    "scopes": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJ0eXBlIjoiZGNhLXNoYXJlIiwiZG9tYWluIjoiaW50ZXJvcC5leGFtcGxlLmNvbSIsInJlc291cmNlSWQiOiJhcnRpY2xlLWludGVyb3AtMSIsImNvbnRlbnROYW1lcyI6W10sImlhdCI6MTc3NzcyNDMxNiwiZXhwIjoxNzc3NzMxNTE2LCJqdGkiOiI3ZjZlYTMxYjljZjJhM2MwZGFmYjdhMDdlZWRiMDFhYiIsInNjb3BlcyI6WyJwcmVtaXVtIl19.NeMdaXRZaoTh9lsWPWrFwlncPZMW4DLaFHgxV4BnyQtqzgfj4Vj-PkUFHvlER7ph1bqDnxGGU2LNshHnvuUmeg"
+  }
+}

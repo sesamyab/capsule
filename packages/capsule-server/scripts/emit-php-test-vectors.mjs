@@ -219,4 +219,91 @@ writeJson("js-rendered-manifest-rsa.json", {
     manifest: rsaResult.manifest,
 });
 
+// ----------------------------------------------------------------------------
+// 6. JS-rendered share link tokens — PHP must accept ES256 JWTs the JS
+//    publisher emits and parse all the fields (type, domain, resourceId,
+//    iat/exp, contentNames vs scopes, jti, optional data/maxUses).
+// ----------------------------------------------------------------------------
+
+const shareWithContentNames = await ecdhPublisher.createShareLinkToken({
+    resourceId: RESOURCE_ID,
+    contentNames: ["bodytext"],
+    expiresIn: 3600,
+    maxUses: 5,
+    data: { campaign: "spring" },
+});
+const shareWithScopes = await ecdhPublisher.createShareLinkToken({
+    resourceId: RESOURCE_ID,
+    scopes: ["premium"],
+    expiresIn: 7200,
+});
+writeJson("js-rendered-share-tokens.json", {
+    domain: DOMAIN,
+    resourceId: RESOURCE_ID,
+    signingKid: SIGNING_KID,
+    publisherSigningPublicKeyPem: signingPem.publicKeyPem,
+    tokens: {
+        contentNames: shareWithContentNames,
+        scopes: shareWithScopes,
+    },
+});
+
+// ----------------------------------------------------------------------------
+// 7. JS-rendered manifest covering the gap flows: multi-issuer + name-granular
+//    + resourceData. Two issuers — one in scope mode (carries wrapKeys), one
+//    in name-granular mode (no wrapKeys).
+// ----------------------------------------------------------------------------
+
+const ecdhIssuerB = await generateEcdhP256KeyPair();
+const ecdhIssuerBPem = await exportP256KeyPairPem(ecdhIssuerB.privateKey, ecdhIssuerB.publicKey);
+const ECDH_ISSUER_B_KID = "iss-ecdh-2";
+
+const richPublisher = createDcaPublisher({
+    domain: DOMAIN,
+    signingKeyPem: signingPem.privateKeyPem,
+    signingKeyId: SIGNING_KID,
+    rotationSecret: ROTATION_SECRET_B64,
+});
+const richResult = await richPublisher.render({
+    resourceId: "article-rich-1",
+    contentItems: [
+        { contentName: "bodytext", scope: "premium", content: PLAINTEXT },
+        { contentName: "sidebar", scope: "premium", content: "<aside>Side</aside>" },
+    ],
+    issuers: [
+        {
+            issuerName: "primary",
+            publicKeyPem: ecdhIssuerPem.publicKeyPem,
+            keyId: ECDH_ISSUER_KID,
+            unlockUrl: "https://issuer-a.example/unlock",
+            scopes: ["premium"],
+        },
+        {
+            issuerName: "secondary",
+            publicKeyPem: ecdhIssuerBPem.publicKeyPem,
+            keyId: ECDH_ISSUER_B_KID,
+            unlockUrl: "https://issuer-b.example/unlock",
+            contentNames: ["bodytext"], // name-granular: no wrapKeys for this issuer
+        },
+    ],
+    resourceData: { title: "Rich interop", tier: "premium", listed: [1, 2, 3] },
+});
+writeJson("js-rendered-manifest-rich.json", {
+    resourceId: "article-rich-1",
+    plaintext: PLAINTEXT,
+    sidebarPlaintext: "<aside>Side</aside>",
+    primary: {
+        issuerName: "primary",
+        keyId: ECDH_ISSUER_KID,
+        privateKeyPem: ecdhIssuerPem.privateKeyPem,
+    },
+    secondary: {
+        issuerName: "secondary",
+        keyId: ECDH_ISSUER_B_KID,
+        privateKeyPem: ecdhIssuerBPem.privateKeyPem,
+    },
+    expectedResourceData: { title: "Rich interop", tier: "premium", listed: [1, 2, 3] },
+    manifest: richResult.manifest,
+});
+
 console.log("Done.");

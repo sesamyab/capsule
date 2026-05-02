@@ -18,6 +18,7 @@ use Sesamy\Capsule\Publisher\IssuerConfig;
 use Sesamy\Capsule\Publisher\Publisher;
 use Sesamy\Capsule\Publisher\PublisherConfig;
 use Sesamy\Capsule\Publisher\RenderOptions;
+use Sesamy\Capsule\Publisher\ShareLinkOptions;
 
 $fixtureDir = __DIR__ . '/../tests/fixtures';
 $keysPath = $fixtureDir . '/keys.json';
@@ -93,3 +94,100 @@ file_put_contents(
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
 );
 echo "wrote tests/fixtures/php-rendered-manifest-rsa.json\n";
+
+// ---------------------------------------------------------------------------
+// PHP-emitted share-link tokens (contentNames + scopes variants).
+// JS verifies them with `verifyShareToken` against the publisher's pinned
+// signing key from keys.json.
+// ---------------------------------------------------------------------------
+$publisher = new Publisher(new PublisherConfig(
+    domain: $keys['domain'],
+    signingKeyPem: $keys['publisherSigningPrivateKeyPem'],
+    rotationSecret: $keys['rotationSecretBase64'],
+    signingKeyId: $keys['signingKid'],
+));
+
+$shareNames = $publisher->createShareLinkToken(new ShareLinkOptions(
+    resourceId: 'php-share-1',
+    contentNames: ['bodytext'],
+    expiresIn: 3600,
+    maxUses: 5,
+    data: ['campaign' => 'fall'],
+));
+$shareScopes = $publisher->createShareLinkToken(new ShareLinkOptions(
+    resourceId: 'php-share-1',
+    scopes: ['premium'],
+    expiresIn: 7200,
+));
+file_put_contents(
+    $fixtureDir . '/php-rendered-share-tokens.json',
+    json_encode([
+        'domain' => $keys['domain'],
+        'resourceId' => 'php-share-1',
+        'signingKid' => $keys['signingKid'],
+        'tokens' => [
+            'contentNames' => $shareNames,
+            'scopes' => $shareScopes,
+        ],
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
+);
+echo "wrote tests/fixtures/php-rendered-share-tokens.json\n";
+
+// ---------------------------------------------------------------------------
+// PHP-rendered "rich" manifest: two issuers (one scope-mode, one
+// name-granular), two content items, and rich resourceData. JS verifies the
+// resourceData passes through and that both issuers' wrapped material
+// unwraps with the matching private key.
+// ---------------------------------------------------------------------------
+$ecdhB = \openssl_pkey_new(['curve_name' => 'prime256v1', 'private_key_type' => OPENSSL_KEYTYPE_EC]);
+\openssl_pkey_export($ecdhB, $ecdhBPriv);
+$ecdhBPub = \openssl_pkey_get_details($ecdhB)['key'];
+$secondaryKid = 'iss-ecdh-php-2';
+
+$richResult = $publisher->render(new RenderOptions(
+    resourceId: 'article-php-rich',
+    contentItems: [
+        new ContentItem('bodytext', '<p>Premium body — PHP rich</p>', scope: 'premium'),
+        new ContentItem('sidebar', '<aside>Side</aside>', scope: 'premium'),
+    ],
+    issuers: [
+        new IssuerConfig(
+            issuerName: 'primary',
+            unlockUrl: 'https://issuer-a.example/unlock',
+            publicKeyPem: $keys['ecdhIssuerPublicKeyPem'],
+            keyId: $keys['ecdhIssuerKid'],
+            algorithm: 'ECDH-P256',
+            scopes: ['premium'],
+        ),
+        new IssuerConfig(
+            issuerName: 'secondary',
+            unlockUrl: 'https://issuer-b.example/unlock',
+            publicKeyPem: $ecdhBPub,
+            keyId: $secondaryKid,
+            algorithm: 'ECDH-P256',
+            contentNames: ['bodytext'], // name-granular
+        ),
+    ],
+    resourceData: ['title' => 'PHP rich', 'tier' => 'premium', 'listed' => [4, 5, 6]],
+));
+file_put_contents(
+    $fixtureDir . '/php-rendered-manifest-rich.json',
+    json_encode([
+        'resourceId' => 'article-php-rich',
+        'plaintext' => '<p>Premium body — PHP rich</p>',
+        'sidebarPlaintext' => '<aside>Side</aside>',
+        'primary' => [
+            'issuerName' => 'primary',
+            'keyId' => $keys['ecdhIssuerKid'],
+            'privateKeyPem' => $keys['ecdhIssuerPrivateKeyPem'],
+        ],
+        'secondary' => [
+            'issuerName' => 'secondary',
+            'keyId' => $secondaryKid,
+            'privateKeyPem' => $ecdhBPriv,
+        ],
+        'expectedResourceData' => ['title' => 'PHP rich', 'tier' => 'premium', 'listed' => [4, 5, 6]],
+        'manifest' => $richResult->manifest,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n",
+);
+echo "wrote tests/fixtures/php-rendered-manifest-rich.json\n";

@@ -5,23 +5,23 @@
     "issuerAlgorithm": "ECDH-P256",
     "manifest": {
         "version": "0.10",
-        "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1waHAtaW50ZXJvcCIsImlhdCI6MTc3NzQ0NzUyOSwianRpIjoiNFpjNVFvLV9EbGxvLWpON29JUlJCdyIsInNjb3BlcyI6WyJwcmVtaXVtIl0sImRhdGEiOnsidGl0bGUiOiJIZWxsbyBmcm9tIFBIUCJ9fQ.E-JDpZwSpEDD8biQynbxZF_0cxp9apZCadhNFv4QZdOwBUq3gFEudGKNS9vDbpmYZzBW7_W8dy9udsuVk-vR4Q",
+        "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1waHAtaW50ZXJvcCIsImlhdCI6MTc3NzcyNDMxNiwianRpIjoiTlhNX3ZNb3ZnVTBKWEF3aXQyTTBOdyIsInNjb3BlcyI6WyJwcmVtaXVtIl0sImRhdGEiOnsidGl0bGUiOiJIZWxsbyBmcm9tIFBIUCJ9fQ.H9NtJ0Md1J1q9i1fc9TmK4iJW8OqznbCtq8KyFGIDDWzJZ9zaJdLsHz9VNnbE9n9X4v1u3yB49X5vf1CQD5eyw",
         "content": {
             "bodytext": {
                 "contentType": "text/html",
-                "iv": "VmKML-3jhIejTS4x",
+                "iv": "Vv2RHXMOZdvaE7fo",
                 "aad": "interop.example.com|article-php-interop|bodytext|premium",
-                "ciphertext": "9CfnO031uZBVJi5BM39nW_n0mh6kMK2hyC9z30mc6hd8xi0c5msuR-Bi5V7GILdgF0ChmLTh6yleZ323owyMnZSx4a9HYg",
+                "ciphertext": "Z5eyNUNISAAGy91bZ48D7-ZiEpEETkalWDBd2ozmtHeM7bJU8Mgaz9AnOSz_ORX5xCIxe5oF-03G2lJnN9mH8zpUFOfeEw",
                 "wrappedContentKey": [
                     {
-                        "kid": "260429T07",
-                        "iv": "4utUodnnx3Gilieo",
-                        "ciphertext": "rkAVEGCsQvT2KZp8uEy7yctzAM6DJRWYXkQn3Hnx7HlDNylSk8CAz8oSodVCVQmD"
+                        "kid": "260502T12",
+                        "iv": "i-dJ-1wSu3e8Lfcq",
+                        "ciphertext": "fHhEEFe1Ljq0E4-y_bCkbVztx2Ch1WoybIaXb2SqvNGCRJXFzAKkVM0G7SQbaeCt"
                     },
                     {
-                        "kid": "260429T08",
-                        "iv": "ylNtiKwM-jpSeIKu",
-                        "ciphertext": "JurddfmlxyxOjsPvPiehq-AZJ0xzeIFU9Q7WdP08W2q6JuPmZfkvFNuxXCyp9zCH"
+                        "kid": "260502T13",
+                        "iv": "hQPQIXpS4lRPwSoa",
+                        "ciphertext": "g-nsHQ_nh9QLH3CaGCPVMyI1V4pPs5aUc6Dfa5QJt_boDAFXoxwdSGnQTQhqBdTl"
                     }
                 ]
             }
@@ -35,15 +35,15 @@
                         "contentName": "bodytext",
                         "scope": "premium",
                         "kid": "iss-ecdh-1",
-                        "contentKey": "BJK3Xhem0B_dKO8Qym1a9qblyMpceDrGMenuHM9DuE7reHXisWQGEvmeF7tQYU37heQ4oUEMzZoDp9LSj4yVc9CCovrgvjzBOOin2CbBKz6rDlZWC5v_4KbdjkugwOckNhVUFzmwhwNBWUWXN9hVITzQYTJvDPj3xv54ewE",
+                        "contentKey": "BC-aPerXFUDP3pMY4rKAyh0IgkIzydd2tMer1XgPZT0-cf4N6-R69FmBTU2JW1d8xoQNJdPPnzn9-wlbEyoexSRAkdFKwuV9VWyw0AnAgw9MnnHyDjxSa7zLEEEJ1Y7xJBev_qN8rPbJOM47V7-_CoN8UKdPxckJbml85A0",
                         "wrapKeys": [
                             {
-                                "kid": "260429T07",
-                                "key": "BAxY6BL7veeCWygIjtGr6jqzBfsA6oZlsbBiaS3kFE8It5wQ-EbrGtTeo937_fZeyYwtaru2rOKOCDgSzQ0JKrjXVPSyibE-14LLTWrczAh4dIi53Zu2cZ94_1UVFvMROc_k_nBcd0RoOcSIt_MImOQpVeWY49rOAlrFtxA"
+                                "kid": "260502T12",
+                                "key": "BJawR2hx4lnXoS91Ymhx8TrqIbea71rfp8-qNfXylzP2DDRwQkm1bdzt_WZ5daztPeA1JZT9ICJ_zHR0I21y8llUaiF_6SS0f0-amzM5HPC48x8-CJGcZ9LKAiDHLc-edEb20jVpN2L8nohtx_VHu0ahQCYhC7REC1wCD_c"
                             },
                             {
-                                "kid": "260429T08",
-                                "key": "BC2_N3c1o9bl1s6NnSQK9mAd57SJY4P8x3jI4-vA-Ks1vc_4Bjqui2ecgfx_BrSmuWKBOeGk3jLhv9xj6-1kpBOXMp4T9fiyykUKPKE1eekezduG84jZThVdlOStkRaV3IAP6sduilQ0KIkOp_z5WoKRjBZmvlx38DruL_k"
+                                "kid": "260502T13",
+                                "key": "BITKTxIbdk85X1xBIYTfQScF92sF-vwEi4MtXdG45PW6wZSeSaaxt6SJHhxcrJrU_grkRAzGNcA0Ish-4ULjzdg8IAONC4AQndb1qgmyM_PR8et05W4lZJRqJ3VZZmecYKDb-sGJy-gbmfCmuFlvUsY-hKkeDtGtxYrHPA0"
                             }
                         ]
                     }

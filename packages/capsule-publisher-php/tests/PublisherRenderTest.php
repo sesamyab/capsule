@@ -191,4 +191,51 @@ final class PublisherRenderTest extends TestCase
         $inner = substr($result->manifestScript, strlen('<script type="application/json" class="dca-manifest">'), -strlen('</script>'));
         self::assertStringNotContainsString('</', $inner);
     }
+
+    public function testVendorIdHelpersBuildHostedSesamyUrls(): void
+    {
+        $signing = Keys::generateEcdsaP256();
+        $config = new PublisherConfig(
+            domain: 'news.example.com',
+            signingKeyPem: $signing['privatePem'],
+            rotationSecret: base64_encode(random_bytes(32)),
+            vendorId: 'ehandel',
+        );
+
+        self::assertSame('ehandel', $config->vendorId);
+        self::assertSame(
+            'https://api2.sesamy.com/capsule/vendors/ehandel/unlock',
+            $config->sesamyUnlockUrl(),
+        );
+        self::assertSame(
+            'https://api2.sesamy.com/capsule/vendors/ehandel/.well-known/jwks.json',
+            $config->sesamyJwksUri(),
+        );
+    }
+
+    public function testVendorIdOmittedReturnsNullHelpers(): void
+    {
+        $signing = Keys::generateEcdsaP256();
+        $config = new PublisherConfig(
+            domain: 'news.example.com',
+            signingKeyPem: $signing['privatePem'],
+            rotationSecret: base64_encode(random_bytes(32)),
+        );
+
+        self::assertNull($config->vendorId);
+        self::assertNull($config->sesamyUnlockUrl());
+        self::assertNull($config->sesamyJwksUri());
+    }
+
+    public function testVendorIdRejectsInvalidShape(): void
+    {
+        $signing = Keys::generateEcdsaP256();
+        $this->expectException(\InvalidArgumentException::class);
+        new PublisherConfig(
+            domain: 'news.example.com',
+            signingKeyPem: $signing['privatePem'],
+            rotationSecret: base64_encode(random_bytes(32)),
+            vendorId: 'EHandel/../etc',
+        );
+    }
 }

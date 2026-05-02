@@ -1,6 +1,16 @@
 /**
  * DCA Issuer — server-side handler for unlock requests.
  *
+ * This is the OSS reference issuer. It unwraps the publisher's wrapped key
+ * material with the issuer's private key, so the rotationSecret stays on the
+ * publisher and is never required (or even known) by this code path. Hosted
+ * multi-tenant issuers (e.g. the Sesamy issuer at
+ * api2.sesamy.com/capsule/vendors/{vendor}/unlock) may run a different
+ * implementation that derives wrapKeys server-side from a vendor-scoped
+ * rotationSecret and ignores the publisher's wrapped blobs; if you target
+ * such a deployment, the publisher and issuer must share the rotation
+ * secret out of band — see dca-publisher.ts for the publisher view.
+ *
  * The issuer:
  *   1. Normalises and validates the request domain against a trusted-publisher allowlist
  *   2. Looks up the publisher's signing key from the allowlist

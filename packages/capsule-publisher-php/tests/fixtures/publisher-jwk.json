@@ -1,11 +1,11 @@
 {
-  "inputPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAExHwu2Uby5D8a6xuBAgqZVn0gc+nI\nvICU/q66x42m+biJB01mYP1Jybc/2x9aFgUrKmFU2ss4HswINmfuklxf5w==\n-----END PUBLIC KEY-----",
+  "inputPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbme9El+6OSshdp0eXiawCrQtP5/p\njMUTWvCgGFwOJwuoihQVeWE8Mb/WaUHn7XqcKTe2YKIVw0KVs5sA8NUNZA==\n-----END PUBLIC KEY-----",
   "inputKid": "sign-2025-10",
   "expectedJwk": {
     "kty": "EC",
     "crv": "P-256",
-    "x": "xHwu2Uby5D8a6xuBAgqZVn0gc-nIvICU_q66x42m-bg",
-    "y": "iQdNZmD9Scm3P9sfWhYFKyphVNrLOB7MCDZn7pJcX-c",
+    "x": "bme9El-6OSshdp0eXiawCrQtP5_pjMUTWvCgGFwOJws",
+    "y": "qIoUFXlhPDG_1mlB5-16nCk3tmCiFcNClbObAPDVDWQ",
     "kid": "sign-2025-10",
     "use": "sig",
     "alg": "ES256"

@@ -52,6 +52,24 @@ echo $result->manifestScript;          // <script type="application/json" class=
 $json = $result->jsonString();         // canonical manifest JSON
 ```
 
+## Deployment modes
+
+The `rotationSecret` lifecycle depends on which issuer you're talking to.
+
+- **OSS issuer (`@sesamy/capsule-server`'s `createDcaIssuer`)** — the publisher derives wrapKeys via HKDF and wraps them with the issuer's public key. The `rotationSecret` never leaves the publisher; the issuer unwraps with its own private key.
+- **Hosted Sesamy issuer at `api2.sesamy.com/capsule/vendors/{vendor}/unlock`** — the issuer derives wrapKeys server-side from a vendor-scoped rotationSecret stored alongside the vendor's keys, and ignores the publisher's wrapped wrapKey blobs on the wire. In this mode the publisher's `rotationSecret` **must match** the value Sesamy has on file for your vendor; coordinate it via the vendor onboarding flow. A locally generated random secret will produce wrapKey bytes that don't match anything the issuer returns and the client will fail with `"DCA: could not unwrap contentKey — no matching wrapKey"`.
+
+For a WordPress plugin targeting the hosted issuer, treat `ROTATION_SECRET` as a setting the operator pastes during onboarding (alongside the vendor id), not a value the plugin generates. Use `PublisherConfig::vendorId` to derive the unlock URL and JWKS URI from a single input:
+
+```php
+$publisher = new Publisher(new PublisherConfig(
+    domain: 'www.news-site.com',
+    signingKeyPem: getenv('PUBLISHER_ES256_PRIVATE_KEY'),
+    rotationSecret: getenv('SESAMY_ROTATION_SECRET'),  // shared with Sesamy
+    vendorId: 'ehandel',                                // see PublisherConfig::sesamyUnlockUrl() / sesamyJwksUri()
+));
+```
+
 ## Compatibility tests
 
 This package is locked to DCA manifest version `0.10`. Compatibility with the JS publisher (`@sesamy/capsule-server`) is verified in **both directions** — neither side can drift without a test failing in CI.
