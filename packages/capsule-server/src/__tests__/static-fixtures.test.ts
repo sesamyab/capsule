@@ -72,7 +72,6 @@ interface PublisherJwkVector {
     inputPublicKeyPem: string;
     inputPrivateKeyPem: string;
     inputKid: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expectedJwk: any;
 }
 
@@ -147,7 +146,6 @@ describe.skipIf(!fixturesPresent)("Static known-answer cross-language vectors", 
 
 describe.skipIf(fixturesPresent)("Static fixtures missing", () => {
     it("explains how to generate them", () => {
-        // eslint-disable-next-line no-console
         console.warn(
             "Skipping static-fixture tests. Generate once with:\n" +
                 "  pnpm --filter @sesamy/capsule-server build\n" +

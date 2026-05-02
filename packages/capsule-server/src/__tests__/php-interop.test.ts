@@ -35,7 +35,6 @@ interface ManifestFixture {
   plaintext: string;
   issuerName: string;
   issuerAlgorithm: "ECDH-P256" | "RSA-OAEP";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   manifest: any;
 }
 
@@ -209,9 +208,7 @@ describe.skipIf(!extendedFixturesPresent)("PHP-rendered share tokens & rich mani
     sidebarPlaintext: string;
     primary: { issuerName: string; keyId: string; privateKeyPem: string };
     secondary: { issuerName: string; keyId: string; privateKeyPem: string };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expectedResourceData: any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     manifest: any;
   }
 
@@ -287,7 +284,6 @@ describe.skipIf(!extendedFixturesPresent)("PHP-rendered share tokens & rich mani
 
 describe.skipIf(fixturesPresent)("PHP interop fixtures missing", () => {
   it("explains how to generate them", () => {
-    // eslint-disable-next-line no-console
     console.warn(
       "Skipping PHP interop tests. Generate fixtures with:\n" +
         "  pnpm --filter @sesamy/capsule-server build\n" +
