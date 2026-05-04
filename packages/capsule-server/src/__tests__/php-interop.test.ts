@@ -23,7 +23,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { decryptContent } from "../encryption";
-import { verifyJwt, decodeJwtPayload } from "../dca-jwt";
+import { verifyJwt } from "../dca-jwt";
 import { unwrap, importIssuerPrivateKey } from "../dca-wrap";
 import { fromBase64Url, encodeUtf8 } from "../web-crypto";
 import type { DcaShareLinkTokenPayload } from "../dca-types";
@@ -215,8 +215,12 @@ describe.skipIf(!extendedFixturesPresent)("PHP-rendered share tokens & rich mani
   it("rich manifest: resourceData passes through, multi-issuer + name-granular both unwrap", async () => {
     const f = readJson<PhpRichFixture>(phpRichPath);
 
-    // resourceData passthrough
-    const resourcePayload = decodeJwtPayload<{ data: unknown }>(f.manifest.resourceJWT);
+    // resourceJWT must verify under the publisher signing key, and resourceData passes through.
+    const resourcePayload = await verifyJwt<{ sub: string; data: unknown }>(
+      f.manifest.resourceJWT,
+      keys.publisherSigningPublicKeyPem,
+    );
+    expect(resourcePayload.sub).toBe(f.resourceId);
     expect(resourcePayload.data).toEqual(f.expectedResourceData);
 
     // Primary issuer (scope mode): wraps both content items, has wrapKeys.
@@ -279,6 +283,28 @@ describe.skipIf(!extendedFixturesPresent)("PHP-rendered share tokens & rich mani
       encodeUtf8(bodyEntry.aad),
     );
     expect(new TextDecoder().decode(secBody)).toBe(f.plaintext);
+
+    // Sidebar content: only the primary issuer wraps it (secondary is name-granular
+    // for bodytext only). Exercise the second name-bound contentKey end-to-end so
+    // multi-content scope manifests don't silently regress for non-bodytext items.
+    const primarySidebar = primary.keys.find(
+      (k: { contentName?: string }) => k.contentName === "sidebar",
+    );
+    expect(primarySidebar).toBeDefined();
+    const sidebarContentKey = await unwrap(
+      primarySidebar.contentKey,
+      primaryPriv.key,
+      "ECDH-P256",
+      encodeUtf8(primarySidebar.scope),
+    );
+    const sidebarEntry = f.manifest.content.sidebar;
+    const sidebarBytes = await decryptContent(
+      fromBase64Url(sidebarEntry.ciphertext),
+      sidebarContentKey,
+      fromBase64Url(sidebarEntry.iv),
+      encodeUtf8(sidebarEntry.aad),
+    );
+    expect(new TextDecoder().decode(sidebarBytes)).toBe(f.sidebarPlaintext);
   });
 });
 

@@ -154,6 +154,7 @@ final class InteropFixturesTest extends TestCase
 
         // Primary issuer (scope mode): wraps both content items, includes wrapKeys.
         $primary = $f['manifest']['issuers'][$f['primary']['issuerName']];
+        self::assertCount(2, $primary['keys'], 'scope mode wraps both content items under one issuer');
         $primaryEntries = array_values(array_filter(
             $primary['keys'],
             static fn (array $e): bool => ($e['contentName'] ?? null) === 'bodytext',
@@ -176,6 +177,29 @@ final class InteropFixturesTest extends TestCase
             $bodyEntry['aad'],
         );
         self::assertSame($f['plaintext'], $bodyPlaintext);
+
+        // The other primary key wraps the sidebar content — unwrap and decrypt
+        // it to confirm both name-bound contentKeys round-trip, not just bodytext.
+        $sidebarEntries = array_values(array_filter(
+            $primary['keys'],
+            static fn (array $e): bool => ($e['contentName'] ?? null) !== 'bodytext',
+        ));
+        self::assertNotEmpty($sidebarEntries);
+        $sidebarPrimaryEntry = $sidebarEntries[0];
+        $sidebarName = $sidebarPrimaryEntry['contentName'];
+        $sidebarContentKey = Wrap::unwrapEcdhP256(
+            $sidebarPrimaryEntry['contentKey'],
+            $f['primary']['privateKeyPem'],
+            $sidebarPrimaryEntry['scope'],
+        );
+        $sidebarManifestEntry = $f['manifest']['content'][$sidebarName];
+        $sidebarPlaintext = Aes::gcmDecrypt(
+            Encoding::fromBase64Url($sidebarManifestEntry['ciphertext']),
+            $sidebarContentKey,
+            Encoding::fromBase64Url($sidebarManifestEntry['iv']),
+            $sidebarManifestEntry['aad'],
+        );
+        self::assertSame($f['sidebarPlaintext'], $sidebarPlaintext);
 
         // The wrapKey from the manifest unwraps the wrappedContentKey for the
         // matching kid — exercises the cache-friendly client path.
