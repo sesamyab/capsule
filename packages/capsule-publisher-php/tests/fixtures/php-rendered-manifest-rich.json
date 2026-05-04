@@ -1,0 +1,118 @@
+{
+    "resourceId": "article-php-rich",
+    "plaintext": "<p>Premium body \u2014 PHP rich</p>",
+    "sidebarPlaintext": "<aside>Side</aside>",
+    "primary": {
+        "issuerName": "primary",
+        "keyId": "iss-ecdh-1",
+        "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg7xqG5F2mgbGSBgCV\nOjaqV/dM0RUuC3AaJT1iQusz7q6hRANCAASxha7nPw3TDQkiWk1xI9BoIhxOxPVc\nj9Cm8+R50nKMdAd2NFXn+/TwLSGDm9cWpmKKxZfhSnMMbhMVZw8CwBUq\n-----END PRIVATE KEY-----"
+    },
+    "secondary": {
+        "issuerName": "secondary",
+        "keyId": "iss-ecdh-php-2",
+        "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgG59BHkYPEXToBrfk\nu4nzQxYHzucTZytM9fap0y9o1oahRANCAATuqNUNpfCd26sn/ydOI3uIHz7DBOo1\nI8R6TRdX1EG8L7+1nbh6oGtdeka3S8nNB+lXmryunij1FGhFgnEo3Fsz\n-----END PRIVATE KEY-----\n"
+    },
+    "expectedResourceData": {
+        "title": "PHP rich",
+        "tier": "premium",
+        "listed": [
+            4,
+            5,
+            6
+        ]
+    },
+    "manifest": {
+        "version": "0.10",
+        "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1waHAtcmljaCIsImlhdCI6MTc3NzcyNDMxNiwianRpIjoiSDUzOG1URjdVZHFTbWNVdGc0SmZHdyIsInNjb3BlcyI6WyJwcmVtaXVtIl0sImRhdGEiOnsidGl0bGUiOiJQSFAgcmljaCIsInRpZXIiOiJwcmVtaXVtIiwibGlzdGVkIjpbNCw1LDZdfX0.x9P1S-GtFgv47n94DNzn89CtEMzSFcKW8IoDmkkPpohTsjkfDFtf8WqxwgXRHJ80OpFN4w9xHwXNkg-S7BbY5Q",
+        "content": {
+            "bodytext": {
+                "contentType": "text/html",
+                "iv": "vYrD9oQVNCEfuvcU",
+                "aad": "interop.example.com|article-php-rich|bodytext|premium",
+                "ciphertext": "OAa2YYaNgPxT1OGXCHwNTa5H7mbS9FU7m3VUNDvTVMmMFGsTzsZGpvL1dQP-hu-y",
+                "wrappedContentKey": [
+                    {
+                        "kid": "260502T12",
+                        "iv": "c_BGK92SnBUFsedc",
+                        "ciphertext": "JZfm7ZzNGgdGbOyJf4qDdD7O6jRBf9TqkhOm2GhUcjr1ix_sTFP7PjsRTFGVj0C5"
+                    },
+                    {
+                        "kid": "260502T13",
+                        "iv": "X89xwTOJA1MgdA_e",
+                        "ciphertext": "MC9xWr2WGRDWPaUgbU0JNghxi5KfTWptvID5_YGRasdu9Exauau2PP8Ku6BrB5MN"
+                    }
+                ]
+            },
+            "sidebar": {
+                "contentType": "text/html",
+                "iv": "pPUPZH5TObAin6rR",
+                "aad": "interop.example.com|article-php-rich|sidebar|premium",
+                "ciphertext": "SFLD25wAoUGrHIeY4cG5xRIuzX3LVE55zdu2P4tv-0SRAsg",
+                "wrappedContentKey": [
+                    {
+                        "kid": "260502T12",
+                        "iv": "tfbIg0jRNh30gg-2",
+                        "ciphertext": "IgfiDGIYdwB6yXfJYwBqB7g-sdIN9fhqxcRqLREvhzK_fF2PtgY4_PTn7Tzp7m3n"
+                    },
+                    {
+                        "kid": "260502T13",
+                        "iv": "0BMUIPAEC5I1zPzp",
+                        "ciphertext": "2hmLB7Smgn-FY2nZxS0WiRZ7npQiLlruPXwnAIZpiLvOE2iaRZEVfFAf_KW0tBTc"
+                    }
+                ]
+            }
+        },
+        "issuers": {
+            "primary": {
+                "unlockUrl": "https://issuer-a.example/unlock",
+                "keyId": "iss-ecdh-1",
+                "keys": [
+                    {
+                        "contentName": "bodytext",
+                        "scope": "premium",
+                        "kid": "iss-ecdh-1",
+                        "contentKey": "BJmB-y7Vd9WppEcfmF-ePkJZIGGx0wLYX8F2QdDeZh0W4BSuDSclfVopJe4NL91FFg60IUWVQfqw_nTchr_qCw8CZBxkZ1uZB8ibmHmmgvu8-Z5VQXa6XAD8jj4iI_JmcAP02Kax6ymbigKTwzqlOH09AsnsIHdaGJQKZr8",
+                        "wrapKeys": [
+                            {
+                                "kid": "260502T12",
+                                "key": "BKbX5IMJKhVoBSm99RdGivLFRENIPr5oaX5vRctggniCQRdUNsvo8-m2w7W0EWaUqjshwpZk3bvO3oC0VTae5l5zo9yEl4ucSIqGPo1xgjCTEsvAonLd4BinEcmcyk61NhsdJ5ppuck1CALczZEyZ7ypZHZfqnrrgfPRrrA"
+                            },
+                            {
+                                "kid": "260502T13",
+                                "key": "BJTLmkaTL65W8JjtG68Q2ySZgr8GzlFN9SO9e6MDxb0H6bX-JudaEs0eZYdBkfyS5YKsykhd7MfzMRog9PqBTnXc0ToxkbZONecehdxwn_Uckqsm1OHFPfm3hjlC-2uqhFBUIwIK383CJll1_DP4tQ4SsL5shNJs07jP5Aw"
+                            }
+                        ]
+                    },
+                    {
+                        "contentName": "sidebar",
+                        "scope": "premium",
+                        "kid": "iss-ecdh-1",
+                        "contentKey": "BPwexLzJ6sbEJHbF3ZJ9FCh9RIr489kRTdlmLtGoyTOwMItzbnkz1awMOz-n2w4EGit9BS-tK1jGlY4AVkA2d8o05_3-7ZXb0kq3_XlPwvzRFaSFMsMzERkuPmw92J1iDedzdBzSIGXVC-zQmgOwPY9ZRSChG8NbCE719ik",
+                        "wrapKeys": [
+                            {
+                                "kid": "260502T12",
+                                "key": "BOVoGqnLR1P1ozjt1eP_j3HyDhkxrZd9hfyymKU7kiMrNa5vIDosDTaPj8Znt2-RsieOUzUkDODKgPB4NefdDLCOQd4KVifw7t-iXB0eRCLPCTeqSKNsqCDdRrvOSuHeRmKAYAJFKsUFRhAoklTcLmgslsuJaXe0-9Efhkk"
+                            },
+                            {
+                                "kid": "260502T13",
+                                "key": "BP11ZcA_jT_hTpwuXOqP9VNyot8MFmy16lqNR_A4ZQ0mU6QldGOrvAddfshupbhl0NS9WQhJEZbAVa9NTQoRjzmHrMU5yXjtVGfO8moW0FT_bdn2nQmXza9cwr1kRSkWioqdrops4FY84v-LYwpMACPUsGY4UFvY7I0U-2c"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "secondary": {
+                "unlockUrl": "https://issuer-b.example/unlock",
+                "keyId": "iss-ecdh-php-2",
+                "keys": [
+                    {
+                        "contentName": "bodytext",
+                        "scope": "premium",
+                        "kid": "iss-ecdh-php-2",
+                        "contentKey": "BB29NauiltMfjzL0R44YH-PwCSm-bBQqGHj_wLUUvacDUWQCJC0lAaZKmbQzlaxJl6eOh6G3OjN1d-0pRR_II2ZBKkhWOKxhgKbRKVPFyfn5HombWN3f5PAJY8vU4vf-2CUxMFEkYse9GZRIf5MlCs15pKTI0JwJjNPZT68"
+                    }
+                ]
+            }
+        }
+    }
+}

@@ -72,6 +72,15 @@ app.post("/api/unlock", async (req, res) => {
 });
 ```
 
+## Deployment modes
+
+The `rotationSecret` lifecycle depends on which issuer you're talking to.
+
+- **OSS issuer (this package's `createDcaIssuer`)** — the publisher derives wrapKeys via HKDF and wraps them with the issuer's public key. The `rotationSecret` never leaves the publisher; the issuer unwraps with its own private key. This is what the Quick Start above shows.
+- **Hosted Sesamy issuer at `api2.sesamy.com/capsule/vendors/{vendor}/unlock`** — the issuer derives wrapKeys server-side from a vendor-scoped rotationSecret stored alongside the vendor's keys, and ignores the publisher's wrapped wrapKey blobs on the wire. In this mode the publisher's `rotationSecret` **must match** the value Sesamy has on file for your vendor; coordinate it via the vendor onboarding flow. A locally generated random secret will produce wrapKey bytes that don't match anything the issuer returns and the client will fail with `"DCA: could not unwrap contentKey — no matching wrapKey"`.
+
+If you control the issuer, use the OSS path. If you depend on the hosted Sesamy issuer, treat `rotationSecret` as shared configuration, not a per-publisher secret.
+
 ## Publisher API
 
 ### `createDcaPublisher(config)`
@@ -80,7 +89,7 @@ app.post("/api/unlock", async (req, res) => {
 | ----- | ---- | -------- | ----------- |
 | `domain` | `string` | yes | Publisher domain (e.g. `"www.news-site.com"`) |
 | `signingKeyPem` | `string` | yes | ES256 (ECDSA P-256) private key PEM |
-| `rotationSecret` | `string \| Uint8Array` | yes | Base64-encoded 256-bit secret for wrapKey derivation |
+| `rotationSecret` | `string \| Uint8Array` | yes | Base64-encoded 256-bit secret for wrapKey derivation. Against the hosted Sesamy issuer, this must match the secret registered for your vendor — see [Deployment modes](#deployment-modes). |
 | `signingKeyId` | `string` | no | Identifier for the signing key. When set, emitted as the JWT header `kid`. Required for JWKS-based issuer verification — must match a `kid` in the publisher's JWKS. |
 | `rotationIntervalHours` | `number` | no | WrapKey rotation granularity in hours (default: `1`) |
 | `jwksCache` | `DcaJwksCache` | no | Pluggable cache for issuer JWKS documents (default: in-memory) |

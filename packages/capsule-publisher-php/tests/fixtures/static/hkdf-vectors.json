@@ -1,0 +1,30 @@
+[
+  {
+    "ikmHex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "salt": "premium",
+    "info": "dca|260101T00",
+    "length": 32,
+    "okmHex": "53e6a5f9ff5d11fc36b0dedf0a2fab5f4d0603467a7006b4e0eff85cb40f74e0"
+  },
+  {
+    "ikmHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "salt": "free",
+    "info": "dca|251023T13",
+    "length": 32,
+    "okmHex": "c8291345c7bc558fef78a9f28d35722b11a83fb45722567b569b63b295e8391d"
+  },
+  {
+    "ikmHex": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    "salt": "dca-wrap",
+    "info": "dca-wrap-aes256gcm",
+    "length": 32,
+    "okmHex": "81ad886457eec4ca531e042bf7f936acb9cf6dfcba474719c4da13740261bd3f"
+  },
+  {
+    "ikmHex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "salt": "tier-a",
+    "info": "dca|260501T15",
+    "length": 64,
+    "okmHex": "8e6c564df97652d7dadedc4f026d05d07664a3e771e726ee310b6be1264cea66621ea93a6e7b79ff32c6fce2c2dcc7653266eb38a01f8c4dcfa2782d9aa99afe"
+  }
+]

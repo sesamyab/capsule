@@ -1,0 +1,14 @@
+{
+  "inputPublicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIvU1H/ixnD44tKPVEGkWBfk7QXgS\nO3Y/cPJSIFL+B2Uy//c0V1HMLpA3bvAfOeN517QktCJOBuLXaJwvv+tSjw==\n-----END PUBLIC KEY-----",
+  "inputPrivateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggDOxx2eUeMfVfHEY\nH7o5Z9AlbtEjklm+YQVjvHpDVZahRANCAAQi9TUf+LGcPji0o9UQaRYF+TtBeBI7\ndj9w8lIgUv4HZTL/9zRXUcwukDdu8B8543nXtCS0Ik4G4tdonC+/61KP\n-----END PRIVATE KEY-----",
+  "inputKid": "static-sign-1",
+  "expectedJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "IvU1H_ixnD44tKPVEGkWBfk7QXgSO3Y_cPJSIFL-B2U",
+    "y": "Mv_3NFdRzC6QN27wHznjede0JLQiTgbi12icL7_rUo8",
+    "kid": "static-sign-1",
+    "use": "sig",
+    "alg": "ES256"
+  }
+}

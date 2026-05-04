@@ -1,0 +1,118 @@
+{
+  "resourceId": "article-rich-1",
+  "plaintext": "<p>Premium body — interop fixture</p>",
+  "sidebarPlaintext": "<aside>Side</aside>",
+  "primary": {
+    "issuerName": "primary",
+    "keyId": "iss-ecdh-1",
+    "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg7xqG5F2mgbGSBgCV\nOjaqV/dM0RUuC3AaJT1iQusz7q6hRANCAASxha7nPw3TDQkiWk1xI9BoIhxOxPVc\nj9Cm8+R50nKMdAd2NFXn+/TwLSGDm9cWpmKKxZfhSnMMbhMVZw8CwBUq\n-----END PRIVATE KEY-----"
+  },
+  "secondary": {
+    "issuerName": "secondary",
+    "keyId": "iss-ecdh-2",
+    "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgA13hXr1lQeOrm33o\nSuWgwPZtpf2T2+GSk2n6brbTsQWhRANCAAR+12esOYhT0cUi0O4xMJ1kgeSn3y1w\nx5+7Pz7cWIk5gnLev3YcvWMICQRG+gONCgi00wjBX/vXV6I55CVbBFuB\n-----END PRIVATE KEY-----"
+  },
+  "expectedResourceData": {
+    "title": "Rich interop",
+    "tier": "premium",
+    "listed": [
+      1,
+      2,
+      3
+    ]
+  },
+  "manifest": {
+    "version": "0.10",
+    "resourceJWT": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNpZ24tMjAyNS0xMCJ9.eyJpc3MiOiJpbnRlcm9wLmV4YW1wbGUuY29tIiwic3ViIjoiYXJ0aWNsZS1yaWNoLTEiLCJpYXQiOjE3Nzc3MjQzMTYsImp0aSI6IjM4eDBGWjNlT1daajBLZ3VDOHJkbHciLCJzY29wZXMiOlsicHJlbWl1bSJdLCJkYXRhIjp7InRpdGxlIjoiUmljaCBpbnRlcm9wIiwidGllciI6InByZW1pdW0iLCJsaXN0ZWQiOlsxLDIsM119fQ.jXzpODKQcwh2Jj3dYzRY0G54lc4HrBXMBp4iVk-imF29MpMdu7dF7qrRyZMoDmP705MHu3tm6Bjc3nybcmIZpw",
+    "content": {
+      "bodytext": {
+        "contentType": "text/html",
+        "iv": "X9ZpQXcWijGAIIAZ",
+        "aad": "interop.example.com|article-rich-1|bodytext|premium",
+        "ciphertext": "CpxN8CaMOn1WlpKoyG1OSasp-wHPWbcs_FeIY0cYZU3I9S3Ny7ev2ayWR_GIeH0DsqVXulzqDg",
+        "wrappedContentKey": [
+          {
+            "kid": "260502T12",
+            "iv": "fRBf_YA480NJ0bSg",
+            "ciphertext": "vI3WlpjfiLNBK1xH29FHjavVkp0jmrHE_-dLkBEc417iFZ3FT73f27w8wgSFvhU3"
+          },
+          {
+            "kid": "260502T13",
+            "iv": "DGoSAYXWG5fM8m7D",
+            "ciphertext": "mfwkv-ciA2pEkn35wzRDaj_rFLrcx-8P5tPzy2r8u-Ze79JcYgMBc1BtSf0IEQtw"
+          }
+        ]
+      },
+      "sidebar": {
+        "contentType": "text/html",
+        "iv": "LKORHM0vSm3QsuxK",
+        "aad": "interop.example.com|article-rich-1|sidebar|premium",
+        "ciphertext": "Gh_cY3abLeXV07X-DkinumjHZaE-WF_GwPY8wgakhuhhHjM",
+        "wrappedContentKey": [
+          {
+            "kid": "260502T12",
+            "iv": "7hRHFC3a_f_m0yf1",
+            "ciphertext": "v5iZtokWjCGm7FAp36F-3ITUdsUhR8TbvSzM-pTjXe0LD3JiCs71ya5lsqtBmMNB"
+          },
+          {
+            "kid": "260502T13",
+            "iv": "DrBebjJz0x40__T9",
+            "ciphertext": "Bokj1u2_5bYxp7eYdJNGsXKJljx-pHSnAVXzG-kTp19oM3FMV_ej9u0pQQXyRHww"
+          }
+        ]
+      }
+    },
+    "issuers": {
+      "primary": {
+        "unlockUrl": "https://issuer-a.example/unlock",
+        "keyId": "iss-ecdh-1",
+        "keys": [
+          {
+            "contentName": "bodytext",
+            "scope": "premium",
+            "kid": "iss-ecdh-1",
+            "contentKey": "BJp4zt3gG6vQCenROEzVBixoEQgcJ9_-pHEjlWkQQOZCBbdDlLrm4E7phng-owv5j6-EzJQ2tsI8PHYvROEGBGoVCS9AJfbx1kEi2RSUw3gqE3r77hNMBl1XSwmQlJY-rpg3vgvnRMb4VKLfl28NGgmoGChBt15pQWXWyD0",
+            "wrapKeys": [
+              {
+                "kid": "260502T12",
+                "key": "BLZxzaXCwFfF7PwHIvQkgUhV9AFMXTU_HUfdOgvoBUXCLxFTylV8-otsHqKu11rSg8Akem9RqWJjbPr_hBpizjSndUs7Yr9f_kgIZEkHIzBT4Z_OE9Rtu8McqhjdNmQR6NCiuHubBNZiT_hPX_p6nPUlUPNjgan3zX79FCM"
+              },
+              {
+                "kid": "260502T13",
+                "key": "BB1eDwV9wkaJh-aDeQSJTFvDvoP8DXtdpwswsVShzjlFN2HKKlnHi8bOaI4AGSXIgzLVqSzRblccvEe3cARx-FkAHiKtAdrCtQPhDWk0rahMr4bL7qTRYLngs6k3Rw42a_VPgNh0NGfpepgX0MWLftjlA7ttSywxTpVICXc"
+              }
+            ]
+          },
+          {
+            "contentName": "sidebar",
+            "scope": "premium",
+            "kid": "iss-ecdh-1",
+            "contentKey": "BBWdK4-OZqfUGfPHVmGWkwtxLSaJu8e0PGzIuqTa5kLSnC2AmRjMGUyL3A4Yy1VrVRgkLXL9wuEJtNEk7js3NVj-EDaCD2h9v25Gof654v0Z93rwOhZOhfcgCeljjgRQeu0OEQOzMGhEvIB3TuE0JL5pMmJEszckZ4QvJTM",
+            "wrapKeys": [
+              {
+                "kid": "260502T12",
+                "key": "BI7LTcoM1gS3kfesQpQB1Fz9Ezslv0yvldekNlvC3qKj4Xr1hBx5RNqC9acln9rgV6vBc_MZsZTbuNVPN8P756lUJCy5sB3hM-uylIy6jgbbUVcGJfur8hUlAT2x3oomaMwaaCK5FkrYHLUCJIC_G4N8qvjYyMhcDzrZsG8"
+              },
+              {
+                "kid": "260502T13",
+                "key": "BO_UEPTIE7ckifSNX5P1NMtyucr4z6k9guT5QJCfQQ2gOxkMwWBEjBCE7eoXYTUfR4FzcuzT9n09hyZQLCxnQ19VrdimQwLaaq0yLCWbS3Cex4IhfSGYxiL8s4Bs6HOFL8ySOluPjcQTJ8SXEFzDvqKQXO_HKJ-F0DXdF94"
+              }
+            ]
+          }
+        ]
+      },
+      "secondary": {
+        "unlockUrl": "https://issuer-b.example/unlock",
+        "keyId": "iss-ecdh-2",
+        "keys": [
+          {
+            "contentName": "bodytext",
+            "scope": "premium",
+            "kid": "iss-ecdh-2",
+            "contentKey": "BIhS62r1R4OGngeW-U5RKfC0ObR_DUk5veYqkZuaF6NzlSz8GAg-IT2rbRenUDlcENm4mc4pFPYZ_VtJs5uI6-wphJgAitxYt6kgjh6W-_WOsoigHzoAaXIslG_O2UxCxZfUwOlU0MkXj50w_U2wY2-hRnqKi3ogXy-b6no"
+          }
+        ]
+      }
+    }
+  }
+}

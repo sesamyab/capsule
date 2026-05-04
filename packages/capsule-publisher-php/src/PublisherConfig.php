@@ -24,10 +24,39 @@ final class PublisherConfig
         public readonly int $rotationIntervalHours = 1,
         public readonly ?IssuerJwksResolver $issuerJwksResolver = null,
         bool $rotationSecretIsBase64 = true,
+        public readonly ?string $vendorId = null,
     ) {
         $this->rotationSecretBytes = $rotationSecretIsBase64
             ? self::decodeBase64Secret($rotationSecret)
             : $rotationSecret;
+
+        if ($vendorId !== null && !preg_match('/^[a-z0-9][a-z0-9-]*$/', $vendorId)) {
+            throw new \InvalidArgumentException(
+                "PublisherConfig::vendorId must match /^[a-z0-9][a-z0-9-]*$/ — got \"$vendorId\""
+            );
+        }
+    }
+
+    /**
+     * Build the unlock URL for the hosted Sesamy issuer for this config's vendor.
+     * Returns null when vendorId is not set.
+     */
+    public function sesamyUnlockUrl(): ?string
+    {
+        return $this->vendorId !== null
+            ? "https://api2.sesamy.com/capsule/vendors/{$this->vendorId}/unlock"
+            : null;
+    }
+
+    /**
+     * Build the issuer JWKS URI for the hosted Sesamy issuer for this config's vendor.
+     * Returns null when vendorId is not set.
+     */
+    public function sesamyJwksUri(): ?string
+    {
+        return $this->vendorId !== null
+            ? "https://api2.sesamy.com/capsule/vendors/{$this->vendorId}/.well-known/jwks.json"
+            : null;
     }
 
     private static function decodeBase64Secret(string $secret): string
