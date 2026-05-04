@@ -192,6 +192,9 @@ describe.skipIf(!extendedFixturesPresent)("PHP-rendered share tokens & rich mani
       f.tokens.scopes,
       keys.publisherSigningPublicKeyPem,
     );
+    expect(scopesPayload.type).toBe("dca-share");
+    expect(scopesPayload.domain).toBe(f.domain);
+    expect(scopesPayload.resourceId).toBe(f.resourceId);
     expect(scopesPayload.scopes).toEqual(["premium"]);
     expect(scopesPayload.exp).toBe(scopesPayload.iat + 7200);
     // PHP omits contentNames entirely when scopes are used (cf. JS, which sets [])
