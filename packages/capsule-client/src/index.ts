@@ -41,6 +41,16 @@ export {
   type DcaProcessPageOptions,
 } from "./dca-client";
 
+export {
+  getAdLifecycle,
+  type DcaAdLifecycle,
+  type DcaAdLifecycleEvent,
+  type DcaAdLifecycleHandler,
+  type DcaLifecycleType,
+  type DcaLockedReason,
+  type DcaErrorStage,
+} from "./ad-lifecycle";
+
 /** Standalone re-export of {@link DcaClient.getShareTokenFromUrl}. */
 export function parseShareToken(paramName?: string): string | null {
   return DcaClient.getShareTokenFromUrl(paramName);

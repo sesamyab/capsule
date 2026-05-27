@@ -41,36 +41,55 @@ export function EncryptedSection({
   const pageRef = useRef<import("@sesamy/capsule").DcaParsedPage | null>(null);
   const scopeRef = useRef<string>(contentName);
   const initRanRef = useRef(false);
+  const placedRef = useRef(false);
   const { log } = useConsole();
 
-  // Execute scripts and dispatch event after content is decrypted
+  // Place decrypted content via the managed renderToPage path — this sets the
+  // innerHTML on the in-position [data-dca-content-name] container and emits the
+  // dca:rendered lifecycle event (which the ad adapter binds to). Then run any
+  // embedded scripts.
   useEffect(() => {
-    if (state === "unlocked" && contentRef.current) {
-      const contentElement = contentRef.current;
+    if (state !== "unlocked" || !contentRef.current || placedRef.current || !decryptedContent) return;
+    placedRef.current = true;
 
-      // Execute any scripts in the decrypted content
-      const scripts = contentElement.querySelectorAll("script");
-      scripts.forEach((oldScript) => {
-        const newScript = document.createElement("script");
-        Array.from(oldScript.attributes).forEach((attr) => {
-          newScript.setAttribute(attr.name, attr.value);
-        });
-        newScript.textContent = oldScript.textContent;
-        oldScript.parentNode?.replaceChild(newScript, oldScript);
+    const contentElement = contentRef.current;
+    const html = formatMarkdown(decryptedContent);
+    const root = contentElement.closest("article") ?? document;
+
+    if (clientRef.current) {
+      clientRef.current.renderToPage({ [contentName]: html }, root);
+      log("Placed content via renderToPage — 'dca:rendered' emitted", "info");
+    } else {
+      contentElement.innerHTML = html;
+    }
+
+    // innerHTML does not execute <script> tags; re-inject so embedded demos run.
+    const scripts = contentElement.querySelectorAll("script");
+    scripts.forEach((oldScript) => {
+      const newScript = document.createElement("script");
+      Array.from(oldScript.attributes).forEach((attr) => {
+        newScript.setAttribute(attr.name, attr.value);
       });
-      if (scripts.length > 0) {
-        log(`Executed ${scripts.length} embedded script(s)`, "info");
-      }
+      newScript.textContent = oldScript.textContent;
+      oldScript.parentNode?.replaceChild(newScript, oldScript);
+    });
+    if (scripts.length > 0) {
+      log(`Executed ${scripts.length} embedded script(s)`, "info");
+    }
 
-      // Dispatch custom event for external scripts
-      const event = new CustomEvent("dca:unlocked", {
+    // Back-compat custom event (superseded by dca:rendered).
+    contentElement.dispatchEvent(
+      new CustomEvent("dca:unlocked", {
         bubbles: true,
         detail: { resourceId, element: contentElement },
-      });
-      contentElement.dispatchEvent(event);
-      log(`Dispatched 'dca:unlocked' event for "${resourceId}"`, "info");
-    }
-  }, [state, decryptedContent, log, resourceId]);
+      }),
+    );
+  }, [state, decryptedContent, log, resourceId, contentName]);
+
+  // Allow re-placement (and a fresh dca:rendered emission) if content re-locks.
+  useEffect(() => {
+    if (state !== "unlocked") placedRef.current = false;
+  }, [state]);
 
   // Initialize the DCA client (guarded against React Strict Mode double-mount)
   useEffect(() => {
@@ -466,9 +485,8 @@ export function EncryptedSection({
         <div
           ref={contentRef}
           className="premium-content"
-          dangerouslySetInnerHTML={{
-            __html: formatMarkdown(decryptedContent),
-          }}
+          data-dca-content-name={contentName}
+          suppressHydrationWarning
         />
       </div>
     );
