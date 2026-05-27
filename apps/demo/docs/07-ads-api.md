@@ -221,7 +221,7 @@ cache-stable.
 Capsule dispatches DOM `CustomEvent`s on the `publisher-content-id` element (bubbling, so a page-level
 listener works), and mirrors them through `window.dcaAds`.
 
-```
+```text
 dca:rendered  → detail: { contentId, emission, slots }
 dca:locked    → detail: { contentId, reason }
 dca:error     → detail: { contentId, stage, message }

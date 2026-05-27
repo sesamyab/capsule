@@ -35,12 +35,15 @@ interface AdManifest {
     slots: AdManifestSlot[];
 }
 
-let started = false;
+// Fingerprint of the manifest the adapter is currently bound to, plus a teardown
+// for that binding. A module-level boolean would freeze the adapter to the first
+// page's slots; in a SPA the manifest changes on client navigation, so we re-init
+// when it does and skip re-init when it hasn't (e.g. React StrictMode double-mount).
+let lastManifestKey: string | null = null;
+let teardown: (() => void) | null = null;
 
 export function startGptAdAdapter(): void {
     if (typeof window === "undefined") return;
-    if (started) return; // idempotent across React StrictMode double-mount
-    started = true;
 
     const manifest = readManifest();
     if (!manifest) {
@@ -48,9 +51,15 @@ export function startGptAdAdapter(): void {
         return;
     }
 
+    const manifestKey = JSON.stringify(manifest);
+    if (manifestKey === lastManifestKey) return; // same page — already bound
+    teardown?.(); // unbind the previous page before re-binding
+    lastManifestKey = manifestKey;
+
     const byId = new Map(manifest.slots.map((s) => [s.id, s]));
     const defined = new Map<string, unknown>(); // div id -> googletag slot
     const renderedByContent = new Map<string | null, Set<string>>();
+    const observers: IntersectionObserver[] = [];
 
     googletag().cmd.push(() => {
         googletag().pubads().enableSingleRequest();
@@ -66,7 +75,7 @@ export function startGptAdAdapter(): void {
 
     // In-content ads: bind to the content lifecycle. `subscribe` replays any
     // emission that fired before this ran, so we cannot miss one.
-    window.dcaAds?.subscribe((event: DcaAdLifecycleEvent) => {
+    const unsubscribe = window.dcaAds?.subscribe((event: DcaAdLifecycleEvent) => {
         if (event.type !== "rendered") return;
 
         if (event.emission > 1) destroyForContent(event.contentId);
@@ -84,6 +93,19 @@ export function startGptAdAdapter(): void {
         renderedByContent.set(event.contentId, seen);
     });
 
+    // Unbind this page so re-init for a new manifest does not leak a stale
+    // subscription, pending lazy observers, or orphaned ad iframes.
+    teardown = () => {
+        unsubscribe?.();
+        observers.forEach((io) => io.disconnect());
+        const slots = Array.from(defined.values()).filter(Boolean);
+        if (slots.length > 0) {
+            googletag().cmd.push(() => googletag().destroySlots(slots as never[]));
+        }
+        defined.clear();
+        renderedByContent.clear();
+    };
+
     function request(slot: AdManifestSlot): void {
         const el = document.querySelector<HTMLElement>(
             `[data-dca-ad="${cssEscape(slot.id)}"]`,
@@ -92,7 +114,7 @@ export function startGptAdAdapter(): void {
         if (defined.has(slot.id)) return; // already requested
 
         if (slot.lazy && !nearViewport(el)) {
-            observeOnce(el, () => requestNow(slot, el));
+            observers.push(observeOnce(el, () => requestNow(slot, el)));
             return;
         }
         requestNow(slot, el);
@@ -153,7 +175,7 @@ function nearViewport(el: Element, margin = 400): boolean {
     return rect.top < window.innerHeight + margin && rect.bottom > -margin;
 }
 
-function observeOnce(el: Element, cb: () => void): void {
+function observeOnce(el: Element, cb: () => void): IntersectionObserver {
     const io = new IntersectionObserver(
         (entries) => {
             if (entries.some((e) => e.isIntersecting)) {
@@ -164,4 +186,5 @@ function observeOnce(el: Element, cb: () => void): void {
         { rootMargin: "400px" },
     );
     io.observe(el);
+    return io;
 }

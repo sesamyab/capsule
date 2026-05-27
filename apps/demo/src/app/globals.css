@@ -634,7 +634,7 @@ p {
   font-size: 0.875rem;
   line-height: 1.7;
   display: block;
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
 }
 
 /* Syntax highlighting colors - Catppuccin Mocha inspired */
@@ -672,7 +672,7 @@ p {
 }
 
 .content-page code {
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
   font-size: 0.9em;
 }
 
@@ -687,7 +687,7 @@ p {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
     0 2px 4px -1px rgba(0, 0, 0, 0.06);
   margin: 1.5rem 0;
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
   font-size: 0.875rem;
   line-height: 1.5;
   white-space: pre;
@@ -721,7 +721,7 @@ p {
   height: 200px;
   background: #1a1a1a;
   border-top: 1px solid #333;
-  font-family: "SF Mono", Monaco, "Consolas", monospace;
+  font-family: "SF Mono", Monaco, Consolas, monospace;
   font-size: 13px;
   z-index: 1000;
   display: flex;
@@ -1089,7 +1089,7 @@ body.with-console main {
   font-size: 0.85rem;
   line-height: 1.5;
   white-space: pre;
-  font-family: "SF Mono", Monaco, "Consolas", monospace;
+  font-family: "SF Mono", Monaco, Consolas, monospace;
 }
 
 .security-note {
@@ -1297,7 +1297,7 @@ body.with-console main {
 }
 
 .dca-ad-meta {
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
   font-size: 0.8rem;
   color: #5c5320;
 }

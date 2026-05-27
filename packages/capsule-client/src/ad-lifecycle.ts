@@ -75,6 +75,20 @@ interface AdLifecycleRegistry extends DcaAdLifecycle {
     emit(event: DcaAdLifecycleEvent): void;
 }
 
+/**
+ * Build the page-global lifecycle registry.
+ *
+ * `buffer` retains every emitted event for the life of the page so that
+ * {@link DcaAdLifecycle.subscribe} and {@link DcaAdLifecycle.whenRendered} can
+ * replay the full history to late subscribers. This is deliberate: replaying
+ * everything is the simplest thing that is always correct (a late adapter sees
+ * exactly what an early one saw). The cost is unbounded growth — a long-lived
+ * SPA that re-renders many regions will accumulate one entry per emission and
+ * never release them. Capsule emits at most a handful of events per content
+ * region, so this is fine in practice; an integrator embedding Capsule on a
+ * page with very high emission volume may want to cap or window the buffer
+ * (e.g. keep only the latest emission per `contentId`).
+ */
 function createRegistry(): AdLifecycleRegistry {
     const buffer: DcaAdLifecycleEvent[] = [];
     const handlers = new Set<DcaAdLifecycleHandler>();
