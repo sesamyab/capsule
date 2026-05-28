@@ -1,5 +1,16 @@
 # @sesamy/demo-astro
 
+## 0.9.0
+
+### Minor Changes
+
+- [#36](https://github.com/sesamyab/capsule/pull/36) [`1ccc7a9`](https://github.com/sesamyab/capsule/commit/1ccc7a9aa05408adc60db61baa6cb6e8f386f721) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Update docs for composer
+
+### Patch Changes
+
+- Updated dependencies [[`07e75e0`](https://github.com/sesamyab/capsule/commit/07e75e071737de7fd1d113bb2eeedc9e0ff0a274)]:
+  - @sesamy/capsule@0.13.0
+
 ## 0.8.0
 
 ### Minor Changes
