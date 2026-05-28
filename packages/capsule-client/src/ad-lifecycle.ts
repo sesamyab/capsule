@@ -160,19 +160,25 @@ function createRegistry(): AdLifecycleRegistry {
     };
 }
 
-/** The page-global registry. One per JS realm. */
-const registry: AdLifecycleRegistry = createRegistry();
-
 declare global {
     interface Window {
         dcaAds?: DcaAdLifecycle;
     }
 }
 
-// Install the global entry point for adapters (browser only; SSR-safe).
-if (typeof window !== "undefined") {
-    window.dcaAds ??= registry;
-}
+/**
+ * The shared registry. Installed as `window.dcaAds` eagerly (browser only;
+ * SSR-safe) so adapters can bind before Capsule renders. When another Capsule
+ * bundle has already installed `window.dcaAds`, we adopt that instance as the
+ * source of truth — otherwise emits, emission counters, and subscribers would
+ * split across per-bundle registries and adapters would miss events.
+ */
+const registry: AdLifecycleRegistry = (() => {
+    const local = createRegistry();
+    if (typeof window === "undefined") return local;
+    if (!window.dcaAds) window.dcaAds = local;
+    return window.dcaAds as AdLifecycleRegistry;
+})();
 
 /**
  * Dispatch a lifecycle event: fires the DOM `CustomEvent` on `target` (bubbling
