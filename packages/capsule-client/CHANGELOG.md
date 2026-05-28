@@ -1,5 +1,11 @@
 # @sesamy/capsule
 
+## 0.13.0
+
+### Minor Changes
+
+- [#41](https://github.com/sesamyab/capsule/pull/41) [`07e75e0`](https://github.com/sesamyab/capsule/commit/07e75e071737de7fd1d113bb2eeedc9e0ff0a274) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Add ad-contract lifecycle to the client: `dca:rendered` / `dca:locked` / `dca:error` DOM events (with a monotonic per-`contentId` `emission` counter) emitted from content placement, the paywall path, and decrypt failures, plus a `window.dcaAds` replay global (`subscribe`, `whenRendered`) so a publisher ad adapter can bind ad demand to locked-content placement without racing it.
+
 ## 0.12.0
 
 ### Minor Changes
