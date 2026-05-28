@@ -15,6 +15,7 @@ export function Navigation() {
           <Link href="/demo">Demo</Link>
           <Link href="/changelog">Changelog</Link>
           <Link href="/roadmap">Roadmap</Link>
+          <Link href="/ads-api">Ads API</Link>
         </div>
       </div>
     </nav>

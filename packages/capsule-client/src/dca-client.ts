@@ -29,6 +29,8 @@
  * ```
  */
 
+import { dispatchDcaLifecycle, nextAdEmission } from "./ad-lifecycle";
+
 // ============================================================================
 // Types (self-contained for browser bundle size)
 // ============================================================================
@@ -576,6 +578,11 @@ export class DcaClient {
      */
     async processPage(options: DcaProcessPageOptions = {}): Promise<Record<string, string>> {
         const root = options.root ?? document;
+        const lifecycleTarget = (): EventTarget =>
+            this.getPublisherContentElement(root) ??
+            (root instanceof Element ? root : document);
+        const errorMessage = (err: unknown): string =>
+            err instanceof Error ? err.message : String(err);
 
         if (this.accessCheck) {
             const publisherContentId = DcaClient.getPublisherContentId(root);
@@ -584,6 +591,11 @@ export class DcaClient {
                 if (this.paywallFn) {
                     this.paywallFn(publisherContentId, root);
                 }
+                dispatchDcaLifecycle(lifecycleTarget(), {
+                    type: "locked",
+                    contentId: null,
+                    reason: "no-content-id",
+                });
                 return {};
             }
 
@@ -592,16 +604,39 @@ export class DcaClient {
                 if (this.paywallFn) {
                     this.paywallFn(publisherContentId, root);
                 }
+                dispatchDcaLifecycle(lifecycleTarget(), {
+                    type: "locked",
+                    contentId: publisherContentId,
+                    reason: "no-access",
+                });
                 return {};
             }
         }
 
-        const page = this.parsePage(root);
+        let page: DcaParsedPage;
+        try {
+            page = this.parsePage(root);
+        } catch (err) {
+            dispatchDcaLifecycle(lifecycleTarget(), {
+                type: "error",
+                contentId: DcaClient.getPublisherContentId(root),
+                stage: "parse",
+                message: errorMessage(err),
+            });
+            throw err;
+        }
 
         const issuerName = options.issuerName
             ?? Object.keys(page.manifest.issuers)[0];
         if (!issuerName) {
-            throw new Error("DCA: no issuers found in manifest.issuers");
+            const err = new Error("DCA: no issuers found in manifest.issuers");
+            dispatchDcaLifecycle(lifecycleTarget(), {
+                type: "error",
+                contentId: DcaClient.getPublisherContentId(root),
+                stage: "unlock",
+                message: err.message,
+            });
+            throw err;
         }
 
         const results: Record<string, string> = {};
@@ -624,12 +659,33 @@ export class DcaClient {
             ? options.shareToken
             : DcaClient.getShareTokenFromUrl(options.shareTokenParam);
 
-        const unlockResponse = shareToken
-            ? await this.unlockWithShareToken(page, issuerName, shareToken, options.additionalBody)
-            : await this.unlock(page, issuerName, options.additionalBody);
+        let unlockResponse: DcaUnlockResponse;
+        try {
+            unlockResponse = shareToken
+                ? await this.unlockWithShareToken(page, issuerName, shareToken, options.additionalBody)
+                : await this.unlock(page, issuerName, options.additionalBody);
+        } catch (err) {
+            dispatchDcaLifecycle(lifecycleTarget(), {
+                type: "error",
+                contentId: DcaClient.getPublisherContentId(root),
+                stage: "unlock",
+                message: errorMessage(err),
+            });
+            throw err;
+        }
 
-        for (const contentName of missing) {
-            results[contentName] = await this.decrypt(page, contentName, unlockResponse);
+        try {
+            for (const contentName of missing) {
+                results[contentName] = await this.decrypt(page, contentName, unlockResponse);
+            }
+        } catch (err) {
+            dispatchDcaLifecycle(lifecycleTarget(), {
+                type: "error",
+                contentId: DcaClient.getPublisherContentId(root),
+                stage: "decrypt",
+                message: errorMessage(err),
+            });
+            throw err;
         }
 
         return results;
@@ -652,14 +708,52 @@ export class DcaClient {
         const container = root ?? document;
         const rendered = new Set<string>();
 
+        // Group placed content by its owning `publisher-content-id` so we can
+        // emit one `dca:rendered` per content region, after placement.
+        const groups = new Map<
+            string | null,
+            { target: EventTarget; slots: string[] }
+        >();
+
         for (const [contentName, html] of Object.entries(content)) {
             const el = container.querySelector(
                 `[data-dca-content-name="${CSS.escape(contentName)}"]`,
             );
-            if (el) {
-                el.innerHTML = html;
-                rendered.add(contentName);
+            if (!el) continue;
+
+            el.innerHTML = html;
+            rendered.add(contentName);
+
+            const ownerEl = el.closest("[publisher-content-id]");
+            const contentId =
+                ownerEl?.getAttribute("publisher-content-id") ??
+                DcaClient.getPublisherContentId(container);
+
+            let group = groups.get(contentId);
+            if (!group) {
+                const target: EventTarget =
+                    ownerEl ?? (container instanceof Element ? container : document);
+                group = { target, slots: [] };
+                groups.set(contentId, group);
             }
+
+            // Collect inert ad markers in document order, deduped (per the
+            // ad contract: a duplicate id is listed once).
+            for (const marker of Array.from(
+                el.querySelectorAll("[data-dca-ad]"),
+            )) {
+                const id = marker.getAttribute("data-dca-ad");
+                if (id && !group.slots.includes(id)) group.slots.push(id);
+            }
+        }
+
+        for (const [contentId, { target, slots }] of groups) {
+            dispatchDcaLifecycle(target, {
+                type: "rendered",
+                contentId,
+                emission: nextAdEmission(contentId),
+                slots,
+            });
         }
 
         return rendered;
@@ -684,6 +778,28 @@ export class DcaClient {
         if (scriptEl) {
             const match = scriptEl.closest("[publisher-content-id]");
             if (match) return match.getAttribute("publisher-content-id");
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve the element carrying `publisher-content-id` for the given root —
+     * the element lifecycle events are dispatched on. Mirrors
+     * {@link getPublisherContentId} but returns the element, or `null`.
+     */
+    private getPublisherContentElement(root?: Document | Element): Element | null {
+        const container = root ?? document;
+
+        if (container instanceof Element) {
+            const match = container.closest("[publisher-content-id]");
+            if (match) return match;
+        }
+
+        const scriptEl = container.querySelector("script.dca-manifest");
+        if (scriptEl) {
+            const match = scriptEl.closest("[publisher-content-id]");
+            if (match) return match;
         }
 
         return null;

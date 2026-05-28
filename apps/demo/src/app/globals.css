@@ -634,7 +634,7 @@ p {
   font-size: 0.875rem;
   line-height: 1.7;
   display: block;
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
 }
 
 /* Syntax highlighting colors - Catppuccin Mocha inspired */
@@ -672,7 +672,7 @@ p {
 }
 
 .content-page code {
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
   font-size: 0.9em;
 }
 
@@ -687,7 +687,7 @@ p {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1),
     0 2px 4px -1px rgba(0, 0, 0, 0.06);
   margin: 1.5rem 0;
-  font-family: "SF Mono", Monaco, "Cascadia Code", "Consolas", monospace;
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
   font-size: 0.875rem;
   line-height: 1.5;
   white-space: pre;
@@ -721,7 +721,7 @@ p {
   height: 200px;
   background: #1a1a1a;
   border-top: 1px solid #333;
-  font-family: "SF Mono", Monaco, "Consolas", monospace;
+  font-family: "SF Mono", Monaco, Consolas, monospace;
   font-size: 13px;
   z-index: 1000;
   display: flex;
@@ -1089,7 +1089,7 @@ body.with-console main {
   font-size: 0.85rem;
   line-height: 1.5;
   white-space: pre;
-  font-family: "SF Mono", Monaco, "Consolas", monospace;
+  font-family: "SF Mono", Monaco, Consolas, monospace;
 }
 
 .security-note {
@@ -1242,6 +1242,64 @@ body.with-console main {
   .toc {
     display: none;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Ads API demo — ad slot markers and fake creatives
+   --------------------------------------------------------------------------- */
+
+/* Inert ad marker / slot. Reserved height bounds layout shift (CLS). */
+.dca-ad-slot,
+[data-dca-ad] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 1.5rem auto;
+  border: 1px dashed var(--border, #d0d0d8);
+  border-radius: 8px;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(0, 0, 0, 0.015),
+    rgba(0, 0, 0, 0.015) 10px,
+    transparent 10px,
+    transparent 20px
+  );
+  color: #9aa0aa;
+  font-size: 0.75rem;
+}
+
+/* Empty marker shows a faint "Ad" hint until the adapter fills it. */
+[data-dca-ad]:empty::before {
+  content: "Ad slot";
+}
+
+/* Filled creative painted by the fake GPT stub. */
+.dca-ad-filled {
+  border-style: solid;
+  border-color: #c9b66b;
+  background: linear-gradient(135deg, #fdf6d8 0%, #fbeeb6 100%);
+}
+
+.dca-ad-creative {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.75rem 1rem;
+  text-align: center;
+}
+
+.dca-ad-label {
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a7a30;
+}
+
+.dca-ad-meta {
+  font-family: "SF Mono", Monaco, "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  color: #5c5320;
 }
 
 /* Scroll margin for anchor links */

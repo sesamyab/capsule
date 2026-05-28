@@ -3,6 +3,26 @@
  * In a real app, these would come from a database.
  */
 
+/** An ad position for the Ads API demo. Drives the cleartext dca-ad-manifest. */
+export interface AdSlot {
+  /** Slot id — matches a `data-dca-ad` marker on the page. */
+  id: string;
+  /** GPT ad unit path (opaque to Capsule). */
+  adUnitPath: string;
+  /** Creative sizes as [width, height] pairs. */
+  sizes: Array<[number, number]>;
+  /** Reserved height (px) so the decrypt-and-expand reflow doesn't shift layout. */
+  minHeight: number;
+  /**
+   * Where the marker lives: `above-lock` markers are on the page at load
+   * (normal page ads); `in-article` markers travel inside the locked content
+   * and only appear after unlock.
+   */
+  placement: "above-lock" | "in-article";
+  /** Request when near the viewport instead of immediately. */
+  lazy?: boolean;
+}
+
 export interface Article {
   id: string;
   title: string;
@@ -12,6 +32,8 @@ export interface Article {
   premiumContent: string;
   /** Content tier — articles sharing a tier share period keys (e.g. "TierA", "TierB") */
   tier: string;
+  /** Optional ad configuration — present on the Ads API demo article. */
+  ads?: { slots: AdSlot[] };
 }
 
 export const articles: Record<string, Article> = {
@@ -299,6 +321,74 @@ Zero Trust APIs should implement:
 **Welcome to TierB!** 🎉 This content is in a separate encryption tier.
 Unlocking TierA articles does NOT grant access to TierB content — each tier 
 has independent period keys derived via HKDF with a different content name.
+    `.trim(),
+  },
+  "ad-supported-news": {
+    id: "ad-supported-news",
+    title: "EV Sales Surge: The Q1 Market Report",
+    author: "Robin Voltsson",
+    publishedAt: "2026-04-12",
+    tier: "TierA",
+    ads: {
+      slots: [
+        {
+          id: "page-top",
+          adUnitPath: "/6355419/capsule-demo/leaderboard",
+          sizes: [[970, 90], [728, 90]],
+          minHeight: 90,
+          placement: "above-lock",
+        },
+        {
+          id: "in-article-1",
+          adUnitPath: "/6355419/capsule-demo/in_article_1",
+          sizes: [[300, 250]],
+          minHeight: 280,
+          placement: "in-article",
+        },
+        {
+          id: "in-article-2",
+          adUnitPath: "/6355419/capsule-demo/in_article_2",
+          sizes: [[300, 250]],
+          minHeight: 280,
+          placement: "in-article",
+          lazy: true,
+        },
+      ],
+    },
+    previewContent: `
+Electric vehicle sales broke records again this quarter, with battery-electric
+models outpacing every analyst forecast. This is an ad-supported article: the
+leaderboard above the paywall is a normal page ad, while the in-article units
+are authored *inside* the locked content and only load once you unlock.
+    `.trim(),
+    premiumContent: `
+## The Q1 Numbers
+<div data-dca-ad="in-article-1" data-dca-ad-size="300x250" style="min-height:280px"></div>
+
+Registrations of battery-electric vehicles rose 41% year over year, and for the
+first time crossed a fifth of all new cars sold. Plug-in hybrids grew more
+modestly, suggesting buyers are increasingly comfortable going fully electric.
+
+The headline figure masks wide regional variation. Markets with charging
+mandates and purchase incentives saw the steepest gains, while regions that
+wound down subsidies last year posted flat or declining numbers.
+
+## What's Driving Growth
+<div data-dca-ad="in-article-2" data-dca-ad-size="300x250" style="min-height:280px"></div>
+
+Three factors stand out: falling battery pack prices, a wave of sub-€30k models
+reaching showrooms, and rapid build-out of fast-charging corridors along major
+highways. Together they have pushed the total cost of ownership below comparable
+combustion cars in several segments.
+
+Analysts caution that supply, not demand, is now the binding constraint — and
+that the second half of the year will test whether manufacturers can keep pace.
+
+---
+
+**You're reading the full report.** The two in-article ad slots above were
+authored as inert markers inside this encrypted content and filled by the ad
+adapter only after Capsule placed the content and emitted \`dca:rendered\`.
     `.trim(),
   },
 };

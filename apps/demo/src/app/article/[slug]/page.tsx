@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getArticle, getAllArticleIds } from "@/lib/articles";
 import { renderDcaArticle } from "@/lib/server-encryption";
 import { EncryptedSection } from "@/components/EncryptedSection";
+import { AdDemoScripts } from "@/components/AdDemoScripts";
 import { DemoLayout } from "@/components/DemoLayout";
 
 /** Opt out of static generation — secrets are not available at build time */
@@ -21,6 +22,22 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
 
   // Render DCA-encrypted content server-side
   const dcaResult = await renderDcaArticle(slug);
+
+  // Build the cleartext ad manifest (entitlement-independent, cache-stable).
+  const adManifest = article.ads
+    ? {
+        version: "1.0",
+        page: { contentId: article.id },
+        slots: article.ads.slots.map((s) => ({
+          id: s.id,
+          contentId: article.id,
+          sizes: s.sizes,
+          minHeight: s.minHeight,
+          lazy: s.lazy ?? false,
+          adUnitPath: s.adUnitPath,
+        })),
+      }
+    : null;
 
   return (
     <DemoLayout>
@@ -43,8 +60,22 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
         />
       )}
 
+      {/* Cleartext ad manifest — outside the encrypted payload, cache-stable.
+          See the Ads API guide. */}
+      {adManifest && (
+        <script
+          type="application/json"
+          className="dca-ad-manifest"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify(adManifest).replace(/</g, "\\u003c"),
+          }}
+        />
+      )}
+      {article.ads && <AdDemoScripts />}
+
       <main className="article-page">
-        <article>
+        {/* publisher-content-id is the Capsule contentId; spread to satisfy JSX typing */}
+        <article {...({ "publisher-content-id": article.id } as Record<string, string>)}>
           <header className="article-header">
             <h1>{article.title}</h1>
             <div className="article-meta">
@@ -65,6 +96,19 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
               <p key={i}>{paragraph}</p>
             ))}
           </section>
+
+          {/* Page ad OUTSIDE the lock — a normal page ad, filled immediately. */}
+          {article.ads?.slots
+            .filter((s) => s.placement === "above-lock")
+            .map((s) => (
+              <div
+                key={s.id}
+                className="dca-ad-slot"
+                data-dca-ad={s.id}
+                data-dca-ad-size={s.sizes.map(([w, h]) => `${w}x${h}`).join(",")}
+                style={{ minHeight: s.minHeight }}
+              />
+            ))}
 
           <section className="premium-section">
             {/* DCA client-side decryption component */}
