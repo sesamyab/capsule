@@ -12,6 +12,7 @@ import { createDcaIssuer } from "../dca-issuer";
 import {
     clearJwksCache,
     fetchJwks,
+    JWKS_USER_AGENT,
     refreshJwks,
     selectActiveKeys,
     type DcaJwksCache,
@@ -407,6 +408,25 @@ describe("Publisher render with jwksUri", () => {
 // ============================================================================
 // refreshJwks
 // ============================================================================
+
+describe("JWKS fetch headers", () => {
+    it("sends an identifying User-Agent", async () => {
+        const k1 = await makeIssuerJwkBundle("k1");
+        const fetchMock = vi.fn(
+            async () =>
+                new Response(JSON.stringify({ keys: [k1.jwk] }), {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                }) as unknown as Response,
+        );
+        globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+        await refreshJwks("https://issuer.test/.well-known/dca-publishers.json");
+
+        const init = fetchMock.mock.calls[0][1] as RequestInit;
+        expect((init.headers as Record<string, string>)["User-Agent"]).toBe(JWKS_USER_AGENT);
+    });
+});
 
 describe("refreshJwks", () => {
     it("forces a re-fetch, bypassing the cache", async () => {
