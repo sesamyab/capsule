@@ -219,6 +219,12 @@ async function importPublisherJwk(jwk: Jwk): Promise<ResolvedPublisherKey> {
     return { kid: jwk.kid!, key };
 }
 
+/**
+ * Identifies Capsule to publishers. Some publishers' CDNs/WAFs (e.g. subjekt.no)
+ * reject requests that carry no User-Agent with a 403.
+ */
+export const JWKS_USER_AGENT = "Sesamy-Capsule (+https://sesamy.com)";
+
 async function doFetchJwks(
     url: string,
     timeoutMs: number,
@@ -227,7 +233,10 @@ async function doFetchJwks(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-        response = await fetch(url, { signal: controller.signal });
+        response = await fetch(url, {
+            headers: { "User-Agent": JWKS_USER_AGENT },
+            signal: controller.signal,
+        });
     } catch (err) {
         if ((err as Error)?.name === "AbortError") {
             throw new Error(`JWKS fetch for ${url} timed out after ${timeoutMs}ms`);
