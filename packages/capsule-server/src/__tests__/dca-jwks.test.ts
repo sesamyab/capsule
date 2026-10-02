@@ -423,7 +423,7 @@ describe("JWKS fetch headers", () => {
 
         await refreshJwks("https://issuer.test/.well-known/dca-publishers.json");
 
-        const init = fetchMock.mock.calls[0][1] as RequestInit;
+        const init = (fetchMock.mock.calls as unknown as [string, RequestInit][])[0][1];
         expect((init.headers as Record<string, string>)["User-Agent"]).toBe(JWKS_USER_AGENT);
     });
 });
