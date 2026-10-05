@@ -1,5 +1,11 @@
 # @sesamy/capsule-server
 
+## 0.13.1
+
+### Patch Changes
+
+- [#42](https://github.com/sesamyab/capsule/pull/42) [`a423c5e`](https://github.com/sesamyab/capsule/commit/a423c5e7a804fec5e51dd47052d3daa301a4b236) Thanks [@markusahlstrand](https://github.com/markusahlstrand)! - Send a `User-Agent` header (`Sesamy-Capsule (+https://sesamy.com)`) when fetching publisher JWKS. Some publishers (e.g. subjekt.no) return 403 to requests without one. (SES-1375)
+
 ## 0.13.0
 
 ### Minor Changes
